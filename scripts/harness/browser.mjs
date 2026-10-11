@@ -94,6 +94,18 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       assert.equal(JSON.parse((await readFile(callsFile,'utf8')).trim()).mode,'success');
       await page.screenshot({path:path.join(artifacts,'program-upload.png'),fullPage:true});
     });
+    await check('successful upload resets file selection and permits a fresh selection',async()=>{
+      const fileInput=page.getByLabel('Program PDF');
+      const uploadButton=page.getByRole('button',{name:'Upload & parse program',exact:true});
+      await expect.poll(()=>fileInput.evaluate(element=>element.files.length)).toBe(0);
+      await expect(page.getByText(/^Selected: sample_program\.pdf/).filter({visible:true})).toHaveCount(0);
+      await expect(uploadButton).toBeDisabled();
+      await fileInput.setInputFiles(path.join(repoRoot,'db/fixtures/sample_program.pdf'));
+      await expect(uploadButton).toBeEnabled();
+      await expect(page.getByText(/^Selected: sample_program\.pdf/)).toBeVisible();
+      await fileInput.setInputFiles([]);
+      await expect(uploadButton).toBeDisabled();
+    });
     await check('assignment UI persists and replaces active assignment',async()=>{
       const days=(await db.query('select d.id from program_days d join programs p on p.id=d.program_id where p.coach_id=$1 order by day_number',[coach.id])).rows;
       for(const day of days.slice(0,2)) {
