@@ -26,3 +26,7 @@ says "Hips back"). Lunge labels start with `alternating forward lunges - ` (see 
 
 **Checks.** `python scripts/check_contract.py`; `python scripts/make_sample_session.py` regenerates the fixture;
 `python scripts/seed_sample_sql.py` prints SQL that loads it.
+
+**Before the demo.** Run `set -a && source .env.local && set +a && python scripts/preflight.py` (venv active) right before
+recording: env, files, the Supabase plan, the recap card, a real session save (deleted again; `--keep` keeps it), a LiveKit
+loopback of the card (`--skip-livekit` skips it) and the worker import. Record only if no row says FAIL (WARN is fine).

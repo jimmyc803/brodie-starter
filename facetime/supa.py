@@ -7,6 +7,9 @@
     db.select('assignments', client_id=f'eq.{cid}', order='assigned_at.desc', limit=1, select='*,program_days(*)') -> list
     db.update('sessions', {'status': 'done'}, id=f'eq.{sid}') -> list
     db.upload('recaps', 'path/file.png', png_bytes, 'image/png') -> storage path
+    db.delete('sessions', id=f'eq.{sid}') -> list   # the deleted rows; refuses to run without a filter
+    db.exists('recaps', 'path/file.png') -> bool
+    db.remove('recaps', 'path/file.png') -> list    # storage objects removed
 Filters are PostgREST query params (eq., in.(...), etc.). Errors raise SupaError with the server's message.
 """
 import os
@@ -54,3 +57,22 @@ class Supa:
         self._check(self.c.post(f'{self.url}/storage/v1/object/{bucket}/{path}', headers={**self._h, 'Content-Type': content_type, 'x-upsert': 'true'},
                                 content=data))
         return path
+
+    def delete(self, table, **filters):
+        if not filters:
+            raise ValueError(f'delete from {table} needs at least one filter (refusing to delete the whole table)')
+        return self._check(self.c.delete(f'{self.url}/rest/v1/{table}', headers={**self._h, 'Prefer': 'return=representation'},
+                                         params=filters))
+
+    def exists(self, bucket, path):
+        r = self.c.head(f'{self.url}/storage/v1/object/{bucket}/{path}', headers=self._h)
+        if r.status_code in (400, 404):
+            return False
+        self._check(r)
+        return True
+
+    def remove(self, bucket, *paths):
+        if not paths:
+            raise ValueError('remove needs at least one path')
+        return self._check(self.c.request('DELETE', f'{self.url}/storage/v1/object/{bucket}', headers=self._h,
+                                          json={'prefixes': list(paths)}))
