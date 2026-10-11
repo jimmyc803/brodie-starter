@@ -1,7 +1,9 @@
 import Link from "next/link";
 
 import { ClientList } from "@/components/coach/client-list";
+import { ClientLink } from "@/components/coach/client-link";
 import { SessionDetail } from "@/components/coach/session-detail";
+import { readOnlyCoachToken } from "@/lib/programWorkflow";
 import { shortDate } from "@/components/coach/format";
 import type { CoachClient, CoachView } from "@/lib/coach-view";
 import { completedReps, type ExerciseClip } from "@/lib/contract";
@@ -47,6 +49,8 @@ export function CoachDashboard({
   base?: string; // where client/session links point; the lab page overrides it
 }) {
   const { summaries, client, session } = pickSelection(view, selectedClient, selectedSession);
+  // The public demo coach is view-only: no adding clients and no client workout links on show.
+  const canEdit = token !== "demo" && !readOnlyCoachToken(token);
   const summary = summaries.find((s) => s.id === client?.id);
 
   // Workouts with reps in the last 7 days: the same count as the Overview (empty test calls don't count).
@@ -79,12 +83,12 @@ export function CoachDashboard({
       ) : (
         <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-start">
           <div className="lg:sticky lg:top-6">
-            <ClientList clients={summaries} base={base} selectedId={client?.id ?? null} />
+            <ClientList clients={summaries} base={base} selectedId={client?.id ?? null} addToken={canEdit ? token : undefined} />
           </div>
 
           {client && summary ? (
             <div className="min-w-0 space-y-4">
-              <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} />
+              <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} coachName={view.coach.name} showLink={canEdit} />
               {session ? (
                 <SessionDetail view={session} clientName={client.name} clips={clips} />
               ) : (
@@ -107,12 +111,16 @@ function ClientHeader({
   base,
   activeSession,
   programsHref,
+  coachName,
+  showLink,
 }: {
   client: CoachClient;
   summary: ClientSummary;
   base: string;
   activeSession: string | null;
   programsHref: string;
+  coachName: string;
+  showLink: boolean;
 }) {
   const status = STATUS_LABEL[summary.status];
   return (
@@ -146,6 +154,12 @@ function ClientHeader({
           <dd className="mt-0.5 truncate text-sm font-medium text-zinc-100">{summary.detail}</dd>
         </div>
       </dl>
+
+      {showLink && client.link ? (
+        <div className="mt-3">
+          <ClientLink code={client.link} name={client.name} coachName={coachName} />
+        </div>
+      ) : null}
 
       {client.sessions.length > 1 ? (
         <div className="mt-4">
