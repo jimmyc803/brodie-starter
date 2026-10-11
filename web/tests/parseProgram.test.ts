@@ -11,13 +11,14 @@ afterEach(() => {
   else process.env.GEMINI_PARSER_API_KEY = originalKey;
 });
 const exercise = (name: string) => ({name, sets: 3, reps: 10, notes: '', exercise_key: 'squat', supported: true});
-const program = () => ({title: 'Tristan — Strength', days: [{day_number: 1, title: 'Day 1', exercises: ['Squats', 'Push-ups', 'Lunges', 'Jumping jacks', 'Dumbbell bicep curls', 'Bench press', 'Bulgarian split squats'].map(exercise)}]});
+const program = () => ({title: 'Tristan — Strength', days: [{day_number: 1, title: 'Day 1', exercises: ['Squats', 'Push-ups', 'Lunges', 'Jumping jacks', 'Dumbbell bicep curls', 'Pull-ups', 'Bench press', 'Bulgarian split squats'].map(exercise)}]});
 const pdf = Buffer.from('%PDF-1.7\n test document\n%%EOF');
 
 test('derives supported keys from exercise names, never trusting model claims', () => {
   const parsed = normalizeProgram(program());
-  assert.deepEqual(parsed.days[0].exercises.map((e: {exercise_key: string|null}) => e.exercise_key), ['squat', 'pushup', 'lunge', 'jumping_jack', 'bicep_curl', null, null]);
-  assert.equal(parsed.days[0].exercises[5].supported, false);
+  assert.deepEqual(parsed.days[0].exercises.map((e: {exercise_key: string|null}) => e.exercise_key), ['squat', 'pushup', 'lunge', 'jumping_jack', 'bicep_curl', 'pullup', null, null]);
+  assert.equal(parsed.days[0].exercises[5].supported, true);
+  assert.equal(parsed.days[0].exercises[6].supported, false);
 });
 test('rejects malformed programs and duplicate days', () => {
   for (const value of [null, {}, {title: 'Empty', days: []}, {...program(), title: ''}]) assert.throws(() => normalizeProgram(value));
@@ -46,7 +47,7 @@ test('sends PDF and structured schema through Gemini REST and normalizes output'
     return Response.json({candidates:[{finishReason:'STOP',content:{parts:[{text: JSON.stringify(program())}]}}]});
   };
   const result = await parseProgram(pdf);
-  assert.equal(result.days[0].exercises[5].exercise_key, null);
+  assert.equal(result.days[0].exercises[6].exercise_key, null);
 });
 test('does not leak provider error bodies and rejects blocked, truncated or malformed output', async () => {
   process.env.GEMINI_PARSER_API_KEY = 'offline-test-key';

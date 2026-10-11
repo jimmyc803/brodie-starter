@@ -1,6 +1,6 @@
 import 'server-only';
 
-export type ExerciseKey = 'squat' | 'pushup' | 'lunge' | 'jumping_jack' | 'bicep_curl';
+export type ExerciseKey = 'squat' | 'pushup' | 'lunge' | 'jumping_jack' | 'bicep_curl' | 'pullup';
 export type ProgramExercise = { exercise_key: ExerciseKey | null; name: string; sets: number; reps: number; notes: string; supported: boolean };
 export type ProgramDay = { day_number: number; title: string; exercises: ProgramExercise[] };
 export type ParsedProgram = { title: string; days: ProgramDay[] };
@@ -22,6 +22,7 @@ const aliases: Record<ExerciseKey, string[]> = {
   lunge: ['lunge', 'lunges', 'forward lunge', 'forward lunges', 'alternating lunge', 'alternating lunges'],
   jumping_jack: ['jumping jack', 'jumping jacks'],
   bicep_curl: ['bicep curl', 'bicep curls', 'biceps curl', 'biceps curls', 'dumbbell curl', 'dumbbell curls', 'dumbbell bicep curl', 'dumbbell bicep curls', 'dumbbell biceps curl', 'dumbbell biceps curls'],
+  pullup: ['pullup', 'pullups', 'pull up', 'pull ups', 'bodyweight pull up', 'bodyweight pull ups'],
 };
 const normalizeName = (name: string) => name.toLowerCase().replace(/[_-]/g, ' ').replace(/\s+/g, ' ').trim();
 const keysByName = new Map(Object.entries(aliases).flatMap(([key, names]) => names.map(name => [name, key as ExerciseKey] as const)));

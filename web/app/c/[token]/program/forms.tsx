@@ -31,7 +31,7 @@ export function AssignForm({ token, clients, days, hasPrograms }: { hasPrograms:
       <option value="" disabled>Choose a day</option>{days.map(day => <option key={day.id} value={day.id}>{day.label}</option>)}
     </select>
     <p className="mt-2 text-xs text-slate-500">Replaces the client&apos;s active assignment for their next call.</p>
-    {unavailable && <p className="mt-3 text-sm text-slate-600">{!clients.length ? 'Add a client to this coach account to assign a day.' : hasPrograms ? 'Your programs have no countable training days. Upload a program with squats, pushups, lunges, jumping jacks, or bicep curls with sets and reps.' : 'Upload a program to make training days available.'}</p>}
+    {unavailable && <p className="mt-3 text-sm text-slate-600">{!clients.length ? 'Add a client to this coach account to assign a day.' : hasPrograms ? 'Your programs have no countable training days. Upload a program with squats, pushups, lunges, jumping jacks, bicep curls, or pull-ups with sets and reps.' : 'Upload a program to make training days available.'}</p>}
     <button className={button} disabled={pending || unavailable}>{pending ? 'Assigning…' : 'Assign training day'}</button><Status state={state} />
   </form>;
 }
