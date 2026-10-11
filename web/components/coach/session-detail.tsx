@@ -2,7 +2,7 @@ import Link from "next/link";
 
 import { Heatmap } from "@/components/heatmap/heatmap";
 import { faultyReps, setReached, topFaults, type ExerciseView, type SessionView } from "@/lib/contract";
-import { muscleDetails, sessionStats } from "@/lib/recap";
+import { muscleDetails, revealOrder, sessionStats } from "@/lib/recap";
 import { colorOf, pct, shortDate } from "@/components/coach/format";
 
 // The selected session: heat map, per-exercise set table with Brodie's form cues, and a link to the client recap.
@@ -33,7 +33,7 @@ export function SessionDetail({ view, clientName }: { view: SessionView; clientN
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
         <div>
           <h3 className="mb-3 text-xs font-medium uppercase tracking-widest text-zinc-500">Muscle heat map</h3>
-          <Heatmap key={view.session.share_token} details={muscleDetails(view)} className="mx-auto max-w-md" />
+          <Heatmap key={view.session.share_token} details={muscleDetails(view)} order={revealOrder(view)} className="mx-auto max-w-md" />
         </div>
         <div>
           <h3 className="mb-3 text-xs font-medium uppercase tracking-widest text-zinc-500">Exercises</h3>

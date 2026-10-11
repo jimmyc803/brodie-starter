@@ -1,23 +1,13 @@
 // Heat map coloring options for the design lab (/lab/heatmap). Each variant turns a session view into a fill per
 // muscle, using only what the data has: muscle_scores (score 0..1, color, coverage) and the reps per exercise.
+// The chosen look ("neon") lives in lib/body/neon.ts and is what the app ships.
+import { neonFill, scoreColor, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { mixOklch, ramp } from "@/lib/color";
-import { allMuscles, COLORS, completedReps, EXERCISES, THRESHOLDS, type ExerciseKey, type MuscleKey, type SessionView } from "@/lib/contract";
+import { allMuscles, COLORS, completedReps, EXERCISES, type ExerciseKey, type MuscleKey, type SessionView } from "@/lib/contract";
 
-export type Fill = { fill: string; glow: number }; // glow 0..1: how strongly this muscle glows (variants with glow)
-export type Fills = Partial<Record<MuscleKey, Fill>>;
+export { revealOrder } from "@/lib/recap";
+export { SCORE_STOPS, UNTRAINED, scoreColor, type Fill, type Fills } from "@/lib/body/neon";
 export type VariantId = "flat" | "gradient" | "depth" | "thermal" | "neon";
-
-export const UNTRAINED = "#52525b"; // zinc-600: a muscle no exercise hit, darker than the old light gray so color pops
-
-// Score -> color, with the team's three colors pinned at the contract thresholds (yellow at 0.5, green at 0.75).
-export const SCORE_STOPS: [number, string][] = [
-  [0, "#dc2626"],
-  [0.3, COLORS.red],
-  [THRESHOLDS.yellow_min, COLORS.yellow],
-  [THRESHOLDS.green_min, COLORS.green],
-  [1, "#4ade80"],
-];
-export const scoreColor = (score: number) => ramp(SCORE_STOPS, score);
 
 // Volume (reps x role weight) -> heat, for the thermal look.
 export const THERMAL_STOPS: [number, string][] = [
@@ -53,6 +43,10 @@ export function variantFills(view: SessionView, id: VariantId): Fills {
     return out;
   }
   for (const m of muscles) {
+    if (id === "neon") {
+      out[m.muscle] = neonFill(m);
+      continue;
+    }
     if (m.color === "gray") {
       out[m.muscle] = { fill: id === "flat" ? COLORS.gray : UNTRAINED, glow: 0 };
       continue;
@@ -62,22 +56,8 @@ export function variantFills(view: SessionView, id: VariantId): Fills {
       continue;
     }
     let fill = scoreColor(m.score);
-    // depth/neon: secondary muscles are a paler version (worked a little), primary at full strength (worked hard)
-    if ((id === "depth" || id === "neon") && m.coverage === "secondary") fill = mixOklch(fill, UNTRAINED, 0.45);
-    // neon: glow follows the score, so solid muscles shine and problem areas stay calm and readable
-    const glow = id === "neon" ? (m.coverage === "primary" ? 0.35 + 0.65 * m.score : 0.2 * m.score) : 0;
-    out[m.muscle] = { fill, glow };
+    if (id === "depth" && m.coverage === "secondary") fill = mixOklch(fill, UNTRAINED, 0.45);
+    out[m.muscle] = { fill, glow: 0 };
   }
   return out;
-}
-
-// Order in which muscles light up for the animated reveal: by the first exercise (in workout order) that hit them.
-export function revealOrder(view: SessionView): Partial<Record<MuscleKey, number>> {
-  const order: Partial<Record<MuscleKey, number>> = {};
-  view.exercises.forEach((ex, i) => {
-    const info = EXERCISES[ex.exercise_key as ExerciseKey];
-    if (!info || !completedReps(ex)) return;
-    for (const m of [...info.primary, ...info.secondary]) if (order[m] === undefined) order[m] = i;
-  });
-  return order;
 }

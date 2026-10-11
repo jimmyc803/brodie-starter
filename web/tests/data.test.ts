@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { SHAPES } from "@/lib/body/shapes";
+import { neonFill, neonFills, UNTRAINED } from "@/lib/body/neon";
 import { bodySvg } from "@/lib/body/svg";
-import { allMuscles, COLORS, faultText, MUSCLE_KEYS } from "@/lib/contract";
+import { allMuscles, faultText, MUSCLE_KEYS } from "@/lib/contract";
 import { getCoachView } from "@/lib/coach-view";
 import { flaggedSets, muscleDetails, sessionStats } from "@/lib/recap";
 import { getSessionView, SAMPLE_COACH_TOKEN, SAMPLE_SESSION_TOKEN, sampleSessionView } from "@/lib/session-view";
@@ -73,11 +74,23 @@ describe("recap numbers on the sample session", () => {
   });
 });
 
-describe("body svg", () => {
-  it("colors muscles from the contract palette and marks the selection", () => {
-    const svg = bodySvg("front", { chest: "red" }, { selected: "chest" });
-    expect(svg).toContain(COLORS.red);
-    expect(svg).toContain('stroke="#ffffff"');
+describe("body svg (neon)", () => {
+  it("draws the score color, a glow for trained muscles, and untrained muscles flat", () => {
+    const fills = neonFills([
+      { muscle: "chest", score: 0.9, color: "green", coverage: "primary" },
+      { muscle: "lats", score: 0, color: "gray", coverage: "none" },
+    ]);
+    const svg = bodySvg("front", fills);
     expect(svg.startsWith("<svg")).toBe(true);
+    expect(svg).toContain("radialGradient");
+    expect(svg).toContain("feGaussianBlur");
+    expect(fills.lats).toEqual({ fill: UNTRAINED, glow: 0 });
+    expect(bodySvg("front", fills, { glow: false })).not.toContain("feGaussianBlur");
+  });
+  it("makes secondary muscles paler and glow less than primary ones", () => {
+    const p = neonFill({ muscle: "quads", score: 0.8, color: "green", coverage: "primary" });
+    const s = neonFill({ muscle: "quads", score: 0.8, color: "green", coverage: "secondary" });
+    expect(s.fill).not.toBe(p.fill);
+    expect(s.glow).toBeLessThan(p.glow);
   });
 });

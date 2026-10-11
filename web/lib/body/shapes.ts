@@ -10,4 +10,4 @@ export type BodySide = "front" | "back";
 export type BodyShape = { muscle: MuscleKey | null; points: string };
 
 export const SHAPES = data as { front: BodyShape[]; back: BodyShape[] };
-export const VIEWBOX = { width: 100, height: 200 };
+export const VIEWBOX = { width: 100, height: 220 }; // the back view runs to y = 220

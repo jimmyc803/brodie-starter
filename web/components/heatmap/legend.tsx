@@ -1,22 +1,25 @@
-import { fillFor } from "@/lib/body/svg";
-import type { Color } from "@/lib/contract";
+import { SCORE_GRADIENT_CSS, UNTRAINED } from "@/lib/body/neon";
 
-const ITEMS: [Color, string][] = [
-  ["green", "Solid"],
-  ["yellow", "Room to improve"],
-  ["red", "Needs work"],
-  ["gray", "Not trained this session"],
-];
-
+// Legend for the neon heat map: one score bar (the team's red / yellow / green, blended) plus "not trained".
 export function HeatmapLegend({ className }: { className?: string }) {
   return (
-    <ul className={`flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs text-zinc-400 ${className ?? ""}`}>
-      {ITEMS.map(([c, label]) => (
-        <li key={c} className="flex items-center gap-1.5">
-          <span className="size-2.5 rounded-full" style={{ background: fillFor(c) }} />
-          {label}
-        </li>
-      ))}
-    </ul>
+    <div className={`mx-auto max-w-xs text-xs text-zinc-400 ${className ?? ""}`}>
+      <div className="h-2 rounded-full" style={{ background: SCORE_GRADIENT_CSS }} />
+      <div className="mt-1 flex justify-between">
+        <span>Needs work</span>
+        <span>Room to improve</span>
+        <span>Solid</span>
+      </div>
+      <div className="mt-2 flex items-center justify-center gap-3">
+        <span className="flex items-center gap-1.5">
+          <span className="size-2.5 rounded-full" style={{ background: UNTRAINED }} />
+          Not trained this session
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="h-2.5 w-4 rounded-full bg-zinc-500/70" />
+          Paler = secondary muscle
+        </span>
+      </div>
+    </div>
   );
 }

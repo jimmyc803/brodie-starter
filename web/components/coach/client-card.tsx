@@ -1,7 +1,8 @@
 import Link from "next/link";
 
+import { neonFills } from "@/lib/body/neon";
 import { bodySvgDataUri } from "@/lib/body/svg";
-import type { Color, MuscleKey, SessionView } from "@/lib/contract";
+import type { Color, SessionView } from "@/lib/contract";
 import { flaggedSets, sessionStats } from "@/lib/recap";
 import { colorOf, pct, sessionHref, shortDate } from "@/components/coach/format";
 
@@ -89,7 +90,6 @@ function LatestSummary({ view }: { view: SessionView }) {
 
 function SessionRow({ view, token, active }: { view: SessionView; token: string; active: boolean }) {
   const st = sessionStats(view);
-  const colors = Object.fromEntries(view.muscles.map((m) => [m.muscle, m.color])) as Partial<Record<MuscleKey, Color>>;
   return (
     <li>
       <Link
@@ -100,7 +100,7 @@ function SessionRow({ view, token, active }: { view: SessionView; token: string;
         }`}
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- tiny inline SVG data URI */}
-        <img src={bodySvgDataUri("front", colors, { width: 24 })} alt="" className="h-9 w-auto shrink-0" />
+        <img src={bodySvgDataUri("front", neonFills(view.muscles), { width: 24, glow: false, id: "t" })} alt="" className="h-9 w-auto shrink-0" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium text-zinc-100">{view.day?.title ?? "Workout"}</p>
           <p className="truncate text-xs text-zinc-400">
