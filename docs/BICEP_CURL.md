@@ -54,3 +54,21 @@ Local tests (no model, camera, keys or network required):
 ```sh
 PYTHONPATH=src:. .venv/bin/python -m pytest tests/test_curl_counter.py -q
 ```
+
+## Prerecorded announcements
+
+The cue vocabulary includes canonical exercise names from `shared/muscles.json`,
+including `bicep curls`. Existing downloaded voice banks need the three new clips:
+`Let's do bicep curls`, `Moving on to bicep curls`, and `Looks like bicep curls`.
+With the Gemini voice credential loaded in the environment, update the default
+Puck bank before starting a worker:
+
+```sh
+.venv/bin/python -m facetime.cues_tts --backend gemini --dry-run
+.venv/bin/python -m facetime.cues_tts --backend gemini --workers 1
+```
+
+The renderer retains cached clips and generates only missing vocabulary. If using
+`CUE_AUDIO_DIR`, pass that directory with `--out-dir` and use its existing backend,
+voice and style. Restart the worker after rendering so its cached manifest is
+reloaded. Voice assets stay under ignored `data/`; they are not committed.
