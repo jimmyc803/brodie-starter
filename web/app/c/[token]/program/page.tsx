@@ -1,12 +1,11 @@
 import { Suspense } from 'react';
-import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { supabaseServer } from '@/lib/supabase/server';
 import { readOnlyCoachToken, READ_ONLY_MESSAGE, validToken } from '@/lib/programWorkflow';
 import { currentAssignments } from '@/lib/currentAssignments';
 import type { ProgramExercise } from '@/lib/parseProgram';
 import { UploadForm, AssignForm } from './forms';
-import { SiteHeader } from '@/components/site-header';
+import { CoachShell } from '@/components/coach/coach-shell';
 
 export const metadata = { title: 'Training programs | Brodie', robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
 export const maxDuration = 90;
@@ -47,12 +46,11 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   const titles = new Map(programs.map(p => [p.id, p.title]));
   const dayLabels = days.map(day => ({ id: day.id, label: `${titles.get(day.program_id)} · Day ${day.day_number}: ${day.title}` }));
   const current = currentAssignments(clients, dayLabels, assignments);
-  return <>
-    <SiteHeader context={<Link href={`/c/${encodeURIComponent(token)}`} className="hover:text-zinc-100">← Coach {coach.name}</Link>} />
-    <header className="mb-8 mt-8"><h1 className="text-3xl font-bold tracking-tight text-zinc-50">Programs</h1><p className="mt-1 max-w-2xl text-sm text-zinc-400">Upload a program PDF, check the days Brodie read from it, then pick what each client trains on their next call.</p>{readOnlyCoachToken(token) ? <p role="note" className="mt-4 max-w-2xl rounded-xl border border-yellow-400/20 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-100">{READ_ONLY_MESSAGE}</p> : null}</header>
+  return <CoachShell token={token} coachName={coach.name} active="programs">
+    <header className="mb-8"><h1 className="text-3xl font-bold tracking-tight text-zinc-50">Programs</h1><p className="mt-1 max-w-2xl text-sm text-zinc-400">Upload a program PDF, check the days Brodie read from it, then pick what each client trains on their next call.</p>{readOnlyCoachToken(token) ? <p role="note" className="mt-4 max-w-2xl rounded-xl border border-yellow-400/20 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-100">{READ_ONLY_MESSAGE}</p> : null}</header>
     <div className="grid gap-6 md:grid-cols-2">
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 1</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Upload a program</h2><UploadForm token={token} /></section>
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 2</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }))} /></section>
+      <section id="assign" className="scroll-mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 2</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }))} /></section>
     </div>
     <section aria-labelledby="current-assignments-title" className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
       <h2 id="current-assignments-title" className="text-lg font-semibold text-zinc-50">Current assignments</h2>
@@ -65,8 +63,8 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
       {!programs.length && <div className="mt-5 rounded-2xl border border-dashed border-zinc-800 p-10 text-center text-zinc-500">Your first training plan starts with a PDF.</div>}
       {programs.map(program => <article key={program.id} className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><h3 className="text-lg font-semibold text-zinc-50">{program.title}</h3><div className="mt-5 grid gap-5 lg:grid-cols-3">{days.filter(d => d.program_id === program.id).map(day => <div key={day.id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4"><p className="text-xs text-zinc-500">Day {day.day_number}</p><h4 className="mt-0.5 font-semibold text-zinc-100">{day.title}</h4><ul className="mt-4 space-y-4">{day.exercises.map((exercise, i) => <li key={i} className="text-sm"><div className="flex items-start justify-between gap-3"><span className="font-medium text-zinc-200">{exercise.name}</span><span className="shrink-0 tabular-nums text-zinc-400">{exercise.sets} × {exercise.reps === 0 ? 'timed' : exercise.reps}</span></div><span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${exercise.supported ? 'bg-green-500/10 text-green-300' : 'bg-zinc-800 text-zinc-400'}`}>{exercise.supported ? 'Brodie counts' : 'Manual tracking'}</span>{exercise.notes && <p className="mt-1 text-xs leading-relaxed text-zinc-500">{exercise.notes}</p>}</li>)}</ul></div>)}</div></article>)}
     </section>
-  </>;
+  </CoachShell>;
 }
 export default function ProgramPage({ params }: { params: Promise<{ token: string }> }) {
-  return <main className="min-h-screen bg-zinc-950 px-4 pb-12 pt-5 text-zinc-100 sm:px-6 sm:pt-8"><div className="mx-auto max-w-6xl"><Suspense fallback={<p role="status" className="text-zinc-400">Loading your training programs…</p>}><ProgramContent params={params} /></Suspense></div></main>;
+  return <main className="flex min-h-screen flex-1 flex-col bg-zinc-950 text-zinc-100"><Suspense fallback={<p role="status" className="p-8 text-zinc-400">Loading your training programs…</p>}><ProgramContent params={params} /></Suspense></main>;
 }
