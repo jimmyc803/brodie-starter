@@ -6,6 +6,7 @@ import { Suspense } from "react";
 import { CoachDashboard, pickSelection } from "@/components/coach/dashboard";
 import { getCoachView } from "@/lib/coach-view";
 import { sessionClips } from "@/lib/session-video";
+import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
 
 export const metadata: Metadata = {
   title: "Coach dashboard · Brodie for Coaches",
@@ -38,7 +39,7 @@ async function Dashboard({
   const pick = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
   const [selectedClient, selectedSession] = [pick(sp.c), pick(sp.s)];
   const { session } = pickSelection(view, selectedClient, selectedSession);
-  const clips = session ? await sessionClips(session) : []; // [] when there's no footage: the map just has no videos
+  const clips = session ? await sessionClips(session, { demoFallback: token === "demo" || token === SAMPLE_COACH_TOKEN }) : []; // [] when there's no footage: the map just has no videos
   return <CoachDashboard view={view} token={token} selectedClient={selectedClient} selectedSession={selectedSession} clips={clips} />;
 }
 

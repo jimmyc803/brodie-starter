@@ -5,7 +5,7 @@ import { SessionDetail } from "@/components/coach/session-detail";
 import { shortDate } from "@/components/coach/format";
 import { SiteHeader } from "@/components/site-header";
 import type { CoachClient, CoachView } from "@/lib/coach-view";
-import type { ExerciseClip } from "@/lib/contract";
+import { completedReps, type ExerciseClip } from "@/lib/contract";
 import { sortSummaries, summarizeClient, type ClientSummary } from "@/lib/coach-status";
 import { sessionStats } from "@/lib/recap";
 import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
@@ -22,7 +22,10 @@ export function pickSelection(view: CoachView, selectedClient: string | null, se
   const bySession = selectedSession ? view.clients.find((c) => c.sessions.some((s) => s.session.share_token === selectedSession)) : undefined;
   const client: CoachClient | undefined =
     view.clients.find((c) => c.id === selectedClient) ?? bySession ?? view.clients.find((c) => c.id === summaries[0]?.id);
-  const session = client?.sessions.find((s) => s.session.share_token === selectedSession) ?? client?.sessions[0];
+  // With no session picked, open the newest one that has reps: an empty test call shouldn't hide the real workout.
+  const hasReps = (s: CoachClient["sessions"][number]) => s.exercises.some((ex) => completedReps(ex) > 0);
+  const session =
+    client?.sessions.find((s) => s.session.share_token === selectedSession) ?? client?.sessions.find(hasReps) ?? client?.sessions[0];
   return { summaries, client, session };
 }
 
