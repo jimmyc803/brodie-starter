@@ -12,6 +12,7 @@ export const LEGEND: { color: Color; label: string }[] = [
 
 export const FOOTER = "Estimated coverage · not a measure of muscle activation";
 export const ALL_SOLID = "Everything solid today";
+export const NO_REPS = "Call ended before the first rep";
 
 const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
 
@@ -22,6 +23,7 @@ export type RecapCard = {
   colors: Partial<Record<MuscleKey, Color>>;
   stats: { value: string; label: string }[];
   focus: string[]; // up to 3 muscle labels, red first then yellow, lowest score first
+  focusKind: "focus" | "solid" | "empty"; // empty = no reps counted, so nothing to praise or fix
   focusLine: string;
   footer: string;
 };
@@ -53,7 +55,8 @@ export function recapCard(view: SessionView): RecapCard {
       { value: clean, label: "clean reps" },
     ],
     focus,
-    focusLine: focus.length ? focus.join(" · ") : ALL_SOLID,
+    focusKind: s.completed === 0 ? "empty" : focus.length ? "focus" : "solid",
+    focusLine: s.completed === 0 ? NO_REPS : focus.length ? focus.join(" · ") : ALL_SOLID,
     footer: FOOTER,
   };
 }
