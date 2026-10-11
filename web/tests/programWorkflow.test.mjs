@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { uploadProgram, assignProgramDay, MAX_UPLOAD_BYTES } from '../lib/programWorkflow.ts';
+import { uploadProgram, assignProgramDay, MAX_UPLOAD_BYTES, READ_ONLY_MESSAGE } from '../lib/programWorkflow.ts';
 const token = 'coach-valid-token-123456789';
 const id = '11111111-1111-4111-8111-111111111111';
 const day = '22222222-2222-4222-8222-222222222222';
@@ -78,4 +78,13 @@ test('uncertain database commit retains PDF and prompts library refresh', async 
   assert.equal(result.ok, false); assert.match(result.message, /Refresh/);
   assert.deepEqual(events, ['coach', 'upload']);
   assert.ok(!result.message.includes('secret'));
+});
+test('the public demo coach link is view-only: no upload, parse or assign', async () => {
+  const demo = 'demo-tristan-R7mQ2vK9xL4pN8sW1tY3aB5c';
+  const { store, events } = fixture({ coach: async () => { events.push('coach'); return { id, name: 'Tristan' }; } });
+  const up = await uploadProgram(store, async () => { events.push('parse'); return parse(); }, demo, pdf());
+  assert.equal(up.ok, false); assert.equal(up.message, READ_ONLY_MESSAGE);
+  const as = await assignProgramDay(store, demo, id, day);
+  assert.equal(as.ok, false); assert.equal(as.message, READ_ONLY_MESSAGE);
+  assert.deepEqual(events, []);
 });
