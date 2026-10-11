@@ -40,10 +40,12 @@ export async function getClientHome(token: string): Promise<ClientHome | null> {
   };
 }
 
-// The client's id for minting a call, or null for an unknown link.
+// The client's id for minting a call, or null for an unknown link or a coach who isn't approved.
 export async function clientIdForToken(token: string): Promise<string | null> {
   if (!CLIENT_TOKEN_RE.test(token) || !hasSupabase()) return null;
-  const { data, error } = await supabaseServer().from("clients").select("id").eq("share_token", token).maybeSingle();
+  const { data, error } = await supabaseServer().from("clients").select("id, coaches(status)").eq("share_token", token).maybeSingle();
   if (error) throw new Error(`client lookup failed: ${error.message}`);
-  return (data?.id as string | undefined) ?? null;
+  // Calls only for clients of approved coaches (pending applications are sandbox-only).
+  const status = (data?.coaches as unknown as { status?: string } | null)?.status ?? "approved";
+  return data && status === "approved" ? (data.id as string) : null;
 }

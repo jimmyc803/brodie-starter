@@ -5,6 +5,7 @@ import { Suspense } from "react";
 
 import { CoachShell, coachLinks } from "@/components/coach/coach-shell";
 import { GettingStarted, WelcomeBanner, type Step } from "@/components/coach/getting-started";
+import { ReviewBanner } from "@/components/coach/review-banner";
 import { Overview } from "@/components/coach/overview";
 import { coachOverview } from "@/lib/coach-overview";
 import { getCoachView } from "@/lib/coach-view";
@@ -41,19 +42,25 @@ async function Home({ params, searchParams }: Pick<PageProps<"/c/[token]">, "par
   if (!view) notFound();
   const o = coachOverview(view);
   const links = coachLinks(token);
-  const canEdit = token !== "demo" && !readOnlyCoachToken(token);
+  const own = token !== "demo" && !readOnlyCoachToken(token); // the coach on their own private link
+  const approved = view.coach.status === "approved";
   const steps: Step[] = [
     { done: view.programs > 0, title: "Upload a program", sub: "The PDF you already give clients", href: links.programs, cta: "Upload" },
     { done: view.clients.length > 0, title: "Add a client", sub: "Just their name", href: links.clients, cta: "Add client" },
     { done: view.clients.some((c) => c.next), title: "Assign their first day", sub: "What they train on their next call", href: `${links.programs}#assign`, cta: "Assign" },
     { done: view.clients.some((c) => c.sessions.length > 0), title: "Send their workout link", sub: "They tap Start workout; you see the recap", href: links.clients, cta: "Get link" },
   ];
-  const showSteps = canEdit && steps.some((s) => !s.done);
+  const showSteps = own && approved && steps.some((s) => !s.done);
   return (
     <CoachShell token={token} coachName={view.coach.name} active="overview" needReview={o.needReview}>
-      {canEdit && sp.welcome === "1" ? (
+      {own && sp.welcome === "1" ? (
         <div className="mb-6">
           <WelcomeBanner coachName={view.coach.name} />
+        </div>
+      ) : null}
+      {own && !approved ? (
+        <div className="mb-6">
+          <ReviewBanner status={view.coach.status} />
         </div>
       ) : null}
       {showSteps ? (
@@ -61,7 +68,7 @@ async function Home({ params, searchParams }: Pick<PageProps<"/c/[token]">, "par
           <GettingStarted steps={steps} />
         </div>
       ) : null}
-      <Overview o={o} token={token} coachName={view.coach.name} />
+      <Overview o={o} token={token} coachName={view.coach.name} returning={approved && sp.welcome !== "1" && view.clients.some((c) => c.sessions.length > 0)} />
     </CoachShell>
   );
 }

@@ -2,10 +2,11 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { SAMPLE_COACH_TOKEN, SAMPLE_SESSION_TOKEN, hasSupabase } from "@/lib/session-view";
 import { supabaseServer } from "@/lib/supabase/server";
+import { isAdminKey } from "@/lib/admin";
 
-// Unknown recap (/r), coach dashboard (/c) and client (/go) links get a real 404 status. Both pages stream (Cache Components), so a notFound() inside it can
+// Unknown recap (/r), coach dashboard (/c), client (/go) and admin (/admin) links get a real 404 status. Both pages stream (Cache Components), so a notFound() inside it can
 // only produce a soft 404 (status 200 + noindex); this one cheap lookup runs before the response starts.
-export const config = { matcher: ["/r/:token", "/c/:token", "/c/:token/clients", "/go/:token"] };
+export const config = { matcher: ["/r/:token", "/c/:token", "/c/:token/clients", "/go/:token", "/admin/:key"] };
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{4,80}$/;
 
@@ -38,7 +39,7 @@ async function coachExists(token: string): Promise<boolean> {
 export async function proxy(req: NextRequest) {
   const [, kind, raw] = req.nextUrl.pathname.split("/");
   const token = decodeURIComponent(raw ?? "");
-  const exists = kind === "c" ? await coachExists(token) : kind === "go" ? await clientExists(token) : await sessionExists(token);
+  const exists = kind === "admin" ? isAdminKey(token) : kind === "c" ? await coachExists(token) : kind === "go" ? await clientExists(token) : await sessionExists(token);
   if (exists) return NextResponse.next();
   return NextResponse.rewrite(new URL("/_not-found", req.url), { status: 404 });
 }

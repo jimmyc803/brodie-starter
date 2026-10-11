@@ -14,8 +14,9 @@ export async function addClientAction(token: string, _prev: AddClientState, form
   if (name.length < 1 || name.length > 60) return { ok: false, message: 'Enter the client\'s name (up to 60 characters).' };
   try {
     const db = supabaseServer();
-    const { data: coach } = await db.from('coaches').select('id').eq('share_token', token).maybeSingle();
+    const { data: coach } = await db.from('coaches').select('id, status').eq('share_token', token).maybeSingle();
     if (!coach) return { ok: false, message: 'This coach link is invalid.' };
+    if (coach.status !== 'approved') return { ok: false, message: 'Adding clients unlocks once your coach application is approved.' };
     const { count } = await db.from('clients').select('id', { count: 'exact', head: true }).eq('coach_id', coach.id);
     if ((count ?? 0) >= 200) return { ok: false, message: 'Client limit reached for this coach.' };
     const { data: client, error } = await db.from('clients').insert({ coach_id: coach.id, name }).select('id').single();

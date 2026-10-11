@@ -32,7 +32,7 @@ function fake(name: string, daysAgo: number, token: string, clean: boolean): Ses
 // A made-up roster of six clients, to see the dashboard with more than one client. Not linked from anywhere.
 function roster(): CoachView {
   return {
-    coach: { name: "Tristan" },
+    coach: { name: "Tristan", status: "approved" },
     programs: 1,
     clients: [
       { id: "ryan", name: "Ryan", next: "Day 2 - Lower body", link: null, sessions: [fake("Ryan", 0, "lab-ryan-1", false), fake("Ryan", 2, "lab-ryan-2", true)] },

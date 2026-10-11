@@ -1,9 +1,11 @@
 import Link from "next/link";
 
 import { ClientList } from "@/components/coach/client-list";
+import { AddClient } from "@/components/coach/add-client";
 import { ClientLink } from "@/components/coach/client-link";
 import { SessionDetail } from "@/components/coach/session-detail";
-import { readOnlyCoachToken } from "@/lib/programWorkflow";
+import { canManageClients } from "@/lib/coach-access";
+import { ReviewBanner } from "@/components/coach/review-banner";
 import { shortDate } from "@/components/coach/format";
 import type { CoachClient, CoachView } from "@/lib/coach-view";
 import { completedReps, type ExerciseClip } from "@/lib/contract";
@@ -50,7 +52,7 @@ export function CoachDashboard({
 }) {
   const { summaries, client, session } = pickSelection(view, selectedClient, selectedSession);
   // The public demo coach is view-only: no adding clients and no client workout links on show.
-  const canEdit = token !== "demo" && !readOnlyCoachToken(token);
+  const canEdit = canManageClients(token, view.coach.status);
   const summary = summaries.find((s) => s.id === client?.id);
 
   // Workouts with reps in the last 7 days: the same count as the Overview (empty test calls don't count).
@@ -75,11 +77,22 @@ export function CoachDashboard({
           ) : null}
         </p>
       </header>
+      {view.coach.status !== "approved" ? (
+        <div className="mt-6">
+          <ReviewBanner status={view.coach.status} />
+        </div>
+      ) : null}
 
       {view.clients.length === 0 ? (
-        <p className="mt-8 rounded-2xl border border-dashed border-zinc-800 p-8 text-center text-zinc-400">
-          No clients yet. Assign a program day to a client and their sessions show up here.
-        </p>
+        <div className="mt-8 rounded-2xl border border-dashed border-zinc-800 p-8 text-center">
+          <p className="text-zinc-300">No clients yet.</p>
+          <p className="mt-1 text-sm text-zinc-500">Add your first client, assign them a day, then send them their workout link.</p>
+          {canEdit ? (
+            <div className="mx-auto mt-5 max-w-xs text-left">
+              <AddClient token={token} base={base} />
+            </div>
+          ) : null}
+        </div>
       ) : (
         <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-start">
           <div className="lg:sticky lg:top-6">

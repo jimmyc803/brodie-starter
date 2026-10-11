@@ -7,7 +7,7 @@ import { COACH_TZ, dayKey, type CoachOverview, type DayPoint, type RecentItem } 
 const pct = (x: number | null) => (x === null ? "–" : `${Math.round(x * 100)}%`);
 
 // Coach home: the week at a glance, form over the last 7 days, the month's training calendar, shortcuts and the latest workouts.
-export function Overview({ o, token, coachName }: { o: CoachOverview; token: string; coachName: string }) {
+export function Overview({ o, token, coachName, returning = true }: { o: CoachOverview; token: string; coachName: string; returning?: boolean }) {
   const now = o.now;
   const links = coachLinks(token);
   const today = new Date(now).toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: COACH_TZ });
@@ -17,7 +17,7 @@ export function Overview({ o, token, coachName }: { o: CoachOverview; token: str
       <header>
         <p className="text-sm text-zinc-500">{today}</p>
         <h1 className="mt-1 text-3xl font-bold tracking-tight text-zinc-50">
-          {o.summaries.length || o.recent.length ? "Welcome back" : "Your dashboard"}, Coach {coachName}
+          {returning ? "Welcome back" : "Your dashboard"}, Coach {coachName}
         </h1>
       </header>
 

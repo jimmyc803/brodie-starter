@@ -4,8 +4,8 @@ import { SignupForm } from "@/components/signup-form";
 import { SiteHeader } from "@/components/site-header";
 
 export const metadata: Metadata = {
-  title: "Start coaching with Brodie",
-  description: "Upload your program, send clients a link, and see every rep they do. Free during the pilot.",
+  title: "Apply to coach with Brodie",
+  description: "Upload your program, send clients a link, and see every rep they do. Free during the pilot; we review every coach.",
 };
 
 const POINTS = [
@@ -22,8 +22,8 @@ export default function StartPage() {
         <SiteHeader />
         <div className="mt-12 grid gap-10 md:grid-cols-2 md:items-start">
           <section>
-            <h1 className="text-4xl font-bold tracking-tight text-balance text-zinc-50">Start coaching with Brodie</h1>
-            <p className="mt-3 text-zinc-400">Your clients train with an AI coach that watches every rep. You see exactly how it went.</p>
+            <h1 className="text-4xl font-bold tracking-tight text-balance text-zinc-50">Coach with Brodie</h1>
+            <p className="mt-3 text-zinc-400">Your clients train with an AI coach that watches every rep. You see exactly how it went. We&apos;re onboarding a small group of working coaches for the pilot.</p>
             <ul className="mt-6 space-y-3">
               {POINTS.map((p) => (
                 <li key={p} className="flex gap-3 text-sm text-zinc-300">
