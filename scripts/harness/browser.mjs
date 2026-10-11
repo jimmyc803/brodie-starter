@@ -40,6 +40,12 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       const clients=(await db.query('select * from clients where coach_id=$1',[coach.id])).rows;
       assert.equal(clients.length,1); client=clients[0]; assert.equal(client.name,'Ryan');
       assert.match(client.share_token,/^[a-f0-9]{64}$/); assert.notEqual(client.share_token,token);
+      // Next's cached navigation can retain prior route trees under display:none.
+      // Verify the active private page, then reload to exercise persisted ownership.
+      await expect(page.getByText(/public demo coach link.*view-only/).filter({visible:true})).toHaveCount(0);
+      await expect(page.getByLabel('Program PDF')).toBeVisible();
+      await expect(page.getByRole('button',{name:'Upload & parse program',exact:true})).toBeEnabled();
+      await page.reload();
       await expect(page.getByText(/public demo coach link.*view-only/)).toHaveCount(0);
     });
     await expect(page.getByRole('heading',{name:'Upload a program'})).toBeVisible({timeout:90000});
