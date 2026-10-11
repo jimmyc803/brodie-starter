@@ -85,8 +85,8 @@ export function RecapView({ view }: { view: SessionView }) {
       </section>
 
       <section className="mt-12">
-        <SectionTitle sub="Planned vs. completed, set by set">What you did</SectionTitle>
-        <div className="space-y-4">
+        <SectionTitle sub="Reps per set · Brodie's cues">What you did</SectionTitle>
+        <div className="space-y-2.5">
           {view.exercises.map((ex) => (
             <ExerciseCard key={ex.exercise_key} exercise={ex} />
           ))}
