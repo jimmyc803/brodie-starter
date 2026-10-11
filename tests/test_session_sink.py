@@ -72,7 +72,8 @@ def test_finish_once_and_db_matches_view():
                        for ex in v['exercises'] for s in ex['sets'] for r in s['reps']]
     assert [{k: r[k] for k in ('muscle', 'score', 'color', 'coverage')} for r in got['muscle_scores']] == v['muscles']
     assert db.updates[0][1] == {'ended_at': v['session']['ended_at']}
-    assert v['session']['share_token'] == 'tok'
+    row = got['sessions'][0]                     # ids are made locally; the row carries exactly them (one row)
+    assert (row['id'], row['share_token']) == (v['session']['id'], v['session']['share_token']) and len(row['share_token']) == 32
 
 
 def test_unplanned_sets_and_derived_items():
@@ -97,3 +98,23 @@ def test_db_errors_never_raise():
         sink.on_event(e)
     v = sink.finish()
     assert v['session']['id'] == ids['session_id'] and sink.view_path.exists()
+
+
+def test_start_in_flight_never_duplicates_and_events_flow():
+    """finish() while start()'s insert is still running: one sessions row, and on_event never waits on the network."""
+    import threading, time
+    gate = threading.Event()
+    class SlowDb(FakeDb):
+        def insert(self, table, rows):
+            if table == 'sessions': gate.wait(2)
+            return super().insert(table, rows)
+    db = SlowDb()
+    sink = SessionSink('c1', 'd1', ITEMS, PLAN, db=db)
+    th = threading.Thread(target=sink.start); th.start()
+    t0 = time.monotonic()
+    for e in EVENTS: sink.on_event(e)
+    assert time.monotonic() - t0 < 0.5                 # not blocked by the slow insert
+    fin = threading.Thread(target=sink.finish, args=('hangup',)); fin.start()
+    time.sleep(0.1); gate.set(); th.join(3); fin.join(3)
+    assert sum(1 for t, _ in db.inserts if t == 'sessions') == 1
+    assert [t for t, _ in db.inserts] == ['sessions', 'sets', 'reps', 'muscle_scores']

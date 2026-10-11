@@ -15,7 +15,7 @@ class CallRecap:
         assignment = assignment or {}
         self.sink = SessionSink(client_id or os.environ.get('DEMO_CLIENT_ID'), assignment.get('program_day_id'),
                                 assignment.get('items'), plan, db=db)
-        self.started = False
+        self.started = False; self.start_task = None
         self.finished = None              # the asyncio task of finish(), so the 'done' path and the hang-up path share it
         self.show_task = None
 
@@ -46,8 +46,8 @@ class CallRecap:
         try:
             return await asyncio.wait_for(loop.run_in_executor(None, self.sink.finish, reason), timeout)
         except Exception as e:
-            _log(f'session save failed: {type(e).__name__}: {e}')
-            return None
+            _log(f'session save failed or slow ({type(e).__name__}: {e}); the write may still finish in its thread')
+            return self.sink._view                # built before any network: the card can still show
 
     async def _show(self, room, view):
         from facetime.recap_video import get_recap_png, publish_recap
@@ -60,7 +60,7 @@ class CallRecap:
         except Exception as e:
             _log(f'recap video failed: {type(e).__name__}: {e}')
 
-    async def aclose(self, timeout=8):
+    async def aclose(self, timeout=12):
         """Hang-up path: save if not saved yet (bounded), stop the card."""
         try: await asyncio.wait_for(self.finish(reason='call ended'), timeout)
         except Exception as e: _log(f'save on hang-up: {type(e).__name__}: {e}')

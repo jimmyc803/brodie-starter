@@ -347,7 +347,7 @@ class CoachJob:
         if self.leave_task is not None: self.leave_task.cancel()
         if self.open_task is not None and not self.open_task.done(): self.open_task.cancel()
         for t in getattr(self, 'consumer_tasks', []): t.cancel()
-        if self.recap is not None: await self.recap.aclose()                          # hang-up mid-plan still saves (bounded)
+        recap_close = asyncio.create_task(self.recap.aclose()) if self.recap is not None else None   # hang-up save runs alongside the teardown
         if self.video_task is not None and not self.video_task.done():                 # closes the VideoStream (read_video's finally)
             self.video_task.cancel()
             try: await asyncio.wait_for(asyncio.gather(self.video_task, return_exceptions=True), 1.0)
@@ -383,6 +383,8 @@ class CoachJob:
                 try: self.pipe.close()                                                  # pose landmarker here (an unclosed one hangs in __del__)
                 except Exception as e: log.debug('pipe close: %r', e)
         if self.cue_log: self.cue_log.close()
+        if recap_close is not None:                                                    # bounded inside (12 s); a mid-plan hang-up still saves
+            await asyncio.gather(recap_close, return_exceptions=True)
         print(f'[worker] job {self.ctx.job.id} done ({self.end_reason or "shutdown"}; cleanup {1000 * (time.monotonic() - t0):.0f} ms, '
               f'{1000 * (time.monotonic() - self.t_end):.0f} ms after the end trigger): frames received {self.seq}, processed {self.processed}, dropped {self.dropped}, idle ticks {self.idle}; {s}', flush=True)
 
@@ -412,10 +414,10 @@ class CoachJob:
         extra = getattr(self.event_writer, 'extra', None)                   # the JSONL lines carry the call id from the bind on (null before it)
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
-        if self.recap is None and not self.warm and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
+        if self.recap is None and not self.warm and not self.voice_mode and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
             from facetime.call_recap import CallRecap
             self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None))
-            asyncio.create_task(self.recap.start(), name='session-start')
+            self.recap.start_task = asyncio.create_task(self.recap.start(), name='session-start')
         if self.voice_mode:
             if not self.session_opened and self.open_task is None:
                 self.open_task = asyncio.create_task(self._open_session(participant.identity), name='voice-start')

@@ -80,7 +80,9 @@ class SessionSink:
         self._cur = None                          # the open set
         self._pending = []                        # faults waiting for the next counted rep
         self._t0 = None                           # the first event's t
-        self.session_id = self.share_token = self.started_at = None
+        self.session_id, self.share_token = str(uuid.uuid4()), secrets.token_urlsafe(24)   # local ids: no network needed to know them
+        self.started_at = None
+        self._start_lock = threading.Lock()       # the sessions insert: start() and _write() never both insert (no duplicate row)
         self._row_ok = False                      # the sessions row exists in the db
         self._view = None
         self.view_path = None                     # data/tmp/sessions/<id>.json once finished
@@ -90,17 +92,22 @@ class SessionSink:
         return {'set_number': n, 'planned_reps': reps, 'completed_reps': 0, 'started_at': None, 'ended_at': None, 'reps': []}
 
     def start(self):
-        self.started_at = _now()
+        """Insert the sessions row (network; call off the loop). Never holds _lock, so events keep flowing meanwhile."""
+        self.started_at = self.started_at or _now()
         if self.db is not None:
-            try:
-                row = self.db.insert('sessions', {'client_id': self.client_id, 'program_day_id': self.program_day_id,
-                                                  'started_at': self.started_at})
-                self.session_id, self.share_token, self._row_ok = row['id'], row['share_token'], True
-            except Exception as e:
-                _log(f'could not insert the session row (local ids, retried at finish): {type(e).__name__}: {str(e)[:200]}')
-        if not self.session_id:
-            self.session_id, self.share_token = str(uuid.uuid4()), secrets.token_urlsafe(24)
+            with self._start_lock:
+                self._insert_session()
         return {'session_id': self.session_id, 'share_token': self.share_token}
+
+    def _insert_session(self):
+        """Under _start_lock. Once only; a failure leaves _row_ok False and _write() tries again."""
+        if self._row_ok: return
+        try:
+            self.db.insert('sessions', {'id': self.session_id, 'client_id': self.client_id, 'program_day_id': self.program_day_id,
+                                        'started_at': self.started_at, 'share_token': self.share_token})
+            self._row_ok = True
+        except Exception as e:
+            _log(f'could not insert the session row (retried at finish): {type(e).__name__}: {str(e)[:200]}')
 
     # ---- the loop side: memory only ----
     def on_event(self, ev):
@@ -151,8 +158,7 @@ class SessionSink:
             with self._lock:
                 if self._view is not None:
                     return self._view
-                if self.session_id is None:
-                    self.start()
+                self.started_at = self.started_at or _now()     # no network under _lock: the row is inserted in _write
                 self._close(None)                 # the call ended mid-set
                 exercises = json.loads(json.dumps(self._exercises))
                 view = {'session': {'id': self.session_id, 'started_at': self.started_at, 'ended_at': _now(),
@@ -164,12 +170,12 @@ class SessionSink:
             _log(f'finish failed building the view: {type(e).__name__}: {str(e)[:200]}')
             return None
         if self.db is not None:
-            self._lookup(view)
-            try:
+            try:                                  # the rows first: on a hang-up the time is short
                 self._write(view)
                 _log(f'session {self.session_id} written ({reason})')
             except Exception as e:
                 _log(f'could not write session {self.session_id} (kept the file): {type(e).__name__}: {str(e)[:200]}')
+            self._lookup(view)                    # names for the card and the file, after the rows are safe
         try:
             OUT_DIR.mkdir(parents=True, exist_ok=True)
             self.view_path = OUT_DIR / f'{self.session_id}.json'
@@ -195,10 +201,10 @@ class SessionSink:
 
     def _write(self, view):
         sid, s = self.session_id, view['session']
-        if not self._row_ok:                      # start() could not insert: try once more with the local ids
-            self.db.insert('sessions', {'id': sid, 'client_id': self.client_id, 'program_day_id': self.program_day_id,
-                                        'started_at': s['started_at'], 'share_token': s['share_token']})
-            self._row_ok = True
+        with self._start_lock:                    # waits for a start() still in flight instead of inserting a second row
+            self._insert_session()
+        if not self._row_ok:
+            raise RuntimeError('no sessions row')
         rows = [{'session_id': sid, 'exercise_key': ex['exercise_key'], **{k: st[k] for k in
                  ('set_number', 'planned_reps', 'completed_reps', 'started_at', 'ended_at')}}
                 for ex in view['exercises'] for st in ex['sets']]
