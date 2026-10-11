@@ -3,8 +3,9 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
-import { CoachDashboard } from "@/components/coach/dashboard";
+import { CoachDashboard, pickSelection } from "@/components/coach/dashboard";
 import { getCoachView } from "@/lib/coach-view";
+import { sessionClips } from "@/lib/session-video";
 
 export const metadata: Metadata = {
   title: "Coach dashboard · Brodie for Coaches",
@@ -35,7 +36,10 @@ async function Dashboard({
   const view = await getCoachView(token);
   if (!view) notFound();
   const pick = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
-  return <CoachDashboard view={view} token={token} selectedClient={pick(sp.c)} selectedSession={pick(sp.s)} />;
+  const [selectedClient, selectedSession] = [pick(sp.c), pick(sp.s)];
+  const { session } = pickSelection(view, selectedClient, selectedSession);
+  const clips = session ? await sessionClips(session) : []; // [] when there's no footage: the map just has no videos
+  return <CoachDashboard view={view} token={token} selectedClient={selectedClient} selectedSession={selectedSession} clips={clips} />;
 }
 
 function Loading() {

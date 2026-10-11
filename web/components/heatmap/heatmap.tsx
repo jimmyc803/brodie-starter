@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
@@ -12,7 +12,7 @@ import { ClipPlayer } from "@/components/heatmap/clip-player";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
 // score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows. With
-// `clips`, each exercise in the muscle card gets a Watch button that plays that part of the workout recording.
+// `clips`, tapping a muscle plays the clip of its main exercise inline (pills switch exercises; Watch opens it full size).
 export function Heatmap({
   details,
   order,
@@ -69,9 +69,9 @@ export function Heatmap({
         </button>
       ) : null}
       <div aria-live="polite" className="mt-4">
-        {sel ? <MuscleCard detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
+        {sel ? <MuscleCard key={sel.muscle} detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
           <p className="text-center text-sm text-zinc-500">
-            {clips?.length ? "Tap a muscle to see what worked it — and watch the reps" : "Tap a muscle to see what worked it"}
+            {clips?.length ? "Tap a muscle to watch the exercise that worked it" : "Tap a muscle to see what worked it"}
           </p>
         )}
       </div>
@@ -194,6 +194,37 @@ function Body({
   );
 }
 
+// Muted looping preview of one exercise inside the muscle card; loops between clip.start and clip.end like ClipPlayer.
+function InlineClip({ clip, label }: { clip: ExerciseClip; label: string }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const seekStart = () => {
+    const v = ref.current;
+    if (!v) return;
+    v.currentTime = clip.start;
+    void v.play().catch(() => {});
+  };
+  const onTime = () => {
+    const v = ref.current;
+    if (v && clip.end !== null && v.currentTime >= clip.end) seekStart();
+  };
+  return (
+    <video
+      ref={ref}
+      src={clip.url}
+      aria-label={`${label} video`}
+      className="mx-auto max-h-[280px] w-full rounded-xl bg-black object-contain"
+      playsInline
+      muted
+      autoPlay
+      loop={clip.end === null}
+      preload="auto"
+      onLoadedMetadata={seekStart}
+      onTimeUpdate={onTime}
+      onEnded={seekStart}
+    />
+  );
+}
+
 function MuscleCard({
   detail,
   fill,
@@ -206,6 +237,15 @@ function MuscleCard({
   onClose: () => void;
 }) {
   const [playing, setPlaying] = useState<{ clip: ExerciseClip; ex: MuscleDetail["exercises"][number] } | null>(null);
+  // Exercises of this muscle that have footage: main-muscle exercises first, then the most reps done.
+  const withClips = detail.exercises
+    .flatMap((ex) => {
+      const clip = clips?.find((c) => c.exercise_key === ex.key);
+      return clip ? [{ ex, clip }] : [];
+    })
+    .sort((a, b) => Number(b.ex.role === "primary") - Number(a.ex.role === "primary") || b.ex.completed - a.ex.completed);
+  const [inlineKey, setInlineKey] = useState<string | null>(null);
+  const inline = withClips.find((w) => w.ex.key === inlineKey) ?? withClips[0] ?? null;
   const rank = detail.color !== "gray" ? rankForScore(detail.score) : null;
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
@@ -228,6 +268,33 @@ function MuscleCard({
           <div className="text-right text-xs text-zinc-400">Not trained</div>
         )}
       </div>
+      {inline ? (
+        <div className="mt-3">
+          <InlineClip key={`${inline.ex.key}:${inline.clip.url}:${inline.clip.start}`} clip={inline.clip} label={inline.ex.name} />
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {withClips.length > 1
+              ? withClips.map((w) => (
+                  <button
+                    key={w.ex.key}
+                    onClick={() => setInlineKey(w.ex.key)}
+                    aria-pressed={w === inline}
+                    className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                      w === inline ? "bg-green-500 text-zinc-950" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                    }`}
+                  >
+                    {w.ex.name}
+                  </button>
+                ))
+              : <span className="text-xs text-zinc-400">{inline.ex.name}</span>}
+            <button
+              onClick={() => setPlaying(inline)}
+              className="ml-auto rounded-full bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+            >
+              ⤢ Full screen
+            </button>
+          </div>
+        </div>
+      ) : null}
       {detail.exercises.length ? (
         <ul className="mt-3 space-y-2">
           {detail.exercises.map((e) => {

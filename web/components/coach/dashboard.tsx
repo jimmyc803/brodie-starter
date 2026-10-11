@@ -5,6 +5,7 @@ import { SessionDetail } from "@/components/coach/session-detail";
 import { shortDate } from "@/components/coach/format";
 import { SiteHeader } from "@/components/site-header";
 import type { CoachClient, CoachView } from "@/lib/coach-view";
+import type { ExerciseClip } from "@/lib/contract";
 import { sortSummaries, summarizeClient, type ClientSummary } from "@/lib/coach-status";
 import { sessionStats } from "@/lib/recap";
 import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
@@ -15,6 +16,16 @@ const STATUS_LABEL: Record<ClientSummary["status"], { text: string; className: s
   inactive: { text: "Inactive", className: "bg-zinc-800 text-zinc-400" },
 };
 
+// Which client and session the dashboard shows for ?c= / ?s= (the page also uses it to load that session's footage).
+export function pickSelection(view: CoachView, selectedClient: string | null, selectedSession: string | null) {
+  const summaries = sortSummaries(view.clients.map((c) => summarizeClient(c)));
+  const bySession = selectedSession ? view.clients.find((c) => c.sessions.some((s) => s.session.share_token === selectedSession)) : undefined;
+  const client: CoachClient | undefined =
+    view.clients.find((c) => c.id === selectedClient) ?? bySession ?? view.clients.find((c) => c.id === summaries[0]?.id);
+  const session = client?.sessions.find((s) => s.session.share_token === selectedSession) ?? client?.sessions[0];
+  return { summaries, client, session };
+}
+
 // Coach dashboard (triage inbox): the roster on the left, sorted so clients who need the coach come first;
 // the selected client on the right, with what they do next, their session history and the chosen session.
 export function CoachDashboard({
@@ -22,20 +33,18 @@ export function CoachDashboard({
   token,
   selectedClient,
   selectedSession,
+  clips,
   base = `/c/${encodeURIComponent(token)}`,
 }: {
   view: CoachView;
   token: string;
   selectedClient: string | null;
   selectedSession: string | null;
+  clips?: ExerciseClip[]; // workout footage for the shown session (see pickSelection), for the tap-a-muscle video
   base?: string; // where client/session links point; the lab page overrides it
 }) {
-  const summaries = sortSummaries(view.clients.map((c) => summarizeClient(c)));
-  const bySession = selectedSession ? view.clients.find((c) => c.sessions.some((s) => s.session.share_token === selectedSession)) : undefined;
-  const client: CoachClient | undefined =
-    view.clients.find((c) => c.id === selectedClient) ?? bySession ?? view.clients.find((c) => c.id === summaries[0]?.id);
+  const { summaries, client, session } = pickSelection(view, selectedClient, selectedSession);
   const summary = summaries.find((s) => s.id === client?.id);
-  const session = client?.sessions.find((s) => s.session.share_token === selectedSession) ?? client?.sessions[0];
 
   const sessionsThisWeek = summaries.reduce((n, s) => n + s.thisWeek, 0);
   const toReview = summaries.filter((s) => s.status === "review").length;
@@ -83,7 +92,7 @@ export function CoachDashboard({
             <div className="min-w-0 space-y-4">
               <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} />
               {session ? (
-                <SessionDetail view={session} clientName={client.name} />
+                <SessionDetail view={session} clientName={client.name} clips={clips} />
               ) : (
                 <p className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center text-zinc-400">
                   No sessions yet. When {client.name} finishes a workout with Brodie, it shows up here.
