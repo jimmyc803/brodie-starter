@@ -30,7 +30,7 @@ def test_done_saves_once_and_shows(monkeypatch):
     assert v1 is v2 and v1['session']['share_token']
     assert shown == [('room', 9)]
     assert sum(1 for t, _ in db.inserts if t == 'sessions') == 1
-    assert len([m for m in v1['muscles']]) == 15
+    assert len([m for m in v1['muscles']]) == len(rv.MUSCLES['muscles'])
 
 
 def test_hangup_saves_without_card(monkeypatch):

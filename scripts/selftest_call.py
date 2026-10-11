@@ -18,6 +18,8 @@ import argparse, datetime, asyncio, json, os, re, secrets, signal, subprocess, s
 SAMPLE_SESSION_ID = 'fbf58a0c-2c85-502e-9e74-feec3aa1c3a5'   # db/fixtures/sample_session.json: the web demo depends on it, never delete
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
+with open(os.path.join(ROOT, 'shared', 'muscles.json')) as f:
+    MUSCLE_COUNT = len(json.load(f)['muscles'])
 import numpy as np
 
 from facetime import AGENT_IDENTITY, BRIDGE_IDENTITY, DATA, SAMPLE_RATE
@@ -278,7 +280,7 @@ def check_all(R, room, worker_log, events, bridge_log, wav, card, viewer, stop_h
         ok = len(sets) == 2 and all(s['planned_reps'] == 4 and s['completed_reps'] >= 1 for s in sets) and [s['completed_reps'] for s in sets] == closed[:2]
         R.check(ok, 'Supabase sets completed reps match', f'{got}; session close counts {closed[:4]}')
         ms = db.select('muscle_scores', session_id=f'eq.{sid}', select='muscle') or []
-        R.check(len(ms) == 15, 'Supabase 15 muscle_scores', f'{len(ms)} rows')
+        R.check(len(ms) == MUSCLE_COUNT, f'Supabase {MUSCLE_COUNT} muscle_scores', f'{len(ms)} rows')
         R.check(bool(row.get('recap_image_path')), 'recap_image_path set', str(row.get('recap_image_path')))
 
     bad, known = tracebacks(log)

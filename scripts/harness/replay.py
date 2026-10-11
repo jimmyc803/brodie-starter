@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / 'src')]
+MUSCLE_COUNT = len(json.loads((ROOT / 'shared' / 'muscles.json').read_text())['muscles'])
 
 import numpy as np
 
@@ -133,12 +134,12 @@ def run_scenario(name, trace, expected, planned, output):
         'sink_completed': completed == expected,
         'persisted_reps': len(persisted_reps) == expected,
         'persisted_faults': all(r['faults'] == [] for r in persisted_reps),
-        'all_muscles': len(view['muscles']) == 15,
+        'all_muscles': len(view['muscles']) == MUSCLE_COUNT,
         'biceps_quality': muscles['biceps']['score'] == expected_quality,
         'biceps_coverage': muscles['biceps']['coverage'] == ('primary' if expected else 'none'),
         'untrained_quads': muscles['quads']['color'] == 'gray',
         'session_closed': len(database.updates) == 1 and bool(view['session']['ended_at']),
-        'persisted_muscles': len(database.rows.get('muscle_scores', [])) == 15,
+        'persisted_muscles': len(database.rows.get('muscle_scores', [])) == MUSCLE_COUNT,
         'session_view_written': sink.view_path is not None and sink.view_path.is_file(),
     }
     result = {'scenario': name, 'mode': 'synthetic-landmarks', 'frames': len(trace),
