@@ -17,7 +17,17 @@ import { flaggedSets, muscleDetails, revealOrder, sessionStats } from "@/lib/rec
 import { colorOf, pct, shortDate } from "@/components/coach/format";
 
 // The selected session, top to bottom: what it was, the numbers, what needs a look, then the heat map beside one exercise table.
-export function SessionDetail({ view, clientName, clips }: { view: SessionView; clientName: string; clips?: ExerciseClip[] }) {
+export function SessionDetail({
+  view,
+  clientName,
+  clips,
+  programHref,
+}: {
+  view: SessionView;
+  clientName: string;
+  clips?: ExerciseClip[];
+  programHref?: string; // "Adjust program" in the rep review
+}) {
   const st = sessionStats(view);
   const flagged = flaggedSets(view);
   return (
@@ -59,7 +69,14 @@ export function SessionDetail({ view, clientName, clips }: { view: SessionView; 
         <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div>
             <h3 className="mb-3 text-sm font-medium text-zinc-400">Muscle heat map</h3>
-            <Heatmap key={view.session.share_token} details={muscleDetails(view)} order={revealOrder(view)} clips={clips} className="mx-auto max-w-sm" />
+            <Heatmap
+              key={view.session.share_token}
+              details={muscleDetails(view)}
+              order={revealOrder(view)}
+              clips={clips}
+              review={{ mode: "coach", clientName, programHref }}
+              className="mx-auto max-w-sm"
+            />
           </div>
           <div className="min-w-0">
             <h3 className="mb-3 text-sm font-medium text-zinc-400">Exercises</h3>
