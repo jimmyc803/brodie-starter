@@ -15,6 +15,7 @@ Run:  set -a && source ~/.beat-muse-supabase.secrets && set +a && .venv/bin/pyth
 Env:  SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, DEMO_CLIENT_ID, LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, GEMINI_API_KEY (never printed).
 """
 import argparse, datetime, asyncio, json, os, re, secrets, signal, subprocess, sys, time, wave
+SAMPLE_SESSION_ID = 'fbf58a0c-2c85-502e-9e74-feec3aa1c3a5'   # db/fixtures/sample_session.json: the web demo depends on it, never delete
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 import numpy as np
@@ -251,10 +252,10 @@ def check_all(R, room, worker_log, events, bridge_log, wav, card, viewer, stop_h
         from PIL import Image
         a = np.asarray(Image.open(card).convert('RGB')).astype(np.float32)
         std = float(a.std()); levels = len(np.unique((a[::8, ::8] // 16).reshape(-1, 3), axis=0))
-        R.check(viewer.size == (720, 1280) and std > 8 and levels > 4, 'card.png received 720x1280, not blank',
+        R.check(viewer.size in ((720, 1280), (1080, 1920)) and std > 8 and levels > 4, 'card.png received 9:16 (web 1080x1920 or local 720x1280), not blank',
                 f'{viewer.size[0]}x{viewer.size[1]} from {viewer.from_identity!r}, pixel std {std:.1f}, {levels} colour levels -> {os.path.relpath(card, ROOT)}')
     else:
-        R.check(False, 'card.png received 720x1280, not blank', viewer.error or 'no coach-video frame')
+        R.check(False, 'card.png received 9:16 (web 1080x1920 or local 720x1280), not blank', viewer.error or 'no coach-video frame')
 
     if db is None:
         R.check(False, 'Supabase rows', 'Supabase not configured')
@@ -392,7 +393,9 @@ def main():
             say(f'kept session {sid} (--keep)')
         if res is not None and not a.keep and (res['viewer'].seen - {'brodie-agent', 'chert-bridge', 'selftest-viewer'}):
             try:                                            # the other worker's session of this test call: not a real workout
-                stray = [r['id'] for r in db.select('sessions', client_id=f"eq.{os.environ['DEMO_CLIENT_ID']}", started_at=f'gte.{t_run}', select='id') or [] if r['id'] != sid]
+                # created_at is server-set; started_at is not (the seeded sample starts at 14:05 UTC and was wrongly swept as a stray)
+                stray = [r['id'] for r in db.select('sessions', client_id=f"eq.{os.environ['DEMO_CLIENT_ID']}", created_at=f'gte.{t_run}', select='id') or []
+                         if r['id'] not in (sid, SAMPLE_SESSION_ID)]
                 for i in stray: db.delete('sessions', id=f'eq.{i}')
                 if stray: say(f'deleted {len(stray)} session(s) the other worker recorded during this test')
             except Exception as e:
