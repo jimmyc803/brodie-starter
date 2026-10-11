@@ -24,3 +24,7 @@ models/
 
 # Downloaded licensed starter archives
 *.tgz
+
+# Rep review demo clips + posters ship with the web app
+!web/public/clips/*.mp4
+!web/public/clips/*.jpg
