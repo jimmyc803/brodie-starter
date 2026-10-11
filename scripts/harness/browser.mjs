@@ -44,7 +44,7 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       // Verify the active private page, then reload to exercise persisted ownership.
       await expect(page.getByText(/public demo coach link.*view-only/).filter({visible:true})).toHaveCount(0);
       await expect(page.getByLabel('Program PDF')).toBeVisible();
-      await expect(page.getByRole('button',{name:'Upload & parse program',exact:true})).toBeEnabled();
+      await expect(page.getByRole('button',{name:'Upload & parse program',exact:true})).toBeDisabled();
       await page.reload();
       await expect(page.getByText(/public demo coach link.*view-only/)).toHaveCount(0);
     });
@@ -77,6 +77,7 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
     });
     await check('PDF upload through UI, actual parser, storage and SQL',async()=>{
       await page.getByLabel('Program PDF').setInputFiles(path.join(repoRoot,'db/fixtures/sample_program.pdf'));
+      await expect(page.getByRole('button',{name:'Upload & parse program',exact:true})).toBeEnabled();
       await page.getByRole('button',{name:'Upload & parse program'}).click();
       await expect(page.getByRole('status')).toContainText('Program saved',{timeout:60000});
       await expect(page.getByRole('heading',{name:"Tristan's Three-Day Foundation Program"})).toBeVisible();
