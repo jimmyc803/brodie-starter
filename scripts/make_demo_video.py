@@ -78,6 +78,47 @@ def frame_canvas(left, right):
     return c
 
 
+def roast_caption(img, line, top=True):
+    """Roast mode: the line as a big meme caption (white, black outline, a red ROAST tag), wrapped to two lines, in place."""
+    h, w = img.shape[:2]; font = cv2.FONT_HERSHEY_DUPLEX; scale = 1.45 * w / 720; th = max(2, int(3 * w / 720))
+    words = line.upper().split(); lines = [words[0]]
+    for wd in words[1:]:
+        cand = lines[-1] + ' ' + wd
+        if cv2.getTextSize(cand, font, scale, th)[0][0] <= w * 0.86: lines[-1] = cand
+        else: lines.append(wd)
+    while max(cv2.getTextSize(l, font, scale, th)[0][0] for l in lines) > w * 0.9: scale *= 0.92
+    lh = int(cv2.getTextSize('A', font, scale, th)[0][1] * 1.6); y = int(h * (0.52 if top else 0.62))
+    tag = 'ROAST'; (tw, tth), _ = cv2.getTextSize(tag, font, scale * 0.5, 2)
+    cv2.rectangle(img, ((w - tw) // 2 - 12, y - lh - tth - 14), ((w + tw) // 2 + 12, y - lh + 2), (225, 40, 40), -1)
+    cv2.putText(img, tag, ((w - tw) // 2, y - lh - 6), font, scale * 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+    for k, l in enumerate(lines):
+        lw = cv2.getTextSize(l, font, scale, th)[0][0]; org = ((w - lw) // 2, y + k * lh)
+        cv2.putText(img, l, org, font, scale, (0, 0, 0), th + 8, cv2.LINE_AA)
+        cv2.putText(img, l, org, font, scale, (255, 255, 255), th, cv2.LINE_AA)
+
+
+ROAST_SHOW_S = 3.0
+from facetime.roast import ROAST_LINES
+ROAST_SET = set(ROAST_LINES)
+
+
+def add_roasts(events, bank, duration, gap=6.0):
+    """Roast mode: the opener after the first announce, a roast line after a spoken correction (at most one per `gap` s, after the
+    correction clip so the two don't overlap) and a closing roast after the workout. All bank strings (facetime/roast.py)."""
+    from facetime.roast import ROAST_START, roast_for, close_line
+    ann = next((e for e in events if e.get('type') == 'cue' and e.get('intent') == 'announce'), None)
+    t0 = ann['t'] + (bank.duration(ann['text']) or 1.0) + 0.3 if ann else 0.0
+    added = [dict(type='cue', t=round(t0, 2), text=ROAST_START, intent='roast')]
+    last = -gap; n = 0
+    for e in sorted((e for e in events if e.get('type') == 'fault'), key=lambda e: e['t']):
+        if e['t'] - last < gap: continue
+        corr = next((c for c in events if c.get('type') == 'cue' and c.get('intent') == 'correction' and 0 <= c['t'] - e['t'] < 1.0), None)
+        t = (corr['t'] + (bank.duration(corr['text']) or 0.8) + 0.2) if corr else e['t']
+        added.append(dict(type='cue', t=round(t, 2), text=roast_for(e.get('label'), n), intent='roast')); last = e['t']; n += 1
+    added.append(dict(type='cue', t=round(duration + 0.4, 2), text=close_line(n), intent='roast'))
+    events.extend(added)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('--video', required=True)
@@ -88,6 +129,7 @@ def main():
     ap.add_argument('--end', type=float, default=None, help='trim: stop at this second of the recording')
     ap.add_argument('--save', action='store_true', help='write the session to Supabase and use the web card as the final card')
     ap.add_argument('--no-audio', dest='audio', action='store_false')
+    ap.add_argument('--roast', action='store_true', help='roast mode (facetime/roast.py): a roast line after corrections and at the end, on screen and spoken')
     add_arguments(ap)
     a = ap.parse_args()
     if not a.plan and not a.exercise: a.plan = 'squats:10'
@@ -150,6 +192,7 @@ def main():
     cap.release(); duration = i / src_fps
     if pull_target is not None:                           # every rep counts, extra reps past the target too
         ev('session', duration, state='done', item=0, exercise=None, target=pull_target, count=pc.st.count, done=True)
+    if a.roast: add_roasts(events, bank, duration)
     events.sort(key=lambda e: e['t'])
     reps = [e for e in events if e.get('type') == 'rep']; cues = [e for e in events if e.get('type') == 'cue']
     log(f'perception: {len(samples)} frames in {time.time() - t_start:.1f} s, {len(reps)} reps, {len(cues)} cues, '
@@ -195,13 +238,17 @@ def main():
         else:
             from facetime.pullup import compose_pullup
             pane = compose_pullup(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), lm, s0[6], cue, cue_t, face, now=t)
+        if a.roast and cue in ROAST_SET and t - cue_t <= ROAST_SHOW_S: roast_caption(pane, cue)
         left = cv2.resize(pane, (PW, PH), interpolation=cv2.INTER_AREA)
         right = [c for ct, c in card_times if ct <= t][-1]
         enc.stdin.write(frame_canvas(left, right).tobytes())
     cap.release()
     if left is not None:                                  # the outro: the final card, the last frame dimmed
-        end = frame_canvas((left * 0.35).astype(np.uint8), final)
-        label(end, 'WORKOUT DONE', LX + 120, PY + PH // 2, 1.2, WHITE, 2)
+        dim = (left * 0.35).astype(np.uint8)
+        closer = [c[2] for c in spoken if c[2] in ROAST_SET and c[0] >= duration] if a.roast else []
+        if closer: roast_caption(dim, closer[-1], top=False)
+        end = frame_canvas(dim, final)
+        label(end, 'WORKOUT DONE', LX + 120, PY + PH // 2 - (160 if closer else 0), 1.2, WHITE, 2)
         for _ in range(int(a.hold * out_fps)): enc.stdin.write(end.tobytes())
     enc.stdin.close(); enc.wait()
     total = duration + a.hold
