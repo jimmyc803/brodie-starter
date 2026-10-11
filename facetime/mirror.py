@@ -27,9 +27,27 @@ VIS = 0.3
 CUE_SHOW_S = 4.0
 
 
+LETTERBOX = False                 # True: a landscape frame is shown whole (blurred fill above and below) instead of cropped;
+                                  # for floor exercises filmed from the side (push-ups), where a 9:16 crop cuts off head and feet
+
+
+def letterbox_portrait(rgb):
+    """The whole landscape frame scaled to width W, centred between the top bar and the cue bar, on a blurred fill."""
+    h, w = rgb.shape[:2]; hh = int(round(W * h / w))
+    fw = int(round(H * w / h)); fill = cv2.resize(rgb, (fw, H), interpolation=cv2.INTER_AREA)[:, (fw - W) // 2:(fw - W) // 2 + W]
+    img = (cv2.GaussianBlur(cv2.resize(fill, (W // 8, H // 8)), (0, 0), 3)).astype(np.float32)
+    img = cv2.resize((img * 0.45).astype(np.uint8), (W, H), interpolation=cv2.INTER_LINEAR)
+    top, bottom = SAFE_TOP + 106, SAFE_BOTTOM - 110
+    y_off = max(0, min(H - hh, (top + bottom - hh) // 2))
+    img[y_off:y_off + hh] = cv2.resize(rgb, (W, hh), interpolation=cv2.INTER_AREA)
+    ch = h * H / hh
+    return img, (0, -y_off * ch / H, w, ch)        # the box _map uses: x scaled by W / w, y shifted down by y_off
+
+
 def crop_portrait(rgb, lm):
     """9:16 crop of a landscape frame centred on the person (mean of the visible landmarks), scaled to WxH."""
     h, w = rgb.shape[:2]
+    if LETTERBOX and w > h: return letterbox_portrait(rgb)
     cw = int(round(h * 9 / 16))
     if cw >= w:                                        # already portrait or square: letterbox-free scale
         return cv2.resize(rgb, (W, H), interpolation=cv2.INTER_AREA), (0, 0, w, h)
