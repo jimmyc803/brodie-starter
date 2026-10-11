@@ -16,7 +16,7 @@ const TEXT = "#fafafa";
 const MUTED = "#a1a1aa";
 const FAINT = "#71717a";
 
-const BODY_W = 400;
+const BODY_W = 370;
 const BODY_H = Math.round((BODY_W * (VIEWBOX.height + 12)) / 112); // body viewBox plus a 6-unit glow margin
 
 function Body({ side, card }: { side: "front" | "back"; card: RecapCard }) {
@@ -45,7 +45,7 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
         backgroundColor: BG,
         backgroundImage: "radial-gradient(circle at 50% 42%, #1c1c22 0%, #09090b 62%)",
         color: TEXT,
-        padding: "84px 64px 60px",
+        padding: "64px 64px 48px",
       }}
     >
       {/* Header */}
@@ -65,10 +65,29 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
       >
         {card.title}
       </div>
-      <div style={{ display: "flex", marginTop: 20, fontSize: 38, color: MUTED, textAlign: "center" }}>{card.subtitle}</div>
+      <div style={{ display: "flex", marginTop: 16, fontSize: 38, color: MUTED, textAlign: "center" }}>{card.subtitle}</div>
+
+      {/* Today's rank */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          marginTop: 28,
+          padding: "14px 34px",
+          borderRadius: 999,
+          border: `3px solid ${card.rank.color}`,
+          boxShadow: `0 0 ${card.rank.tier === 8 ? 60 : 30}px ${card.rank.color}66`,
+          fontSize: 40,
+          letterSpacing: 4,
+          color: card.rank.color,
+        }}
+      >
+        <div style={{ display: "flex", fontSize: 24, letterSpacing: 6, color: MUTED, marginRight: 20 }}>RANK</div>
+        {card.rank.name.toUpperCase()}
+      </div>
 
       {/* Bodies */}
-      <div style={{ display: "flex", justifyContent: "center", marginTop: 56 }}>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 24 }}>
         <Body side="front" card={card} />
         <div style={{ display: "flex", width: 40 }} />
         <Body side="back" card={card} />

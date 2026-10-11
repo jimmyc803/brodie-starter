@@ -4,7 +4,8 @@ import { useEffect, useId, useState } from "react";
 
 import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
-import type { MuscleKey } from "@/lib/contract";
+import type { Color, MuscleKey } from "@/lib/contract";
+import { muscleRank } from "@/lib/ranks";
 import type { MuscleDetail } from "@/lib/recap";
 import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
@@ -200,6 +201,17 @@ function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: str
             <h3 className="text-lg font-semibold">{detail.label}</h3>
           </div>
           <p className="mt-0.5 text-xs text-zinc-400">{detail.note}</p>
+          {(() => {
+            const r = muscleRank(detail);
+            return r ? (
+              <span
+                className="mt-2 inline-block rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider"
+                style={{ color: r.color, borderColor: `${r.color}66` }}
+              >
+                {r.name}
+              </span>
+            ) : null;
+          })()}
         </div>
         {rank ? (
           <div className="flex items-center gap-2.5">

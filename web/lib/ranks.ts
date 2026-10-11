@@ -2,6 +2,12 @@
 // rank from its stored score (0..1) — the highest tier whose `minScore` it meets. Every tier is a Brodie at a different
 // stage (shriveled -> ascended) with its own alliterative-animal name, a brand-safe color (Brodie is never pink) and a
 // graphic (see RankBadge). The top tier is pure white: Brodie ascends into god form.
+//
+// On top of the per-muscle rank, a session earns one overall rank (today's rank badge + the rank on the recap image):
+// the same scores drive it, so it measures how well you trained today (form + completion), not how strong you are.
+import type { MuscleKey, SessionView } from "@/lib/contract";
+import { completedReps } from "@/lib/contract";
+
 export type Rank = {
   key: string;
   tier: number; // 1..8, weakest -> strongest
@@ -29,4 +35,39 @@ export function rankForScore(score: number): Rank {
   let out = RANKS[0];
   for (const r of RANKS) if (score >= r.minScore) out = r;
   return out;
+}
+
+// The next tier up the ladder, or null at the top (Godmode Griffin).
+export function nextRank(rank: Rank): Rank | null {
+  return RANKS[RANKS.indexOf(rank) + 1] ?? null;
+}
+
+// A single muscle's rank. Untrained (gray) muscles have no rank.
+export function muscleRank(m: { muscle: MuscleKey; score: number; color: string }): Rank | null {
+  return m.color === "gray" ? null : rankForScore(m.score);
+}
+
+// The session's score: average of the trained muscles' scores, main muscles counting double (helpers half).
+export function sessionScore(view: SessionView): number | null {
+  let num = 0;
+  let den = 0;
+  for (const m of view.muscles) {
+    if (m.color === "gray" || m.coverage === "none") continue;
+    const w = m.coverage === "primary" ? 1 : 0.5;
+    num += w * m.score;
+    den += w;
+  }
+  return den ? num / den : null;
+}
+
+export type SessionRank = { rank: Rank; score: number | null; next: Rank | null; skipped: boolean };
+
+// Today's overall rank. A workout with no reps counted is skipped: it lands on the lowest tier (Chud Chicken) with no
+// score, so the recap stays honest ("every Brodie starts somewhere") instead of celebrating a session that never happened.
+export function sessionRank(view: SessionView): SessionRank {
+  const reps = view.exercises.reduce((n, ex) => n + completedReps(ex), 0);
+  const score = sessionScore(view);
+  if (reps === 0 || score === null) return { rank: RANKS[0], score: null, next: nextRank(RANKS[0]), skipped: true };
+  const rank = rankForScore(score);
+  return { rank, score, next: nextRank(rank), skipped: false };
 }
