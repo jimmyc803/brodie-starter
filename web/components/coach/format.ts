@@ -15,7 +15,3 @@ export function pct(x: number | null): string {
 export function colorOf(c: Color): string {
   return COLORS[c];
 }
-
-export function sessionHref(token: string, sessionToken: string): string {
-  return `/c/${encodeURIComponent(token)}?s=${encodeURIComponent(sessionToken)}#session`;
-}
