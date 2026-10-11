@@ -39,7 +39,24 @@ export async function createGateway(db, directory) {
         return send(200,result.rows[0].result);
       }
       const table = url.pathname.split('/').at(-1);
-      if (!url.pathname.startsWith('/rest/v1/') || req.method !== 'GET' || !['coaches','clients','programs','program_days'].includes(table)) throw Error('Unsupported gateway request');
+      if (!url.pathname.startsWith('/rest/v1/') || req.method !== 'GET' || !['coaches','clients','programs','program_days','assignments'].includes(table)) throw Error('Unsupported gateway request');
+      // Exact PostgREST relationship projection used by the real Python worker.
+      const workerProjection = 'program_day_id,clients(name),program_days(id,day_number,title,exercises,programs(coach_id,coaches(name,persona)))';
+      if (table === 'assignments' && url.searchParams.get('select') === workerProjection) {
+        if (url.searchParams.get('active') !== 'eq.true' || url.searchParams.get('order') !== 'assigned_at.desc' || url.searchParams.get('limit') !== '1') throw Error('Unsupported worker assignment query');
+        const clientFilter = url.searchParams.get('client_id') || '';
+        if (!clientFilter.startsWith('eq.')) throw Error('Missing worker client filter');
+        const result = await connection.query(`
+          select a.program_day_id, json_build_object('name', c.name) as clients,
+            json_build_object('id', d.id, 'day_number', d.day_number, 'title', d.title, 'exercises', d.exercises,
+              'programs', json_build_object('coach_id', p.coach_id,
+                'coaches', json_build_object('name', co.name, 'persona', co.persona))) as program_days
+          from assignments a join clients c on c.id=a.client_id
+          join program_days d on d.id=a.program_day_id join programs p on p.id=d.program_id
+          join coaches co on co.id=p.coach_id
+          where a.client_id=$1 and a.active=true order by a.assigned_at desc limit 1`, [clientFilter.slice(3)]);
+        return send(200,result.rows);
+      }
       const columns = (url.searchParams.get('select') || '*').split(',').map(identifier).join(',');
       const values = [], filters = [];
       for (const [key, value] of url.searchParams) {
