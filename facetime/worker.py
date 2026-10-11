@@ -256,6 +256,7 @@ class CoachJob:
         self.end_reason = None; self.leave_task = None; self.ctx_shutdown_called = False; self.t_end = None
         self.session_state = None; self.probes_ignored = 0        # the probe (--latency-probe) never beeps or opens the floor during an active set
         self.voice_mode = perception_off(a)                       # --perception off: no Perception; the worker emits its own session/status events
+        self.recap = None                                         # facetime/call_recap.py: save the session + heat map card (DEMO_CLIENT_ID)
         self.t0 = time.monotonic(); self.ev_seq = 0; self.vision = None; self.vision_logged = False; self.session_opened = False; self.open_task = None
 
     # ---- lifecycle ----
@@ -346,6 +347,7 @@ class CoachJob:
         if self.leave_task is not None: self.leave_task.cancel()
         if self.open_task is not None and not self.open_task.done(): self.open_task.cancel()
         for t in getattr(self, 'consumer_tasks', []): t.cancel()
+        if self.recap is not None: await self.recap.aclose()                          # hang-up mid-plan still saves (bounded)
         if self.video_task is not None and not self.video_task.done():                 # closes the VideoStream (read_video's finally)
             self.video_task.cancel()
             try: await asyncio.wait_for(asyncio.gather(self.video_task, return_exceptions=True), 1.0)
@@ -410,6 +412,10 @@ class CoachJob:
         extra = getattr(self.event_writer, 'extra', None)                   # the JSONL lines carry the call id from the bind on (null before it)
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
+        if self.recap is None and not self.warm and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
+            from facetime.call_recap import CallRecap
+            self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None))
+            asyncio.create_task(self.recap.start(), name='session-start')
         if self.voice_mode:
             if not self.session_opened and self.open_task is None:
                 self.open_task = asyncio.create_task(self._open_session(participant.identity), name='voice-start')
@@ -547,6 +553,10 @@ class CoachJob:
     def _deliver(self, ev):
         self.events.put_nowait(ev)
         t = ev['type']
+        if self.recap is not None and not self.closed:
+            self.recap.on_event(ev)
+            if t == 'session' and (ev.get('state') == 'done' or ev.get('done')):        # plan finished, caller still here: save + show the card
+                asyncio.create_task(self.recap.finish(self.room, show=self.room_connected()), name='session-finish')
         if t == 'rep':
             c = ev.get('confidence') or {}
             print(f"[event] rep {ev['exercise']} {ev['n']} (agree {c.get('agree')}, amp {c.get('amp')}) t={ev['t']:.2f}", flush=True)
