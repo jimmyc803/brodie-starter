@@ -1,0 +1,741 @@
+{
+  "_doc": "One finished session, shaped like db/schema.sql rows. Nested for convenience: sets[].reps[] are the reps rows. Regenerate with python scripts/make_sample_session.py. Tokens here are fake demo values.",
+  "session": {
+    "id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+    "client_id": "b2001e18-ab1a-5fee-b303-9af19e728a13",
+    "program_day_id": "264d608e-f5ca-5f48-b1aa-d77fb1f81fee",
+    "status": "done",
+    "started_at": "2026-10-11T14:05:00Z",
+    "ended_at": "2026-10-11T14:09:43Z",
+    "room": "beatmuse-demo-01",
+    "plan": "squats:10,pushups:8,jumping jacks:20,lunges:10",
+    "client_token": "demo-client-7hK2pXq9LmV4sTz8RwN3",
+    "coach_token": "demo-coach-Jf5cY1nB8eQ6uA0dGh2W",
+    "recap_image_path": "recaps/fbf58a0c-2c85-502e-9e74-feec3aa1c3a5.png",
+    "overall_score": 0.718,
+    "created_at": "2026-10-11T14:05:00Z"
+  },
+  "client": {
+    "id": "b2001e18-ab1a-5fee-b303-9af19e728a13",
+    "coach_id": "3404f01e-b92f-5e28-a5f6-e1f3f39d3c2a",
+    "name": "Alex Rivera",
+    "phone": null,
+    "created_at": "2026-10-10T14:05:00Z"
+  },
+  "coach": {
+    "id": "3404f01e-b92f-5e28-a5f6-e1f3f39d3c2a",
+    "name": "Coach Demo",
+    "persona": "High energy gym coach. Short, punchy encouragement.",
+    "phone": null,
+    "dashboard_token": "demo-coach-dash-Q2b9xVt0mLr4Kp7NwZs1",
+    "created_at": "2026-10-10T14:05:00Z"
+  },
+  "program_day": {
+    "id": "264d608e-f5ca-5f48-b1aa-d77fb1f81fee",
+    "program_id": "12455b62-d65b-51da-8ee7-c0ab8ced6924",
+    "day_number": 1,
+    "title": "Day 1 - Full body starter",
+    "exercises": [
+      {
+        "exercise": "squats",
+        "sets": 1,
+        "reps": 10
+      },
+      {
+        "exercise": "pushups",
+        "sets": 1,
+        "reps": 8
+      },
+      {
+        "exercise": "jumping jacks",
+        "sets": 1,
+        "reps": 20
+      },
+      {
+        "exercise": "lunges",
+        "sets": 1,
+        "reps": 10
+      }
+    ],
+    "created_at": "2026-10-10T14:05:00Z"
+  },
+  "sets": [
+    {
+      "id": "900addb8-99d3-52a9-b220-3605a301d33c",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "set_number": 1,
+      "exercise": "squats",
+      "planned_reps": 10,
+      "done_reps": 9,
+      "closed_by": "timeout",
+      "started_at": "2026-10-11T14:05:03Z",
+      "ended_at": "2026-10-11T14:06:18Z",
+      "fault_rate": 0.222,
+      "completion": 0.9,
+      "dropoff": 0.0,
+      "quality": 0.859,
+      "reps": [
+        {
+          "id": "a49b30e6-0ec1-5873-899a-9f573d38e67f",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 1,
+          "exercise": "squats",
+          "t_offset_s": 4.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "ccdfda43-c541-52ab-ba00-9bb69fdb45f0",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 2,
+          "exercise": "squats",
+          "t_offset_s": 7.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "eb96d9af-342c-540e-9c07-c25f1862d582",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 3,
+          "exercise": "squats",
+          "t_offset_s": 10.5,
+          "confidence": 1.0,
+          "faults": [
+            "squats - knees over toes"
+          ]
+        },
+        {
+          "id": "eb2483e1-d271-506a-80d7-3bd9d1275923",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 4,
+          "exercise": "squats",
+          "t_offset_s": 13.5,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "c0a0056a-ba7b-5144-9799-db6762a93a5f",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 5,
+          "exercise": "squats",
+          "t_offset_s": 16.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "f913d74f-d2d5-54cb-812c-d6a13abe249b",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 6,
+          "exercise": "squats",
+          "t_offset_s": 19.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "a632bff6-0bff-51a2-bdf9-e940310813fc",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 7,
+          "exercise": "squats",
+          "t_offset_s": 22.5,
+          "confidence": 1.0,
+          "faults": [
+            "squats - knees over toes"
+          ]
+        },
+        {
+          "id": "2ffd52a7-6827-5d70-aed7-390724511f0d",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 8,
+          "exercise": "squats",
+          "t_offset_s": 25.5,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "372af559-15fb-5844-994b-7a1b44429b60",
+          "set_id": "900addb8-99d3-52a9-b220-3605a301d33c",
+          "rep_number": 9,
+          "exercise": "squats",
+          "t_offset_s": 28.5,
+          "confidence": 1.0,
+          "faults": []
+        }
+      ]
+    },
+    {
+      "id": "d4dd62e6-dc41-562c-8d63-997e511b047f",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "set_number": 2,
+      "exercise": "pushups",
+      "planned_reps": 8,
+      "done_reps": 5,
+      "closed_by": "timeout",
+      "started_at": "2026-10-11T14:06:26Z",
+      "ended_at": "2026-10-11T14:07:41Z",
+      "fault_rate": 0.6,
+      "completion": 0.625,
+      "dropoff": 1.0,
+      "quality": 0.387,
+      "reps": [
+        {
+          "id": "6635ba48-e8bb-5a39-93ef-e400b4388dd7",
+          "set_id": "d4dd62e6-dc41-562c-8d63-997e511b047f",
+          "rep_number": 1,
+          "exercise": "pushups",
+          "t_offset_s": 87.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "8b61755c-383c-57b1-bbb0-f21408776ad1",
+          "set_id": "d4dd62e6-dc41-562c-8d63-997e511b047f",
+          "rep_number": 2,
+          "exercise": "pushups",
+          "t_offset_s": 90.1,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "4c1c7739-f826-58e2-9941-5b52e215ab7b",
+          "set_id": "d4dd62e6-dc41-562c-8d63-997e511b047f",
+          "rep_number": 3,
+          "exercise": "pushups",
+          "t_offset_s": 92.7,
+          "confidence": 1.0,
+          "faults": [
+            "pushups - insufficient"
+          ]
+        },
+        {
+          "id": "9ebf7c38-7688-53aa-a1da-914a1f64714b",
+          "set_id": "d4dd62e6-dc41-562c-8d63-997e511b047f",
+          "rep_number": 4,
+          "exercise": "pushups",
+          "t_offset_s": 95.3,
+          "confidence": 0.67,
+          "faults": [
+            "pushups - insufficient",
+            "pushups - elevated hips"
+          ]
+        },
+        {
+          "id": "605e8da6-28f8-596c-aefa-90e8c202d442",
+          "set_id": "d4dd62e6-dc41-562c-8d63-997e511b047f",
+          "rep_number": 5,
+          "exercise": "pushups",
+          "t_offset_s": 97.9,
+          "confidence": 1.0,
+          "faults": [
+            "pushups - insufficient"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "set_number": 3,
+      "exercise": "jumping jacks",
+      "planned_reps": 20,
+      "done_reps": 20,
+      "closed_by": "target",
+      "started_at": "2026-10-11T14:07:52Z",
+      "ended_at": "2026-10-11T14:08:15.500000Z",
+      "fault_rate": 0.1,
+      "completion": 1.0,
+      "dropoff": 0.2,
+      "quality": 0.91,
+      "reps": [
+        {
+          "id": "de62abcb-325a-5116-9c9c-a61838afad87",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 1,
+          "exercise": "jumping jacks",
+          "t_offset_s": 173.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "8ecb28f8-d4f1-59a4-a912-ad44f2af4757",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 2,
+          "exercise": "jumping jacks",
+          "t_offset_s": 174.6,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "d8c37efa-7122-58da-b837-d0543e324eb1",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 3,
+          "exercise": "jumping jacks",
+          "t_offset_s": 175.7,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "97029263-abcb-5d66-9a52-4c511a58e676",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 4,
+          "exercise": "jumping jacks",
+          "t_offset_s": 176.8,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "c1c7d3f5-cd40-5621-b45f-67a910f9c794",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 5,
+          "exercise": "jumping jacks",
+          "t_offset_s": 177.9,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "79f5a86f-91c3-5f92-a8df-36a812b53247",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 6,
+          "exercise": "jumping jacks",
+          "t_offset_s": 179.0,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "6ebc05d0-aaf0-5494-983c-3e14f254eae9",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 7,
+          "exercise": "jumping jacks",
+          "t_offset_s": 180.1,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "9335a0d0-2f74-5320-a686-11b7c1fb0c17",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 8,
+          "exercise": "jumping jacks",
+          "t_offset_s": 181.2,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "fffc4a7b-becd-573c-b6aa-10a301f0b0b2",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 9,
+          "exercise": "jumping jacks",
+          "t_offset_s": 182.3,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "091147d8-54fc-5aed-889f-f0d95af2ce65",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 10,
+          "exercise": "jumping jacks",
+          "t_offset_s": 183.4,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "9536cf17-f45c-5490-ba8d-92834182e3f9",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 11,
+          "exercise": "jumping jacks",
+          "t_offset_s": 184.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "71690aa7-b0c9-50ef-9a57-25363d32f056",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 12,
+          "exercise": "jumping jacks",
+          "t_offset_s": 185.6,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "5a7d165e-de40-543c-88fb-6e97ddd1f6bb",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 13,
+          "exercise": "jumping jacks",
+          "t_offset_s": 186.7,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "3b53839a-c751-5b75-99ba-a8094a6f2d63",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 14,
+          "exercise": "jumping jacks",
+          "t_offset_s": 187.8,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "09c2c0fc-6b66-5b6c-8985-37b8e7a770ae",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 15,
+          "exercise": "jumping jacks",
+          "t_offset_s": 188.9,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "a6728a3e-463a-5a20-9197-7d872a79fc7c",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 16,
+          "exercise": "jumping jacks",
+          "t_offset_s": 190.0,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "4e09a3a0-677e-52d5-ab1e-643f34806adb",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 17,
+          "exercise": "jumping jacks",
+          "t_offset_s": 191.1,
+          "confidence": 1.0,
+          "faults": [
+            "jumping jacks - only arms"
+          ]
+        },
+        {
+          "id": "062ede97-ac61-5326-a674-52f53734561b",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 18,
+          "exercise": "jumping jacks",
+          "t_offset_s": 192.2,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "197570d1-18ca-5bb6-9504-55e876082cae",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 19,
+          "exercise": "jumping jacks",
+          "t_offset_s": 193.3,
+          "confidence": 1.0,
+          "faults": [
+            "jumping jacks - only arms"
+          ]
+        },
+        {
+          "id": "6a86124a-de12-5cc8-ae9e-512b44ff9a6e",
+          "set_id": "96767b6d-0024-5dee-b515-f12c71c102a5",
+          "rep_number": 20,
+          "exercise": "jumping jacks",
+          "t_offset_s": 194.4,
+          "confidence": 0.67,
+          "faults": []
+        }
+      ]
+    },
+    {
+      "id": "2a79482b-223b-5f69-a823-dfc227c11491",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "set_number": 4,
+      "exercise": "lunges",
+      "planned_reps": 10,
+      "done_reps": 8,
+      "closed_by": "timeout",
+      "started_at": "2026-10-11T14:08:25Z",
+      "ended_at": "2026-10-11T14:09:40Z",
+      "fault_rate": 0.25,
+      "completion": 0.8,
+      "dropoff": 0.5,
+      "quality": 0.715,
+      "reps": [
+        {
+          "id": "0ff126da-95a7-566a-bab8-942342bfd67c",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 1,
+          "exercise": "lunges",
+          "t_offset_s": 206.5,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "a0c15909-1d5c-516b-bd06-abc05362edb0",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 2,
+          "exercise": "lunges",
+          "t_offset_s": 209.3,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "62fe2b71-ede9-551e-b6a1-483024531e67",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 3,
+          "exercise": "lunges",
+          "t_offset_s": 212.1,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "49deb90f-dbc3-52ae-8272-f0e067c65a03",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 4,
+          "exercise": "lunges",
+          "t_offset_s": 214.9,
+          "confidence": 0.67,
+          "faults": []
+        },
+        {
+          "id": "e624f4ff-870c-5128-9e0e-bda6e2b38e2b",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 5,
+          "exercise": "lunges",
+          "t_offset_s": 217.7,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "2e274d5a-3a56-5b6b-8121-846cd438f857",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 6,
+          "exercise": "lunges",
+          "t_offset_s": 220.5,
+          "confidence": 1.0,
+          "faults": [
+            "alternating forward lunges - leaning forward"
+          ]
+        },
+        {
+          "id": "14733405-62d5-58b6-868c-ae4a4fa2abcc",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 7,
+          "exercise": "lunges",
+          "t_offset_s": 223.3,
+          "confidence": 1.0,
+          "faults": []
+        },
+        {
+          "id": "ef62ce02-9b13-55c3-a530-6e8018538eee",
+          "set_id": "2a79482b-223b-5f69-a823-dfc227c11491",
+          "rep_number": 8,
+          "exercise": "lunges",
+          "t_offset_s": 226.1,
+          "confidence": 0.67,
+          "faults": [
+            "alternating forward lunges - leaning forward"
+          ]
+        }
+      ]
+    }
+  ],
+  "muscle_scores": [
+    {
+      "id": "8c5255da-3271-5077-8adf-9c8761d4b838",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "chest",
+      "score": 0.387,
+      "color": "red",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 2,
+            "exercise": "pushups",
+            "role": "primary",
+            "quality": 0.387
+          }
+        ],
+        "top_fault": "pushups - insufficient"
+      }
+    },
+    {
+      "id": "e6133b3f-5602-5592-9f9c-c36d82d0f70c",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "shoulders",
+      "score": 0.736,
+      "color": "yellow",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 2,
+            "exercise": "pushups",
+            "role": "secondary",
+            "quality": 0.387
+          },
+          {
+            "set_number": 3,
+            "exercise": "jumping jacks",
+            "role": "primary",
+            "quality": 0.91
+          }
+        ],
+        "top_fault": "pushups - insufficient"
+      }
+    },
+    {
+      "id": "e99271ba-250d-577f-9a12-3ec8c063ef29",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "triceps",
+      "score": 0.387,
+      "color": "red",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 2,
+            "exercise": "pushups",
+            "role": "primary",
+            "quality": 0.387
+          }
+        ],
+        "top_fault": "pushups - insufficient"
+      }
+    },
+    {
+      "id": "a76786b3-0fb5-5146-afec-d7c541752728",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "abs",
+      "score": 0.387,
+      "color": "red",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 2,
+            "exercise": "pushups",
+            "role": "secondary",
+            "quality": 0.387
+          }
+        ],
+        "top_fault": "pushups - insufficient"
+      }
+    },
+    {
+      "id": "38468f70-d411-5301-bd79-047c5cb5b891",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "lower_back",
+      "score": 0.859,
+      "color": "green",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 1,
+            "exercise": "squats",
+            "role": "secondary",
+            "quality": 0.859
+          }
+        ],
+        "top_fault": "squats - knees over toes"
+      }
+    },
+    {
+      "id": "580851a5-41de-57dc-8eba-deb0054d85b3",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "glutes",
+      "score": 0.812,
+      "color": "green",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 1,
+            "exercise": "squats",
+            "role": "primary",
+            "quality": 0.859
+          },
+          {
+            "set_number": 3,
+            "exercise": "jumping jacks",
+            "role": "secondary",
+            "quality": 0.91
+          },
+          {
+            "set_number": 4,
+            "exercise": "lunges",
+            "role": "primary",
+            "quality": 0.715
+          }
+        ],
+        "top_fault": "squats - knees over toes"
+      }
+    },
+    {
+      "id": "1bacb61b-20ca-53f7-a9ce-7383335a4288",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "quads",
+      "score": 0.812,
+      "color": "green",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 1,
+            "exercise": "squats",
+            "role": "primary",
+            "quality": 0.859
+          },
+          {
+            "set_number": 3,
+            "exercise": "jumping jacks",
+            "role": "secondary",
+            "quality": 0.91
+          },
+          {
+            "set_number": 4,
+            "exercise": "lunges",
+            "role": "primary",
+            "quality": 0.715
+          }
+        ],
+        "top_fault": "squats - knees over toes"
+      }
+    },
+    {
+      "id": "7adbd12b-8c98-595d-8ef8-051b9ab60454",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "hamstrings",
+      "score": 0.787,
+      "color": "yellow",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 1,
+            "exercise": "squats",
+            "role": "secondary",
+            "quality": 0.859
+          },
+          {
+            "set_number": 4,
+            "exercise": "lunges",
+            "role": "secondary",
+            "quality": 0.715
+          }
+        ],
+        "top_fault": "squats - knees over toes"
+      }
+    },
+    {
+      "id": "87c69536-1cef-549d-ab21-c0ee4df02e69",
+      "session_id": "fbf58a0c-2c85-502e-9e74-feec3aa1c3a5",
+      "muscle": "calves",
+      "score": 0.849,
+      "color": "green",
+      "detail": {
+        "sets": [
+          {
+            "set_number": 1,
+            "exercise": "squats",
+            "role": "secondary",
+            "quality": 0.859
+          },
+          {
+            "set_number": 3,
+            "exercise": "jumping jacks",
+            "role": "primary",
+            "quality": 0.91
+          },
+          {
+            "set_number": 4,
+            "exercise": "lunges",
+            "role": "secondary",
+            "quality": 0.715
+          }
+        ],
+        "top_fault": "squats - knees over toes"
+      }
+    }
+  ]
+}

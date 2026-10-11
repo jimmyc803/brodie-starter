@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "doc": "Exercise -> muscles, and the green/yellow/red rule. Used by the worker (to write sets.* and muscle_scores) and the web (labels, legend). Exercise keys are Brodie plan names.",
+
+  "muscles": {
+    "chest":      {"label": "Chest",      "view": "front"},
+    "shoulders":  {"label": "Shoulders",  "view": "both"},
+    "biceps":     {"label": "Biceps",     "view": "front"},
+    "triceps":    {"label": "Triceps",    "view": "back"},
+    "forearms":   {"label": "Forearms",   "view": "both"},
+    "abs":        {"label": "Abs",        "view": "front"},
+    "obliques":   {"label": "Obliques",   "view": "front"},
+    "upper_back": {"label": "Upper back", "view": "back"},
+    "lower_back": {"label": "Lower back", "view": "back"},
+    "glutes":     {"label": "Glutes",     "view": "back"},
+    "quads":      {"label": "Quads",      "view": "front"},
+    "hamstrings": {"label": "Hamstrings", "view": "back"},
+    "calves":     {"label": "Calves",     "view": "back"}
+  },
+
+  "exercises": {
+    "squats":        {"label": "Squats",        "primary": ["quads", "glutes"],         "secondary": ["hamstrings", "lower_back", "calves"]},
+    "pushups":       {"label": "Push-ups",      "primary": ["chest", "triceps"],        "secondary": ["shoulders", "abs"]},
+    "lunges":        {"label": "Lunges",        "primary": ["quads", "glutes"],         "secondary": ["hamstrings", "calves"]},
+    "jumping jacks": {"label": "Jumping jacks", "primary": ["calves", "shoulders"],     "secondary": ["quads", "glutes"]},
+    "bicep curls":   {"label": "Bicep curls",   "primary": ["biceps"],                  "secondary": ["forearms"]}
+  },
+
+  "color_rule": {
+    "doc": [
+      "Step 1, per set. done = reps Brodie counted, planned = the target, faulty = reps with at least one fault label.",
+      "  fault_rate = faulty / done (0 if done is 0)",
+      "  completion = min(1, done / planned)",
+      "  dropoff    = max(0, fault rate of the later half of the reps - fault rate of the earlier half). Halves split at floor(done / 2); 0 if done < 4.",
+      "  quality    = clamp(1 - w.fault_rate * fault_rate - w.missed * (1 - completion) - w.dropoff * dropoff, 0, 1)",
+      "Step 2, per muscle. score = weighted mean of quality over every set that worked it (primary weight 1.0, secondary 0.5).",
+      "Step 3, color. score >= green_min -> green, >= yellow_min -> yellow, else red. A muscle no set worked gets no row: draw it grey.",
+      "session.overall_score = plain mean of the set qualities."
+    ],
+    "weights":        {"fault_rate": 0.5, "missed": 0.3, "dropoff": 0.2},
+    "role_weights":   {"primary": 1.0, "secondary": 0.5},
+    "dropoff_min_reps": 4,
+    "thresholds":     {"green_min": 0.8, "yellow_min": 0.5},
+    "colors":         {"green": "#22c55e", "yellow": "#eab308", "red": "#ef4444", "untrained": "#d1d5db"}
+  }
+}
