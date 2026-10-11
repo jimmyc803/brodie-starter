@@ -96,13 +96,13 @@ function revealTimeline(details: MuscleDetail[], order?: Partial<Record<MuscleKe
 }
 
 function RevealCaption({ phase, id }: { phase: "idle" | "main" | "helpers" | "done"; id: string }) {
-  const show = phase === "main" || phase === "helpers";
+  const show = phase !== "idle"; // stays on screen once the reveal has run
   return (
     <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium" aria-hidden>
       <span className={`flex items-center gap-1.5 transition-opacity duration-300 ${show ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="main" id={`${id}cm`} /> Main muscles
       </span>
-      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" ? "opacity-100" : "opacity-0"}`}>
+      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" || phase === "done" ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="helper" id={`${id}ch`} /> + helpers
       </span>
     </div>
