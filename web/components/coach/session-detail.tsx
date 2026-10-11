@@ -1,5 +1,4 @@
-import Link from "next/link";
-
+import { PillLink, Stage, Surface } from "@/components/ui/apple";
 import { Heatmap } from "@/components/heatmap/heatmap";
 import {
   completedReps,
@@ -20,31 +19,29 @@ export function SessionDetail({ view, clientName }: { view: SessionView; clientN
   const st = sessionStats(view);
   const flagged = flaggedSets(view);
   return (
-    <section id="session" className="scroll-mt-4 rounded-2xl border border-zinc-800 bg-zinc-900">
+    <Surface as="section" className="scroll-mt-20 overflow-hidden">
+      <span id="session" className="sr-only" />
       <header className="flex flex-wrap items-start justify-between gap-3 p-5 sm:p-6">
         <div className="min-w-0">
-          <p className="text-sm text-zinc-500">
+          <p className="t-footnote text-ink-2">
             {clientName} · {shortDate(view.session.started_at)}
             {st.minutes ? ` · ${st.minutes} min` : ""}
             {st.endedEarly ? " · ended early" : ""}
           </p>
-          <h2 className="mt-0.5 text-2xl font-semibold tracking-tight text-zinc-50">{view.day?.title ?? "Workout"}</h2>
+          <h2 className="t-title mt-0.5 text-ink">{view.day?.title ?? "Workout"}</h2>
         </div>
-        <Link
-          href={`/r/${encodeURIComponent(view.session.share_token)}`}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-zinc-50 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200"
-        >
+        <PillLink href={`/r/${encodeURIComponent(view.session.share_token)}`} variant="secondary" className="shrink-0">
           Open client recap <span aria-hidden>→</span>
-        </Link>
+        </PillLink>
       </header>
 
-      <dl className="grid grid-cols-2 border-y border-zinc-800 sm:grid-cols-4 sm:divide-x sm:divide-zinc-800">
+      <dl className="grid grid-cols-2 border-y border-hairline sm:grid-cols-4 sm:divide-x sm:divide-hairline">
         <Figure label="Reps counted" value={`${st.completed}`} sub={`/${st.planned}`} />
         <Figure label="Sets" value={`${st.setsDone}`} sub={`/${st.setsPlanned}`} />
         <Figure label="Clean reps" value={pct(st.cleanRate)} />
         <div className="px-5 py-4 sm:px-6">
-          <dt className="text-xs text-zinc-500">Muscles</dt>
-          <dd className="mt-1 flex items-center gap-3 text-xl font-semibold tabular-nums text-zinc-50">
+          <dt className="t-footnote text-ink-2">Muscles</dt>
+          <dd className="t-title mt-1 flex items-center gap-3 tabular-nums text-ink">
             <Dot color="green" n={st.green} />
             <Dot color="yellow" n={st.yellow} />
             <Dot color="red" n={st.red} />
@@ -57,29 +54,31 @@ export function SessionDetail({ view, clientName }: { view: SessionView; clientN
 
         <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div>
-            <h3 className="mb-3 text-sm font-medium text-zinc-400">Muscle heat map</h3>
-            <Heatmap key={view.session.share_token} details={muscleDetails(view)} order={revealOrder(view)} className="mx-auto max-w-sm" />
+            <h3 className="t-headline mb-3 text-ink">Muscle heat map</h3>
+            <Stage className="p-5">
+              <Heatmap key={view.session.share_token} details={muscleDetails(view)} order={revealOrder(view)} className="mx-auto max-w-sm" />
+            </Stage>
           </div>
           <div className="min-w-0">
-            <h3 className="mb-3 text-sm font-medium text-zinc-400">Exercises</h3>
+            <h3 className="t-headline mb-3 text-ink">Exercises</h3>
             <ExerciseTable exercises={view.exercises} />
-            <p className="mt-3 text-xs text-zinc-500">
+            <p className="mt-3 t-caption text-ink-3">
               Each box is one set: reps counted out of planned. Cues are what Brodie said during the sets.
             </p>
           </div>
         </div>
       </div>
-    </section>
+    </Surface>
   );
 }
 
 function Figure({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="px-5 py-4 sm:px-6">
-      <dt className="text-xs text-zinc-500">{label}</dt>
+      <dt className="t-footnote text-ink-2">{label}</dt>
       <dd className="mt-1 tabular-nums">
-        <span className="text-xl font-semibold text-zinc-50">{value}</span>
-        {sub ? <span className="text-sm text-zinc-500">{sub}</span> : null}
+        <span className="t-title text-ink">{value}</span>
+        {sub ? <span className="t-callout text-ink-3">{sub}</span> : null}
       </dd>
     </div>
   );
@@ -98,30 +97,30 @@ function Dot({ color, n }: { color: Color; n: number }) {
 function NeedsALook({ flagged, stats }: { flagged: ReturnType<typeof flaggedSets>; stats: ReturnType<typeof sessionStats> }) {
   if (flagged.length === 0 && (stats.completed === 0 || stats.endedEarly || stats.completed < stats.planned))
     return (
-      <p className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-sm text-zinc-400">
+      <p className="rounded-xl border border-hairline px-4 py-3 t-callout text-ink-2">
         {stats.completed === 0 ? "No reps counted this session." : "Session incomplete. Some planned sets were not completed."}
       </p>
     );
   if (flagged.length === 0)
     return (
-      <p className="rounded-xl border border-green-500/20 bg-green-500/5 px-4 py-3 text-sm text-green-300">
+      <p className="rounded-xl border border-hairline px-4 py-3 t-callout text-positive">
         Nothing to review. Every set hit its reps with mostly clean form.
       </p>
     );
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-3">
-      <h3 className="text-sm font-medium text-zinc-200">
-        Needs a look <span className="text-zinc-500">· {flagged.length} {flagged.length === 1 ? "set" : "sets"}</span>
+    <div className="rounded-xl border border-hairline px-4 py-3">
+      <h3 className="t-callout font-semibold text-ink">
+        Needs a look <span className="font-normal text-ink-2">· {flagged.length} {flagged.length === 1 ? "set" : "sets"}</span>
       </h3>
       <ul className="mt-2 grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
         {flagged.map((f) => (
-          <li key={`${f.exercise}-${f.set_number}`} className="flex items-start gap-2 text-sm">
+          <li key={`${f.exercise}-${f.set_number}`} className="flex items-start gap-2 t-callout">
             <span
               className="mt-1.5 size-2 shrink-0 rounded-full"
               style={{ background: colorOf(f.faulty / Math.max(1, f.completed) >= 0.5 ? "red" : "yellow") }}
             />
-            <span className="text-zinc-400">
-              <span className="font-medium text-zinc-100">{f.exercise}</span> set {f.set_number} · {f.reason}
+            <span className="text-ink-2">
+              <span className="font-medium text-ink">{f.exercise}</span> set {f.set_number} · {f.reason}
             </span>
           </li>
         ))}
@@ -139,9 +138,9 @@ function setColor(s: SetView): Color {
 
 function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-zinc-800">
-      <table className="w-full text-sm">
-        <thead className="bg-zinc-950/40 text-left text-xs text-zinc-500">
+    <div className="overflow-x-auto rounded-xl border border-hairline">
+      <table className="w-full t-callout">
+        <thead className="text-left t-footnote text-ink-2">
           <tr>
             <th className="px-3 py-2 font-medium">Exercise</th>
             <th className="px-3 py-2 font-medium">Sets</th>
@@ -153,8 +152,8 @@ function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
           {exercises.map((ex) => {
             const cues = topFaults(ex.sets.flatMap((s) => s.reps));
             return (
-              <tr key={ex.exercise_key + ex.name} className="border-t border-zinc-800 align-top">
-                <td className="whitespace-nowrap px-3 py-2.5 font-medium text-zinc-100">{ex.name}</td>
+              <tr key={ex.exercise_key + ex.name} className="border-t border-hairline align-top">
+                <td className="whitespace-nowrap px-3 py-2.5 font-medium text-ink">{ex.name}</td>
                 <td className="px-3 py-2.5">
                   <div className="flex gap-1">
                     {ex.sets.map((s) =>
@@ -171,7 +170,7 @@ function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
                         <span
                           key={s.set_number}
                           title={`Set ${s.set_number}: not reached`}
-                          className="min-w-11 rounded-md border border-dashed border-zinc-700 px-1.5 py-0.5 text-center text-xs text-zinc-600"
+                          className="min-w-11 rounded-md border border-dashed border-hairline px-1.5 py-0.5 text-center text-xs text-ink-3"
                         >
                           –
                         </span>
@@ -179,12 +178,12 @@ function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
                     )}
                   </div>
                 </td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-zinc-300">
+                <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink">
                   {completedReps(ex)}
-                  <span className="text-zinc-500">/{plannedReps(ex)}</span>
+                  <span className="text-ink-3">/{plannedReps(ex)}</span>
                 </td>
-                <td className="px-3 py-2.5 text-zinc-400">
-                  {cues.length ? cues.map(([cue, n]) => `${cue} ×${n}`).join(", ") : ex.sets.some(setReached) ? <span className="text-green-400">Clean</span> : <span className="text-zinc-500">Not reached</span>}
+                <td className="px-3 py-2.5 text-ink-2">
+                  {cues.length ? cues.map(([cue, n]) => `${cue} ×${n}`).join(", ") : ex.sets.some(setReached) ? <span className="text-positive">Clean</span> : <span className="text-ink-3">Not reached</span>}
                 </td>
               </tr>
             );
