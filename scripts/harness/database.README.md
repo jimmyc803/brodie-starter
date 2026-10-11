@@ -27,3 +27,11 @@ This verifies PostgreSQL transactions, constraints, RLS and production RPCs. It
 does not verify the hosted Supabase gateway, Storage file service, project
 configuration, network, or production credentials. HTTP service emulation belongs
 to the separate browser harness, not this SQL layer.
+
+Shutdown also handles a server terminated by another process: it checks the child
+exit state, allows 3 seconds for graceful shutdown, then 3 seconds for forced
+shutdown. Client shutdown is bounded at 3 seconds, and server startup at 15
+seconds. The harness clears the pinned embedded-postgres child's exit-hook
+reference itself because that dependency otherwise waits forever for an exit
+event that already occurred. Tests exercise external termination and failed
+schema setup as well as normal cleanup.
