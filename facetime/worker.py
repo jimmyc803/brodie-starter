@@ -151,7 +151,16 @@ def resolve_mode(a):
         a.plan_text = None; a.floor = getattr(a, 'floor', None) or 'gated'
         if a.exercise: a.plan = None
         elif getattr(a, 'auto', False): a.plan = None
-        else: a.plan = a.plan or os.environ.get('PLAN') or read_plan_file(getattr(a, 'plan_file', None)) or DEFAULT_PLAN
+        else:
+            if not a.plan and not os.environ.get('PLAN') and os.environ.get('DEMO_CLIENT_ID') and not getattr(a, 'assignment', None):
+                from facetime.plan_loader import load_assignment
+                a.assignment = load_assignment(os.environ['DEMO_CLIENT_ID'])
+                if a.assignment:
+                    a.plan = a.assignment['plan']
+                    print(f"[plan] loaded {a.assignment['day_title']} for {a.assignment['client_name']} (coach {a.assignment['coach_name']}): {a.plan}", flush=True)
+                else:
+                    print(f"[plan] no assignment for DEMO_CLIENT_ID, using {'starter/plan.txt' if read_plan_file(getattr(a, 'plan_file', None)) else 'default plan'}", flush=True)
+            a.plan = a.plan or os.environ.get('PLAN') or read_plan_file(getattr(a, 'plan_file', None)) or DEFAULT_PLAN
     a.vision_fps = max(0.1, min(float(getattr(a, 'vision_fps', 1.0) or 1.0), 2.0))
     h = getattr(a, 'handlers', None)
     if h and str(h).strip().lower() in ('none', 'off'): a.handlers = 'none'          # kept as the string: the job process resolves the flags again
@@ -575,6 +584,9 @@ class CoachJob:
                 print('[voice] GEMINI_API_KEY is MISSING: voice OFF', flush=True)
             else:
                 persona = read_text(a.persona, DEFAULT_PERSONA)
+                if getattr(a, 'assignment', None):
+                    from facetime.plan_loader import persona_text
+                    persona = persona_text(persona, a.assignment)
                 if a.plan: plan_line = f'\n\nFor your own reference only, never to be read aloud: the session plan, in order, is {a.plan}.'
                 elif getattr(a, 'plan_text', None): plan_line = '\n\nThe plan you are coaching, step by step (follow it in order, one step at a time; never read it aloud):\n' + a.plan_text
                 else: plan_line = ''
