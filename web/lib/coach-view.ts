@@ -22,16 +22,19 @@ const SESSIONS_PER_CLIENT = 10;
 
 export async function getCoachView(token: string): Promise<CoachView | null> {
   if (!TOKEN_RE.test(token)) return null;
-  if (!hasSupabase()) {
-    if (token !== SAMPLE_COACH_TOKEN && token !== "demo") return null;
+  const isSample = token === "demo" || token === SAMPLE_COACH_TOKEN;
+  const sample = (): CoachView => {
     const view = sampleSessionView();
     return { coach: view.coach, clients: [{ id: "sample-client", name: view.client.name, sessions: [view] }] };
-  }
+  };
+  if (!hasSupabase()) return isSample ? sample() : null;
 
+  // "demo" opens the seeded demo coach (Tristan) with his real sessions; the sample is the fallback if he is not seeded.
   const db = supabaseServer();
-  const { data: coach, error } = await db.from("coaches").select("id, name").eq("share_token", token).maybeSingle();
+  const lookup = token === "demo" ? SAMPLE_COACH_TOKEN : token;
+  const { data: coach, error } = await db.from("coaches").select("id, name").eq("share_token", lookup).maybeSingle();
   if (error) throw new Error(`coaches lookup failed: ${error.message}`);
-  if (!coach) return null;
+  if (!coach) return isSample ? sample() : null;
 
   const { data: clients, error: cErr } = await db
     .from("clients")
