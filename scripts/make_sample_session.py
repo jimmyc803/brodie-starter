@@ -45,7 +45,7 @@ for i, (ex, planned, closed_by, start, step, faults) in enumerate(PLAN, 1):
     end = start + (75.0 if closed_by == 'timeout' else step * len(faults) + 1.5)
     sc = set_scores(planned, faults)
     sets_out.append({'id': set_id, 'session_id': uid('session'), 'set_number': i, 'exercise': ex, 'planned_reps': planned,
-                     'done_reps': len(faults), 'closed_by': closed_by, 'started_at': ts(start), 'ended_at': ts(end), **sc,
+                     'done_reps': len(faults), 'closed_by': closed_by, 'status': 'done' if len(faults) >= planned else 'partial', 'source': 'brodie', 'started_at': ts(start), 'ended_at': ts(end), **sc,
                      'reps': reps})
     scoring_in.append({'set_number': i, 'exercise': ex, 'quality': sc['quality'], 'faults': [x for f in faults for x in f]})
     t_end = end

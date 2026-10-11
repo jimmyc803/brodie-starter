@@ -69,7 +69,7 @@ create table if not exists sessions (
   id             uuid primary key default gen_random_uuid(),
   client_id      uuid not null references clients(id) on delete cascade,
   program_day_id uuid references program_days(id) on delete set null,
-  status         text not null default 'live' check (status in ('live', 'done', 'abandoned')),
+  status         text not null default 'live' check (status in ('live', 'done', 'ended_early')),  -- ended_early: the caller hung up before the plan finished
   started_at     timestamptz not null default now(),
   ended_at       timestamptz,
   room           text,                -- LiveKit room name, to find the worker's logs
@@ -90,6 +90,11 @@ create table if not exists sets (
   planned_reps  int  not null,
   done_reps     int  not null default 0,  -- the count Brodie reached (session event at rest/done)
   closed_by     text not null default 'target' check (closed_by in ('target', 'timeout', 'gesture', 'call_ended')),
+  -- done: reached its target; partial: closed early with the reps it had; missing: never started (the call ended first)
+  status        text not null default 'done' check (status in ('done', 'partial', 'missing')),
+  -- brodie: counted live by the worker; manual: filled in later by the client or coach on the web. Manual sets never
+  -- change muscle_scores (nobody watched the form), they only fill the recap's rep table.
+  source        text not null default 'brodie' check (source in ('brodie', 'manual')),
   started_at    timestamptz,
   ended_at      timestamptz,
   -- Per-set inputs to the color rule (shared/muscles.json), stored so the web never recomputes them:
