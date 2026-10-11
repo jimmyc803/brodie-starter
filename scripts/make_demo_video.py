@@ -129,6 +129,8 @@ def main():
     ap.add_argument('--end', type=float, default=None, help='trim: stop at this second of the recording')
     ap.add_argument('--save', action='store_true', help='write the session to Supabase and use the web card as the final card')
     ap.add_argument('--no-audio', dest='audio', action='store_false')
+    ap.add_argument('--fit', default='auto', choices=['auto', 'crop', 'letterbox'], help='landscape footage in the portrait call view: crop to the person '
+                    '(standing exercises) or letterbox the whole frame (floor exercises from the side); auto = letterbox for push-ups and planks')
     ap.add_argument('--roast', action='store_true', help='roast mode (facetime/roast.py): a roast line after corrections and at the end, on screen and spoken')
     add_arguments(ap)
     a = ap.parse_args()
@@ -136,6 +138,8 @@ def main():
     pull_target = None                                    # pull-up mode: facetime/pullup.py counts, not the Session
     if a.plan and a.plan.split(':')[0].strip().lower().replace('-', ' ') in ('pull ups', 'pullups', 'pull up', 'pullup'):
         pull_target = int(a.plan.rpartition(':')[2] or 5); a.plan = f'pull ups:{pull_target}'
+    floor = any(k in (a.plan or a.exercise or '').lower() for k in ('push', 'plank'))
+    mirror.LETTERBOX = a.fit == 'letterbox' or (a.fit == 'auto' and floor)
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     # normalise first: any phone file (HEVC .mov, rotated portrait, variable frame rate, 4K) -> upright H.264, constant
     # 30 fps, at most 1280 px tall, trimmed; every time below is then video time from 0
