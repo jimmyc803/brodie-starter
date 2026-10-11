@@ -25,7 +25,7 @@ export type MuscleDetail = {
   score: number;
   coverage: Coverage;
   note: string; // e.g. "Main muscle · estimated coverage" or "not trained this session"
-  exercises: { name: string; role: "primary" | "secondary"; completed: number; planned: number; flags: [string, number][] }[];
+  exercises: { key: string; name: string; role: "primary" | "secondary"; completed: number; planned: number; flags: [string, number][] }[];
 };
 
 export function muscleDetails(view: SessionView): MuscleDetail[] {
@@ -42,6 +42,7 @@ export function muscleDetails(view: SessionView): MuscleDetail[] {
           ? GRAY_LABEL
           : `${m.coverage === "primary" ? "Main" : "Helper"} muscle · estimated coverage`,
       exercises: hits.map(({ exercise, role }) => ({
+        key: exercise.exercise_key,
         name: exercise.name,
         role,
         completed: completedReps(exercise),

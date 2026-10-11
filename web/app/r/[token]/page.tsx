@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { Suspense } from "react";
 
 import { RecapView } from "@/components/recap/recap-view";
+import { sessionClips } from "@/lib/session-video";
 import { getSessionView } from "@/lib/session-view";
 
 // Client recap, opened from /r/<sessions.share_token>. Private link: never indexed.
@@ -36,5 +37,5 @@ async function Recap({ params }: { params: PageProps<"/r/[token]">["params"] }) 
   const { token } = await params;
   const view = await getSessionView(token);
   if (!view) notFound();
-  return <RecapView view={view} />;
+  return <RecapView view={view} clips={await sessionClips(view)} />;
 }

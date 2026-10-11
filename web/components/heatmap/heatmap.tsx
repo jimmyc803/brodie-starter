@@ -4,22 +4,26 @@ import { useEffect, useId, useState } from "react";
 
 import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
-import type { Color, MuscleKey } from "@/lib/contract";
+import type { Color, ExerciseClip, MuscleKey } from "@/lib/contract";
 import { muscleRank } from "@/lib/ranks";
 import type { MuscleDetail } from "@/lib/recap";
 import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
 import { RankBadge } from "@/components/heatmap/rank-badge";
+import { ClipPlayer } from "@/components/heatmap/clip-player";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
-// score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows.
+// score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows. With
+// `clips`, each exercise in the muscle card gets a Watch button that plays that part of the workout recording.
 export function Heatmap({
   details,
   order,
+  clips,
   className,
 }: {
   details: MuscleDetail[];
   order?: Partial<Record<MuscleKey, number>>;
+  clips?: ExerciseClip[];
   className?: string;
 }) {
   const [selected, setSelected] = useState<MuscleKey | null>(null);
@@ -67,8 +71,10 @@ export function Heatmap({
         </button>
       ) : null}
       <div aria-live="polite" className="mt-4">
-        {sel ? <MuscleCard detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} onClose={() => setSelected(null)} /> : (
-          <p className="text-center text-sm text-zinc-500">Tap a muscle to see what worked it</p>
+        {sel ? <MuscleCard detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
+          <p className="text-center text-sm text-zinc-500">
+            {clips?.length ? "Tap a muscle to see what worked it — and watch the reps" : "Tap a muscle to see what worked it"}
+          </p>
         )}
       </div>
     </div>
@@ -190,7 +196,18 @@ function Body({
   );
 }
 
-function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: string; onClose: () => void }) {
+function MuscleCard({
+  detail,
+  fill,
+  clips,
+  onClose,
+}: {
+  detail: MuscleDetail;
+  fill: string;
+  clips?: ExerciseClip[];
+  onClose: () => void;
+}) {
+  const [playing, setPlaying] = useState<{ clip: ExerciseClip; ex: MuscleDetail["exercises"][number] } | null>(null);
   const rank = detail.color !== "gray" ? rankForScore(detail.score) : null;
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
@@ -229,21 +246,42 @@ function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: str
       </div>
       {detail.exercises.length ? (
         <ul className="mt-3 space-y-2">
-          {detail.exercises.map((e) => (
-            <li key={e.name} className="rounded-xl bg-zinc-800/60 px-3 py-2 text-sm">
-              <div className="flex justify-between">
-                <span className="font-medium">{e.name}</span>
-                <span className="tabular-nums text-zinc-300">
-                  {e.completed}/{e.planned} reps
-                </span>
-              </div>
-              <div className="mt-0.5 text-xs text-zinc-400">
-                {e.role === "primary" ? "Main muscle" : "Helper muscle"}
-                {e.flags.length ? ` · form flags: ${e.flags.map(([t, n]) => `${t} ×${n}`).join(", ")}` : " · no form flags"}
-              </div>
-            </li>
-          ))}
+          {detail.exercises.map((e) => {
+            const clip = clips?.find((c) => c.exercise_key === e.key);
+            return (
+              <li key={e.name} className="rounded-xl bg-zinc-800/60 px-3 py-2 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium">{e.name}</span>
+                  <span className="flex items-center gap-2">
+                    <span className="tabular-nums text-zinc-300">
+                      {e.completed}/{e.planned} reps
+                    </span>
+                    {clip ? (
+                      <button
+                        onClick={() => setPlaying({ clip, ex: e })}
+                        className="inline-flex items-center gap-1 rounded-full bg-green-500 px-2.5 py-1 text-xs font-bold text-zinc-950 hover:bg-green-400"
+                      >
+                        <span aria-hidden>▶</span> Watch
+                      </button>
+                    ) : null}
+                  </span>
+                </div>
+                <div className="mt-0.5 text-xs text-zinc-400">
+                  {e.role === "primary" ? "Main muscle" : "Helper muscle"}
+                  {e.flags.length ? ` · form flags: ${e.flags.map(([t, n]) => `${t} ×${n}`).join(", ")}` : " · no form flags"}
+                </div>
+              </li>
+            );
+          })}
         </ul>
+      ) : null}
+      {playing ? (
+        <ClipPlayer
+          clip={playing.clip}
+          title={`${playing.ex.name} · ${detail.label}`}
+          subtitle={`${playing.ex.role === "primary" ? "Main muscle" : "Helper muscle"} · ${playing.ex.completed}/${playing.ex.planned} reps`}
+          onClose={() => setPlaying(null)}
+        />
       ) : null}
       <button onClick={onClose} className="mt-3 w-full text-center text-xs text-zinc-500 underline-offset-2 hover:underline">
         Close
