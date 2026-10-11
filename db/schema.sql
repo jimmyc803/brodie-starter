@@ -1,18 +1,16 @@
--- Brodie for Coaches: data contract (schema v1, 2026-10-11). Owner: Stanley. Reviewer: Jimmy.
+-- Brodie for Coaches: data contract (team CONTRACT block, 2026-10-11). Owner: Stanley. Web: Jimmy. Parser: Ryan.
 --
--- Flow: a coach uploads a program PDF -> Gemini parses it into program_days -> the coach assigns a client a day
--- (assignments) -> the client calls Brodie -> the worker writes one session with its sets, reps and muscle_scores.
--- Nobody logs in. The recap pages are opened by unguessable tokens: /r/<client_token> and /c/<coach_token>.
--- The worker and the Next.js server use the service role key, so Row Level Security is on with no policies:
--- the anon key can read nothing, and every read goes through server code that looks up a token.
+-- Flow: coach uploads a program PDF -> Gemini parses it into program_days -> the coach assigns a client a day (assignments,
+-- active) -> the client calls Brodie -> the worker writes one session with sets, reps and muscle_scores.
+-- No login. Links: client recap /r/<sessions.share_token>, coach dashboard /c/<coaches.share_token>.
+-- RLS is on with no policies: the anon key reads nothing; server code (web/ and the worker) uses the service role key.
 --
--- Exercise names are Brodie plan names: 'squats', 'pushups', 'jumping jacks', 'lunges', 'bicep curls'.
--- Muscle names and the color rule live in shared/muscles.json.
--- Run once in the Supabase SQL editor. Safe to re-run on an empty project (if not exists everywhere).
+-- Exercise keys: squat, pushup, lunge, jumping_jack, bicep_curl. Muscle keys and the scoring rule: shared/muscles.json.
+-- Run once in the Supabase SQL editor (or: supabase db query --linked --project-ref <ref> -f db/schema.sql).
 
-create extension if not exists pgcrypto;  -- gen_random_uuid(), gen_random_bytes()
+create extension if not exists pgcrypto;
 
--- A random URL-safe token, 32 characters, about 190 bits. Used for share links.
+-- Random URL-safe token, 32 chars, for share links.
 create or replace function new_share_token() returns text
 language sql volatile as $$
   select translate(encode(gen_random_bytes(24), 'base64'), '+/', '-_')
@@ -21,9 +19,8 @@ $$;
 create table if not exists coaches (
   id            uuid primary key default gen_random_uuid(),
   name          text not null,
-  persona       text,                 -- prompt text appended to starter/persona.md for this coach's voice
-  phone         text,                 -- E.164, for iMessage recaps
-  dashboard_token text not null unique default new_share_token(),  -- /c/<token> lists this coach's clients
+  share_token   text not null unique default new_share_token(),   -- /c/<share_token>
+  persona       text,                                              -- optional: how Brodie talks for this coach (appended to starter/persona.md)
   created_at    timestamptz not null default now()
 );
 
@@ -31,7 +28,7 @@ create table if not exists clients (
   id            uuid primary key default gen_random_uuid(),
   coach_id      uuid not null references coaches(id) on delete cascade,
   name          text not null,
-  phone         text,                 -- E.164; later used to match the FaceTime caller
+  share_token   text not null unique default new_share_token(),
   created_at    timestamptz not null default now()
 );
 
@@ -40,7 +37,7 @@ create table if not exists programs (
   coach_id      uuid not null references coaches(id) on delete cascade,
   title         text not null,
   pdf_path      text,                 -- path in the 'programs' storage bucket
-  parsed        jsonb,                -- Gemini's raw output, kept for debugging; program_days is the source of truth
+  parsed        jsonb,                -- Gemini's raw output
   created_at    timestamptz not null default now()
 );
 
@@ -48,9 +45,9 @@ create table if not exists program_days (
   id            uuid primary key default gen_random_uuid(),
   program_id    uuid not null references programs(id) on delete cascade,
   day_number    int  not null,
-  title         text not null,        -- e.g. 'Day 1 - Lower body'
-  -- ordered list: [{"exercise": "squats", "sets": 1, "reps": 10}, ...]
-  -- The worker turns it into a Brodie plan string: 'squats:10,pushups:8' (one item per set).
+  title         text not null,
+  -- [{"exercise_key": "squat"|null, "name": "Back squat", "sets": 3, "reps": 10, "notes": "", "supported": true}, ...]
+  -- supported = Brodie can count it (exercise_key not null). The worker runs supported items as <sets> plan items each.
   exercises     jsonb not null default '[]'::jsonb,
   created_at    timestamptz not null default now(),
   unique (program_id, day_number)
@@ -60,74 +57,51 @@ create table if not exists assignments (
   id             uuid primary key default gen_random_uuid(),
   client_id      uuid not null references clients(id) on delete cascade,
   program_day_id uuid not null references program_days(id) on delete cascade,
+  active         boolean not null default true,     -- the worker runs the client's newest active assignment
   assigned_at    timestamptz not null default now()
-  -- The client's current day = their newest assignment.
 );
-create index if not exists assignments_client_idx on assignments (client_id, assigned_at desc);
+create index if not exists assignments_client_idx on assignments (client_id, active, assigned_at desc);
 
 create table if not exists sessions (
-  id             uuid primary key default gen_random_uuid(),
-  client_id      uuid not null references clients(id) on delete cascade,
-  program_day_id uuid references program_days(id) on delete set null,
-  status         text not null default 'live' check (status in ('live', 'done', 'ended_early')),  -- ended_early: the caller hung up before the plan finished
-  started_at     timestamptz not null default now(),
-  ended_at       timestamptz,
-  room           text,                -- LiveKit room name, to find the worker's logs
-  plan           text not null,       -- the exact plan string Brodie ran, e.g. 'squats:10,pushups:8'
-  client_token   text not null unique default new_share_token(),  -- /r/<token>
-  coach_token    text not null unique default new_share_token(),  -- /c/s/<token>
-  recap_image_path text,              -- path in the 'recaps' storage bucket, set after the PNG is rendered
-  overall_score  real,                -- 0..1, mean of the set quality scores
-  created_at     timestamptz not null default now()
+  id               uuid primary key default gen_random_uuid(),
+  client_id        uuid not null references clients(id) on delete cascade,
+  program_day_id   uuid references program_days(id) on delete set null,
+  started_at       timestamptz not null default now(),
+  ended_at         timestamptz,                      -- null while the call is live
+  share_token      text not null unique default new_share_token(),   -- /r/<share_token>
+  recap_image_path text,                             -- path in the 'recaps' storage bucket once rendered
+  created_at       timestamptz not null default now()
 );
 create index if not exists sessions_client_idx on sessions (client_id, started_at desc);
 
 create table if not exists sets (
-  id            uuid primary key default gen_random_uuid(),
-  session_id    uuid not null references sessions(id) on delete cascade,
-  set_number    int  not null,        -- 1-based order in the session (Brodie's plan item + 1)
-  exercise      text not null,
-  planned_reps  int  not null,
-  done_reps     int  not null default 0,  -- the count Brodie reached (session event at rest/done)
-  closed_by     text not null default 'target' check (closed_by in ('target', 'timeout', 'gesture', 'call_ended')),
-  -- done: reached its target; partial: closed early with the reps it had; missing: never started (the call ended first)
-  status        text not null default 'done' check (status in ('done', 'partial', 'missing')),
-  -- brodie: counted live by the worker; manual: filled in later by the client or coach on the web. Manual sets never
-  -- change muscle_scores (nobody watched the form), they only fill the recap's rep table.
-  source        text not null default 'brodie' check (source in ('brodie', 'manual')),
-  started_at    timestamptz,
-  ended_at      timestamptz,
-  -- Per-set inputs to the color rule (shared/muscles.json), stored so the web never recomputes them:
-  fault_rate    real,                 -- reps with >= 1 fault / done_reps
-  completion    real,                 -- min(1, done_reps / planned_reps)
-  dropoff       real,                 -- max(0, fault rate of the later half - fault rate of the earlier half)
-  quality       real,                 -- 0..1
-  unique (session_id, set_number)
+  id             uuid primary key default gen_random_uuid(),
+  session_id     uuid not null references sessions(id) on delete cascade,
+  exercise_key   text not null,
+  set_number     int  not null,       -- 1-based within the exercise
+  planned_reps   int  not null,
+  completed_reps int  not null default 0,  -- the count Brodie reached; 0 = the set never happened (call ended first)
+  started_at     timestamptz,
+  ended_at       timestamptz,
+  unique (session_id, exercise_key, set_number)
 );
 
 create table if not exists reps (
   id            uuid primary key default gen_random_uuid(),
   set_id        uuid not null references sets(id) on delete cascade,
-  rep_number    int  not null,        -- 1-based within the set (Brodie rep event 'n')
-  exercise      text not null,
-  t_offset_s    real not null,        -- seconds since the session started (when Brodie counted it)
-  confidence    real,                 -- Brodie rep.confidence.agree, 0..1; null if unknown
-  -- Brodie fault labels decided while this rep was in progress (since the previous rep), e.g.
-  -- ["squats - knees over toes"]. Empty array = clean rep. The spoken text is in src/rtcoach/cues.json.
-  faults        jsonb not null default '[]'::jsonb,
+  rep_number    int  not null,
+  t             real not null,        -- seconds since the session started
+  faults        text[] not null default '{}',   -- Brodie fault labels, e.g. {"squats - knees over toes"}; empty = clean rep
   unique (set_id, rep_number)
 );
 
 create table if not exists muscle_scores (
-  id            uuid primary key default gen_random_uuid(),
   session_id    uuid not null references sessions(id) on delete cascade,
-  muscle        text not null,        -- one of shared/muscles.json "muscles"
-  score         real not null,        -- 0..1, weighted mean of the quality of the sets that worked it
-  color         text not null check (color in ('green', 'yellow', 'red')),
-  -- why: {"sets": [{"set_number": 1, "exercise": "squats", "role": "primary", "quality": 0.86}], "top_fault": "squats - knees over toes"}
-  detail        jsonb not null default '{}'::jsonb,
-  unique (session_id, muscle)
-  -- Muscles with no row were not trained: draw them grey.
+  muscle        text not null,        -- one of shared/muscles.json "muscles" (one row per muscle, 15 per session)
+  score         real not null,        -- 0..1 (0 when not trained)
+  color         text not null check (color in ('green', 'yellow', 'red', 'gray')),
+  coverage      text not null check (coverage in ('primary', 'secondary', 'none')),
+  primary key (session_id, muscle)
 );
 
 alter table coaches       enable row level security;

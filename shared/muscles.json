@@ -1,46 +1,50 @@
 {
-  "version": 1,
-  "doc": "Exercise -> muscles, and the green/yellow/red rule. Used by the worker (to write sets.* and muscle_scores) and the web (labels, legend). Exercise keys are Brodie plan names.",
+  "version": 2,
+  "doc": "Team contract. exercise_key -> muscles, muscle labels, Brodie plan names, and the scoring rule. Used by the worker (shared/scoring.py) and web/.",
 
   "muscles": {
-    "chest":      {"label": "Chest",      "view": "front"},
-    "shoulders":  {"label": "Shoulders",  "view": "both"},
-    "biceps":     {"label": "Biceps",     "view": "front"},
-    "triceps":    {"label": "Triceps",    "view": "back"},
-    "forearms":   {"label": "Forearms",   "view": "both"},
-    "abs":        {"label": "Abs",        "view": "front"},
-    "obliques":   {"label": "Obliques",   "view": "front"},
-    "upper_back": {"label": "Upper back", "view": "back"},
-    "lower_back": {"label": "Lower back", "view": "back"},
-    "glutes":     {"label": "Glutes",     "view": "back"},
-    "quads":      {"label": "Quads",      "view": "front"},
-    "hamstrings": {"label": "Hamstrings", "view": "back"},
-    "calves":     {"label": "Calves",     "view": "back"}
+    "quads":      {"label": "Quads",       "view": "front"},
+    "glutes":     {"label": "Glutes",      "view": "back"},
+    "hamstrings": {"label": "Hamstrings",  "view": "back"},
+    "calves":     {"label": "Calves",      "view": "back"},
+    "adductors":  {"label": "Adductors",   "view": "front"},
+    "chest":      {"label": "Chest",       "view": "front"},
+    "front_delts":{"label": "Front delts", "view": "front"},
+    "triceps":    {"label": "Triceps",     "view": "back"},
+    "biceps":     {"label": "Biceps",      "view": "front"},
+    "forearms":   {"label": "Forearms",    "view": "both"},
+    "abs":        {"label": "Abs",         "view": "front"},
+    "obliques":   {"label": "Obliques",    "view": "front"},
+    "lats":       {"label": "Lats",        "view": "back"},
+    "upper_back": {"label": "Upper back",  "view": "back"},
+    "rear_delts": {"label": "Rear delts",  "view": "back"}
   },
 
   "exercises": {
-    "squats":        {"label": "Squats",        "primary": ["quads", "glutes"],         "secondary": ["hamstrings", "lower_back", "calves"]},
-    "pushups":       {"label": "Push-ups",      "primary": ["chest", "triceps"],        "secondary": ["shoulders", "abs"]},
-    "lunges":        {"label": "Lunges",        "primary": ["quads", "glutes"],         "secondary": ["hamstrings", "calves"]},
-    "jumping jacks": {"label": "Jumping jacks", "primary": ["calves", "shoulders"],     "secondary": ["quads", "glutes"]},
-    "bicep curls":   {"label": "Bicep curls",   "primary": ["biceps"],                  "secondary": ["forearms"]}
+    "squat":        {"name": "Squats",        "plan_name": "squats",        "primary": ["quads", "glutes"],          "secondary": ["hamstrings", "adductors", "abs"]},
+    "pushup":       {"name": "Push-ups",      "plan_name": "pushups",       "primary": ["chest", "triceps"],         "secondary": ["front_delts", "abs"]},
+    "lunge":        {"name": "Lunges",        "plan_name": "lunges",        "primary": ["quads", "glutes"],          "secondary": ["hamstrings", "adductors", "calves"]},
+    "jumping_jack": {"name": "Jumping jacks", "plan_name": "jumping jacks", "primary": ["calves", "front_delts"],    "secondary": ["quads", "glutes", "adductors"]},
+    "bicep_curl":   {"name": "Bicep curls",   "plan_name": "bicep curls",   "primary": ["biceps"],                   "secondary": ["forearms", "front_delts"]}
   },
 
-  "color_rule": {
+  "fault_prefix": {"doc": "Brodie fault labels start with the classifier name, which differs from the plan name for lunges",
+                   "squat": "squats", "pushup": "pushups", "lunge": "alternating forward lunges", "jumping_jack": "jumping jacks", "bicep_curl": "bicep curls"},
+
+  "scoring": {
     "doc": [
-      "Step 1, per set. done = reps Brodie counted, planned = the target, faulty = reps with at least one fault label.",
-      "  fault_rate = faulty / done (0 if done is 0)",
-      "  completion = min(1, done / planned)",
-      "  dropoff    = max(0, fault rate of the later half of the reps - fault rate of the earlier half). Halves split at floor(done / 2); 0 if done < 4.",
-      "  quality    = clamp(1 - w.fault_rate * fault_rate - w.missed * (1 - completion) - w.dropoff * dropoff, 0, 1)",
-      "Step 2, per muscle. score = weighted mean of quality over every set that worked it (primary weight 1.0, secondary 0.5).",
-      "Step 3, color. score >= green_min -> green, >= yellow_min -> yellow, else red. A muscle no set worked gets no row: draw it grey.",
-      "session.overall_score = plain mean of the set qualities."
+      "Per exercise (all its sets in the session): completed = reps counted, planned = sum of planned reps, clean = reps with no faults / completed (0 if completed is 0).",
+      "  completion = min(completed / planned, 1)",
+      "  dropoff    = max(0, clean rate of the first set - clean rate of the last set)   (0 with one set)",
+      "  quality    = 0.5 * clean + 0.3 * completion + 0.2 * (1 - dropoff)",
+      "Per muscle: weighted average of quality over the exercises that hit it (primary weight 1, secondary 0.5); coverage = primary if any hitting exercise lists it as primary, else secondary.",
+      "Color: score >= 0.75 green, >= 0.5 yellow, else red. A muscle no exercise hit: score 0, color gray, coverage none, label 'not trained this session'.",
+      "An exercise with 0 completed reps does not hit any muscle (its muscles stay gray unless another exercise hits them)."
     ],
-    "weights":        {"fault_rate": 0.5, "missed": 0.3, "dropoff": 0.2},
-    "role_weights":   {"primary": 1.0, "secondary": 0.5},
-    "dropoff_min_reps": 4,
-    "thresholds":     {"green_min": 0.8, "yellow_min": 0.5},
-    "colors":         {"green": "#22c55e", "yellow": "#eab308", "red": "#ef4444", "untrained": "#d1d5db"}
+    "weights": {"clean": 0.5, "completion": 0.3, "dropoff": 0.2},
+    "role_weights": {"primary": 1.0, "secondary": 0.5},
+    "thresholds": {"green_min": 0.75, "yellow_min": 0.5},
+    "colors": {"green": "#22c55e", "yellow": "#eab308", "red": "#ef4444", "gray": "#9ca3af"},
+    "gray_label": "not trained this session"
   }
 }

@@ -1,59 +1,75 @@
-"""The green/yellow/red rule from shared/muscles.json, in one place. Pure stdlib, no I/O beyond reading the JSON once.
+"""The scoring rule from shared/muscles.json (team contract), in one place. Pure stdlib.
 
-set_scores(planned, rep_faults)  -> {fault_rate, completion, dropoff, quality} for one set
-muscle_scores(sets)              -> [{muscle, score, color, detail}] for a session; muscles no set worked are left out
-The worker (task 3) and scripts/make_sample_session.py both use these, so the fixture and real sessions agree.
+exercise_quality(sets) -> {clean, completion, dropoff, quality, completed, planned}
+    sets: [{planned_reps, completed_reps, reps: [{faults: [...]}, ...]}, ...] for ONE exercise, in order.
+muscle_scores(exercises) -> [{muscle, score, color, coverage}] x 15 (every muscle; gray ones included)
+    exercises: [{exercise_key, sets: [...as above...]}, ...]
+plan_name(exercise_key) / exercise_key_for(plan_name): map between contract keys and Brodie plan names.
 """
 import json
-from collections import Counter
 from pathlib import Path
 
 RULES = json.loads((Path(__file__).with_name('muscles.json')).read_text())
-_R = RULES['color_rule']
+_S = RULES['scoring']
+MUSCLES = list(RULES['muscles'])
 
 
-def set_scores(planned, rep_faults):
-    """planned: target reps. rep_faults: one list of fault labels per counted rep, in order (len = done reps)."""
-    done = len(rep_faults)
-    flags = [1 if f else 0 for f in rep_faults]
-    fault_rate = sum(flags) / done if done else 0.0
-    completion = min(1.0, done / planned) if planned else 1.0
-    dropoff = 0.0
-    if done >= _R['dropoff_min_reps']:
-        half = done // 2
-        early, late = flags[:half], flags[half:]
-        dropoff = max(0.0, sum(late) / len(late) - sum(early) / len(early))
-    w = _R['weights']
-    q = 1 - w['fault_rate'] * fault_rate - w['missed'] * (1 - completion) - w['dropoff'] * dropoff
-    return {'fault_rate': round(fault_rate, 3), 'completion': round(completion, 3),
-            'dropoff': round(dropoff, 3), 'quality': round(min(1.0, max(0.0, q)), 3)}
+def plan_name(exercise_key):
+    return RULES['exercises'][exercise_key]['plan_name']
+
+
+def exercise_key_for(plan_name_):
+    for k, e in RULES['exercises'].items():
+        if e['plan_name'] == plan_name_:
+            return k
+    return None
+
+
+def _clean_rate(s):
+    reps = s.get('reps') or []
+    return (sum(1 for r in reps if not r.get('faults')) / len(reps)) if reps else 0.0
+
+
+def exercise_quality(sets):
+    planned = sum(int(s.get('planned_reps') or 0) for s in sets)
+    completed = sum(int(s.get('completed_reps') if s.get('completed_reps') is not None else len(s.get('reps') or [])) for s in sets)
+    clean_reps = sum(1 for s in sets for r in (s.get('reps') or []) if not r.get('faults'))
+    clean = clean_reps / completed if completed else 0.0
+    completion = min(completed / planned, 1.0) if planned else 0.0
+    done = [s for s in sets if (s.get('reps') or [])]
+    dropoff = max(0.0, _clean_rate(done[0]) - _clean_rate(done[-1])) if len(done) >= 2 else 0.0
+    w = _S['weights']
+    q = w['clean'] * clean + w['completion'] * completion + w['dropoff'] * (1 - dropoff)
+    return {'clean': round(clean, 3), 'completion': round(completion, 3), 'dropoff': round(dropoff, 3),
+            'quality': round(min(1.0, max(0.0, q)), 3), 'completed': completed, 'planned': planned}
 
 
 def color_for(score):
-    t = _R['thresholds']
+    t = _S['thresholds']
     return 'green' if score >= t['green_min'] else 'yellow' if score >= t['yellow_min'] else 'red'
 
 
-def muscle_scores(sets):
-    """sets: [{set_number, exercise, quality, faults: [label, ...] (every fault in the set)}]. Unknown exercises are skipped."""
-    acc = {}
-    for s in sets:
-        ex = RULES['exercises'].get(s['exercise'])
-        if not ex:
+def muscle_scores(exercises):
+    acc = {m: {'num': 0.0, 'den': 0.0, 'coverage': 'none'} for m in MUSCLES}
+    for ex in exercises:
+        spec = RULES['exercises'].get(ex.get('exercise_key'))
+        if not spec:
+            continue
+        q = exercise_quality(ex.get('sets') or [])
+        if q['completed'] == 0:          # never happened: hits nothing
             continue
         for role in ('primary', 'secondary'):
-            for m in ex[role]:
-                a = acc.setdefault(m, {'num': 0.0, 'den': 0.0, 'sets': [], 'faults': Counter()})
-                wt = _R['role_weights'][role]
-                a['num'] += wt * s['quality']; a['den'] += wt
-                a['sets'].append({'set_number': s['set_number'], 'exercise': s['exercise'], 'role': role, 'quality': s['quality']})
-                a['faults'].update(s.get('faults', []))
+            wt = _S['role_weights'][role]
+            for m in spec[role]:
+                a = acc[m]; a['num'] += wt * q['quality']; a['den'] += wt
+                if role == 'primary' or a['coverage'] == 'none':
+                    a['coverage'] = role
     out = []
-    for m in RULES['muscles']:             # stable order: the order in muscles.json
-        if m not in acc:
-            continue
-        a = acc[m]; score = round(a['num'] / a['den'], 3)
-        top = a['faults'].most_common(1)
-        out.append({'muscle': m, 'score': score, 'color': color_for(score),
-                    'detail': {'sets': a['sets'], 'top_fault': top[0][0] if top else None}})
+    for m in MUSCLES:
+        a = acc[m]
+        if a['den']:
+            score = round(a['num'] / a['den'], 3)
+            out.append({'muscle': m, 'score': score, 'color': color_for(score), 'coverage': a['coverage']})
+        else:
+            out.append({'muscle': m, 'score': 0.0, 'color': 'gray', 'coverage': 'none'})
     return out
