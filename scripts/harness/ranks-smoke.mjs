@@ -34,6 +34,17 @@ try {
     await page.screenshot({ path: path.join(output, `${label}-mobile.png`), fullPage: true });
     await page.setViewportSize({ width: 1440, height: 1100 });
     console.log(`PASS ${label}: eight plain ranks, exact body colors, no body gradients, mobile layout`);
+    if (label === 'client' && process.argv.includes('--video')) {
+      await bodies.locator('polygon').filter({ has: page.locator('title', { hasText: /^quads$/ }) }).first().click();
+      await page.getByRole('button', { name: 'Watch', exact: false }).first().click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog).toBeVisible();
+      await expect.poll(() => dialog.locator('video').evaluate(video => video.readyState), { timeout: 30000 }).toBeGreaterThanOrEqual(2);
+      await page.screenshot({ path: path.join(output, 'workout-video.png'), fullPage: true });
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      console.log('PASS client: muscle selection opens playable workout footage and Escape closes it');
+    }
   }
   const image = await page.request.get(new URL('/api/recap-image/demo', base).href);
   assert.equal(image.status(), 200);
