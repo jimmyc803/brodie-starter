@@ -9,22 +9,29 @@ import type { MuscleDetail } from "@/lib/recap";
 import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
 import { ClipPlayer } from "@/components/heatmap/clip-player";
+import { RepReviewPlayer, type ReviewContext } from "@/components/rep-review/review-launcher";
+import { clipsForMuscle } from "@/lib/rep-review/clips.config";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
 // score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows. With
 // `clips`, tapping a muscle plays the clip of its main exercise inline (pills switch exercises; Watch opens it full size).
+// With `review`, tapping a muscle that has a rep review clip (lib/rep-review/clips.config.ts) opens <RepReviewPlayer />.
 export function Heatmap({
   details,
   order,
   clips,
+  review,
   className,
 }: {
   details: MuscleDetail[];
   order?: Partial<Record<MuscleKey, number>>;
   clips?: ExerciseClip[];
+  review?: ReviewContext;
   className?: string;
 }) {
   const [selected, setSelected] = useState<MuscleKey | null>(null);
+  const [reviewing, setReviewing] = useState<MuscleKey | null>(null);
+  const reviewClips = reviewing ? clipsForMuscle(reviewing) : [];
   // Reveal phases: idle (dark body) -> main (main muscles light up, exercise by exercise) -> helpers (helpers fade in)
   const [phase, setPhase] = useState<"idle" | "main" | "helpers" | "done">(order ? "idle" : "done");
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
@@ -52,7 +59,10 @@ export function Heatmap({
               lit={phase !== "idle"}
               delays={reveal.delays}
               selected={selected}
-              onSelect={(m) => setSelected(m === selected ? null : m)}
+              onSelect={(m) => {
+                setSelected(m === selected ? null : m);
+                if (review && m !== selected && clipsForMuscle(m).length) setReviewing(m);
+              }}
             />
             <figcaption className="mt-1 text-xs font-medium uppercase tracking-widest text-zinc-500">{side}</figcaption>
           </figure>
@@ -68,6 +78,7 @@ export function Heatmap({
           Replay
         </button>
       ) : null}
+      {review && reviewClips.length ? <RepReviewPlayer clips={reviewClips} {...review} onClose={() => setReviewing(null)} /> : null}
       <div aria-live="polite" className="mt-4">
         {sel ? <MuscleCard key={sel.muscle} detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
           <p className="text-center text-sm text-zinc-500">
