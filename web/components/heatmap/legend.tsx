@@ -27,7 +27,7 @@ export function MuscleSwatch({ kind, id, className }: { kind: "main" | "helper";
 // strong vs subtle halo means, and "not trained".
 export function HeatmapLegend({ className }: { className?: string }) {
   return (
-    <div className={`mx-auto max-w-sm text-xs text-zinc-400 ${className ?? ""}`}>
+    <div className={`mx-auto max-w-sm text-xs text-on-stage-2 ${className ?? ""}`}>
       <ol className="grid grid-cols-2 gap-x-4 gap-y-1.5" aria-label="Ranks, lowest to highest">
         {RANKS.map((r) => (
           <li key={r.key} className="flex items-center gap-1.5">
@@ -36,7 +36,7 @@ export function HeatmapLegend({ className }: { className?: string }) {
           </li>
         ))}
       </ol>
-      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 border-t border-zinc-800 pt-3">
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 border-t border-hairline pt-3">
         <span className="flex items-center gap-1.5">
           <MuscleSwatch kind="main" /> Main muscle
         </span>
