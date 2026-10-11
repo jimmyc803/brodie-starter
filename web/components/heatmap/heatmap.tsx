@@ -6,10 +6,10 @@ import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } 
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
 import type { Color, MuscleKey } from "@/lib/contract";
 import type { MuscleDetail } from "@/lib/recap";
-import { HeatmapLegend } from "@/components/heatmap/legend";
+import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
-// score and coverage. With `order`, muscles light up exercise by exercise in workout order when the map first shows.
+// score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows.
 export function Heatmap({
   details,
   order,
@@ -20,16 +20,20 @@ export function Heatmap({
   className?: string;
 }) {
   const [selected, setSelected] = useState<MuscleKey | null>(null);
-  const [lit, setLit] = useState(!order);
+  // Reveal phases: idle (dark body) -> main (main muscles light up, exercise by exercise) -> helpers (helpers fade in)
+  const [phase, setPhase] = useState<"idle" | "main" | "helpers" | "done">(order ? "idle" : "done");
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const fills = neonFills(details);
   const sel = details.find((d) => d.muscle === selected) ?? null;
+  const reveal = revealTimeline(details, order);
 
   useEffect(() => {
-    if (lit) return;
-    const t = setTimeout(() => setLit(true), 300);
+    const next = { idle: ["main", 300], main: ["helpers", reveal.helpersAt], helpers: ["done", reveal.helpersFor] } as const;
+    if (phase === "done") return;
+    const [to, ms] = next[phase];
+    const t = setTimeout(() => setPhase(to), ms);
     return () => clearTimeout(t);
-  }, [lit]);
+  }, [phase, reveal.helpersAt, reveal.helpersFor]);
 
   return (
     <div className={className}>
@@ -40,8 +44,8 @@ export function Heatmap({
               side={side}
               fills={fills}
               id={`${uid}${side}`}
-              lit={lit}
-              order={order}
+              lit={phase !== "idle"}
+              delays={reveal.delays}
               selected={selected}
               onSelect={(m) => setSelected(m === selected ? null : m)}
             />
@@ -49,10 +53,11 @@ export function Heatmap({
           </figure>
         ))}
       </div>
+      {order ? <RevealCaption phase={phase} id={uid} /> : null}
       <HeatmapLegend className="mt-4" />
       {order ? (
         <button
-          onClick={() => setLit(false)}
+          onClick={() => setPhase("idle")}
           className="mx-auto mt-2 block text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
         >
           Replay
@@ -67,6 +72,41 @@ export function Heatmap({
   );
 }
 
+// When each muscle lights up (ms after the reveal starts): main muscles first, exercise by exercise in workout order,
+// then the helper muscles fade in, so the bright-vs-pale difference explains itself.
+const MAIN_START = 150;
+const MAIN_STEP = 450;
+const HELPER_GAP = 350;
+const HELPER_STEP = 200;
+const FADE_MS = 500;
+
+function revealTimeline(details: MuscleDetail[], order?: Partial<Record<MuscleKey, number>>) {
+  const delays: Partial<Record<MuscleKey, number>> = {};
+  if (!order) return { delays, helpersAt: 0, helpersFor: 0 };
+  const main = details.filter((d) => d.coverage === "primary" && order[d.muscle] !== undefined);
+  const helpers = details.filter((d) => d.coverage === "secondary" && order[d.muscle] !== undefined);
+  const lastMain = Math.max(-1, ...main.map((d) => order[d.muscle]!));
+  const helpersAt = MAIN_START + (lastMain + 1) * MAIN_STEP + HELPER_GAP;
+  for (const d of main) delays[d.muscle] = MAIN_START + order[d.muscle]! * MAIN_STEP;
+  for (const d of helpers) delays[d.muscle] = helpersAt + order[d.muscle]! * HELPER_STEP;
+  const lastHelper = Math.max(0, ...helpers.map((d) => order[d.muscle]!));
+  return { delays, helpersAt, helpersFor: helpers.length ? lastHelper * HELPER_STEP + FADE_MS + 900 : 0 };
+}
+
+function RevealCaption({ phase, id }: { phase: "idle" | "main" | "helpers" | "done"; id: string }) {
+  const show = phase === "main" || phase === "helpers";
+  return (
+    <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium" aria-hidden>
+      <span className={`flex items-center gap-1.5 transition-opacity duration-300 ${show ? "opacity-100" : "opacity-0"}`}>
+        <MuscleSwatch kind="main" id={`${id}cm`} /> Main muscles
+      </span>
+      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" ? "opacity-100" : "opacity-0"}`}>
+        <MuscleSwatch kind="helper" id={`${id}ch`} /> + helpers
+      </span>
+    </div>
+  );
+}
+
 const PAD = 6;
 
 function Body({
@@ -74,7 +114,7 @@ function Body({
   fills,
   id,
   lit,
-  order,
+  delays,
   selected,
   onSelect,
 }: {
@@ -82,18 +122,18 @@ function Body({
   fills: Fills;
   id: string;
   lit: boolean;
-  order?: Partial<Record<MuscleKey, number>>;
+  delays: Partial<Record<MuscleKey, number>>;
   selected: MuscleKey | null;
   onSelect: (m: MuscleKey) => void;
 }) {
   const L = neonLayers(side, fills, id);
-  // Reveal: the colored layer fades in per muscle, delayed by the first exercise that worked it.
+  // Reveal: the colored layer fades in per muscle at its delay (main muscles first, then helpers).
   const fade = (m: MuscleKey | null) => {
-    const step = m ? order?.[m] : undefined;
-    const on = lit || step === undefined;
+    const delay = m ? delays[m] : undefined;
+    const on = lit || delay === undefined;
     return {
       opacity: on ? 1 : 0,
-      transition: lit && step !== undefined ? `opacity 500ms ease-out ${150 + step * 450}ms` : "none",
+      transition: lit && delay !== undefined ? `opacity ${FADE_MS}ms ease-out ${delay}ms` : "none",
     };
   };
   return (
@@ -180,7 +220,7 @@ function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: str
                 </span>
               </div>
               <div className="mt-0.5 text-xs text-zinc-400">
-                {e.role === "primary" ? "Primary" : "Secondary"}
+                {e.role === "primary" ? "Main muscle" : "Helper muscle"}
                 {e.flags.length ? ` · form flags: ${e.flags.map(([t, n]) => `${t} ×${n}`).join(", ")}` : " · no form flags"}
               </div>
             </li>
