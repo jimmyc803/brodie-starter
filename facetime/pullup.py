@@ -26,10 +26,17 @@ GREEN = (34, 197, 94); RED = (239, 68, 68)
 NOSE, MOUTH_L, MOUTH_R = 0, 9, 10
 SH_L, SH_R, EL_L, EL_R, WR_L, WR_R = 11, 12, 13, 14, 15, 16
 HAND = (17, 18, 19, 20)                    # pinkies and index knuckles
-HANG_DEG = 145.0                           # elbows straighter than this = dead hang
-PULL_START = 0.25                          # progress above this = a pull has started
-STALL_DROP = 0.15                          # a pull that falls this far under its peak without clearing = no rep
-CLEAR_MARGIN = 0.004                       # hysteresis on the bar line (normalised y)
+HANG_DEG = 130.0                           # elbows straighter than this = dead hang (arms the next rep)
+PULL_DEG = 115.0                           # elbows bent under this = a pull has started
+PULL_END_DEG = 125.0                       # straighter than this again = the pull is over
+STALL_ELBOW = 100.0                        # a pull that bent the elbows this far but never cleared = "Chin over the bar"
+STALL_PROGRESS = 0.3                       # ... and lifted the chin at least this far (not a shrug or a wobble)
+HANG_HOLD_S = 0.2                         # the first dead hang after getting on the bar must last this long
+TOP_PROGRESS = 0.85                        # chin this far from the hang height to the bar = over the bar
+TOP_ELBOW = 50.0                           # or elbows fully bent ...
+LOOSE_PROGRESS = 0.55                      # ... with the chin at least this far up
+TOP_EXIT_PROGRESS = 0.7; TOP_EXIT_ELBOW = 80.0
+OFF_GRACE_S = 0.6                          # pose dropouts shorter than this keep the state
 FLASH_S = 0.8
 FAULT_CHIN = 'pull ups - chin over the bar'
 FAULT_HANG = 'pull ups - full hang at the bottom'
@@ -61,70 +68,100 @@ class PullupState:
 
 
 class PullupCounter:
+    """A pull is one elbow cycle: from a hang (elbows > HANG_DEG) the elbows bend under PULL_DEG, then straighten again.
+    The pull is a rep when its top clears the bar: the chin at TOP_PROGRESS of the way from its dead-hang height to the bar,
+    or the elbows fully bent (< TOP_ELBOW) with the chin past LOOSE_PROGRESS (a low camera puts the bar above a chin that is
+    over it). The elbows are the clean signal on every view (front, back, side); the chin estimate is noisier from behind."""
+
     def __init__(self, target=0, alpha=0.6):
         self.st = PullupState(target=target)
         self.alpha = alpha
-        self._bar = None; self._chin = None; self._hang_chin = None
-        self._armed = True                 # a dead hang since the last rep (the first rep starts from the hang)
-        self._peak = 0.0; self._was_cleared = False
+        self._bar = None; self._chin = None; self._elbow = None; self._hang_chin = None
+        self._armed = False                # a dead hang since the last rep; the first needs a settled hang (not the jump to the bar)
+        self._hang_since = None; self._settled = False
+        self._pulling = False; self._top = False; self._counted = False
+        self._off_since = None
+        self.pulls = []                    # diagnostics: one dict per pull (min elbow, max progress, counted, fault)
 
-    def _ema(self, old, new):
-        return new if old is None else old + self.alpha * (new - old)
+    def _ema(self, old, new, a=None):
+        a = self.alpha if a is None else a
+        return new if old is None else old + a * (new - old)
+
+    def _off(self, t):
+        st = self.st
+        if self._off_since is None: self._off_since = t
+        if t - self._off_since >= OFF_GRACE_S:
+            st.on_bar = False; st.cleared = False; self._top = False; self._pulling = False; self._armed = False
+            self._hang_since = None; self._settled = False
+        return st
 
     def update(self, lm, t):
         st = self.st; st.events = []
         if lm is None:
-            st.on_bar = False; st.cleared = False; return st
+            return self._off(t)
         lm = np.asarray(lm, np.float32); vis = lm[:, 3] if lm.shape[1] > 3 else np.ones(len(lm))
         p = lm[:, :2]
-        if min(vis[WR_L], vis[WR_R], vis[SH_L], vis[SH_R]) < VIS:
-            st.on_bar = False; st.cleared = False; return st
-        sh_y = (p[SH_L, 1] + p[SH_R, 1]) / 2
-        st.on_bar = bool(p[WR_L, 1] < sh_y and p[WR_R, 1] < sh_y)          # both hands over the shoulders
-        if not st.on_bar:
-            st.cleared = False; return st
-        # the bar: knuckles if seen, else wrists raised by a fifth of the forearm
+        if min(vis[WR_L], vis[WR_R], vis[EL_L], vis[EL_R], vis[SH_L], vis[SH_R]) < VIS:
+            return self._off(t)
+        wr_y = (p[WR_L, 1] + p[WR_R, 1]) / 2; el_y = (p[EL_L, 1] + p[EL_R, 1]) / 2
+        if not wr_y < el_y:                # hands over the elbows on the bar, hanging or at the top; not when standing
+            return self._off(t)
+        self._off_since = None; st.on_bar = True
+        # the bar: knuckles if seen, else wrists raised by a fifth of the forearm; it does not move, so slow smoothing
         hand = [p[i, 1] for i in HAND if vis[i] > VIS]
         if len(hand) >= 2:
             bar = float(np.mean(hand))
         else:
             fore = (np.linalg.norm(p[EL_L] - p[WR_L]) + np.linalg.norm(p[EL_R] - p[WR_R])) / 2
-            bar = float((p[WR_L, 1] + p[WR_R, 1]) / 2 - 0.2 * fore)
+            bar = float(wr_y - 0.2 * fore)
+        self._bar = self._ema(self._bar, bar, 0.3)
         # the chin: under the mouth by the nose-to-mouth distance
         mouth = (p[MOUTH_L] + p[MOUTH_R]) / 2
         chin = mouth + (mouth - p[NOSE]) * 1.0
-        self._bar = self._ema(self._bar, bar) if not self._was_cleared else self._bar   # hold the bar still while over it
         self._chin = chin if self._chin is None else self._chin + self.alpha * (chin - self._chin)
         st.bar_y = self._bar; st.chin = (float(self._chin[0]), float(self._chin[1]))
-        st.elbow_deg = (_angle(p[SH_L], p[EL_L], p[WR_L]) + _angle(p[SH_R], p[EL_R], p[WR_R])) / 2
-        hanging = st.elbow_deg > HANG_DEG
-        if hanging:                                                      # the dead-hang chin height (lowest seen recently)
+        el = (_angle(p[SH_L], p[EL_L], p[WR_L]) + _angle(p[SH_R], p[EL_R], p[WR_R])) / 2
+        self._elbow = self._ema(self._elbow, el); st.elbow_deg = self._elbow
+        hanging = self._elbow > HANG_DEG
+        if hanging:                        # the dead-hang chin height (follows the hang; drifts up slowly)
             self._hang_chin = self._chin[1] if self._hang_chin is None else max(self._chin[1], self._hang_chin - 0.002)
         ref = self._hang_chin if self._hang_chin is not None else self._chin[1] + 0.15
         span = max(1e-3, ref - self._bar)
         st.progress = float(np.clip((ref - self._chin[1]) / span, 0.0, 1.2))
-        # over the bar, with hysteresis
-        cy = self._chin[1]
-        st.cleared = cy < self._bar - CLEAR_MARGIN if not self._was_cleared else cy < self._bar + CLEAR_MARGIN
-        if st.cleared and not self._was_cleared:
-            if self._armed:
-                st.count += 1; st.clear_t = t; self._armed = False
-                st.events += [('rep', st.count), ('cue', COUNT_WORDS[st.count - 1] if st.count <= len(COUNT_WORDS) else str(st.count))]
-            else:                                                        # over again without straightening the arms
-                st.fault_t = t; st.fault_cue = CUE_FOR[FAULT_HANG]
+
+        if not self._pulling and self._elbow < PULL_DEG:          # a pull starts
+            self._pulling = True; self._counted = False
+            self.pulls.append({'t': round(t, 1), 'min_elbow': 180.0, 'max_progress': 0.0, 'counted': False, 'fault': None})
+        if self._pulling:
+            d = self.pulls[-1]; d['min_elbow'] = round(min(d['min_elbow'], self._elbow), 1); d['max_progress'] = round(max(d['max_progress'], st.progress), 2)
+        at_top = st.progress >= TOP_PROGRESS or (self._elbow < TOP_ELBOW and st.progress >= LOOSE_PROGRESS)
+        if self._pulling and at_top and not self._top:            # the top of the pull: over the bar
+            self._top = True
+            if self._counted and self._settled:                   # back over the bar from a half-way drop: not a rep
+                st.fault_t = t; st.fault_cue = CUE_FOR[FAULT_HANG]; self.pulls[-1]['fault'] = FAULT_HANG
                 st.events += [('fault', FAULT_HANG), ('cue', CUE_FOR[FAULT_HANG])]
-            self._peak = 0.0
-        self._was_cleared = st.cleared
-        if hanging and not self._armed:
-            self._armed = True
-        # a pull that stalls under the bar
-        if not st.cleared and self._armed:
-            self._peak = max(self._peak, st.progress)
-            if self._peak > PULL_START and st.progress < self._peak - STALL_DROP and self._peak < 1.0:
-                st.fault_t = t; st.fault_cue = CUE_FOR[FAULT_CHIN]
+            elif not self._counted:
+                if self._armed:
+                    st.count += 1; st.clear_t = t; self._armed = False; self._counted = True; self.pulls[-1]['counted'] = True
+                    st.events += [('rep', st.count), ('cue', COUNT_WORDS[st.count - 1] if st.count <= len(COUNT_WORDS) else str(st.count))]
+                elif self._settled:                               # over again without straightening the arms
+                    self._counted = True; st.fault_t = t; st.fault_cue = CUE_FOR[FAULT_HANG]; self.pulls[-1]['fault'] = FAULT_HANG
+                    st.events += [('fault', FAULT_HANG), ('cue', CUE_FOR[FAULT_HANG])]
+        if self._top and st.progress < TOP_EXIT_PROGRESS and self._elbow > TOP_EXIT_ELBOW:
+            self._top = False
+        st.cleared = self._top
+        if self._pulling and self._elbow > PULL_END_DEG:          # the arms straightened: the pull is over
+            d = self.pulls[-1]
+            if not self._counted and self._settled and d['min_elbow'] < STALL_ELBOW and d['max_progress'] >= STALL_PROGRESS:   # a real pull that never got over the bar
+                st.fault_t = t; st.fault_cue = CUE_FOR[FAULT_CHIN]; self.pulls[-1]['fault'] = FAULT_CHIN
                 st.events += [('fault', FAULT_CHIN), ('cue', CUE_FOR[FAULT_CHIN])]
-                self._peak = 0.0
-            if hanging: self._peak = 0.0 if st.progress < 0.05 else self._peak
+            self._pulling = False; self._top = False; st.cleared = False
+        if hanging:
+            if self._hang_since is None: self._hang_since = t
+            if t - self._hang_since >= HANG_HOLD_S - 1e-6: self._settled = True
+            if self._settled: self._armed = True
+        else:
+            self._hang_since = None
         return st
 
 
@@ -193,7 +230,9 @@ def compose_pullup(rgb, lm, st, cue=None, cue_t=0.0, face=None, now=0.0):
                 cv2.circle(img, (cx, cy), 13, BLACK, -1, cv2.LINE_AA); cv2.circle(img, (cx, cy), 9, GREEN if green else (RED if red else WHITE), -1, cv2.LINE_AA)
         _skeleton(img, pts, GREEN if green else (RED if red else VOLT))
     state = 'active' if st.on_bar else ('done' if st.target and st.count >= st.target else 'wait')
-    mirror.bars(img, 'pull ups', st.count, st.target or None, state, cue, cue_t, now)
+    target = st.target if st.target and st.count <= st.target else None      # past the target: just the count
+    mirror.bars(img, 'pull ups', st.count, target, state if target or not st.count else None, cue, cue_t, now)
+    if target is None and st.count: mirror.text(img, str(st.count), (mirror.SAFE_X, mirror.SAFE_TOP + 88), 1.5, VOLT, 3, outline=False)
     if st.on_bar: _meter(img, st, now)
     if green: _badge(img, f'CLEARED  {st.count}', GREEN, mirror.SAFE_TOP + 190)
     elif red: _badge(img, (st.fault_cue or 'Chin over the bar').upper(), RED, mirror.SAFE_TOP + 190, 1.0)

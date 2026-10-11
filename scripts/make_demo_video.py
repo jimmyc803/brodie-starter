@@ -95,12 +95,16 @@ def main():
     if a.plan and a.plan.split(':')[0].strip().lower().replace('-', ' ') in ('pull ups', 'pullups', 'pull up', 'pullup'):
         pull_target = int(a.plan.rpartition(':')[2] or 5); a.plan = f'pull ups:{pull_target}'
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-    trimmed = None
-    if a.start is not None or a.end is not None:          # cut first, so every time below is video time from 0
-        trimmed = os.path.join(os.path.dirname(os.path.abspath(a.out)), '.trimmed.mp4')
-        cmd = ['ffmpeg', '-v', 'error', '-y'] + (['-ss', str(a.start)] if a.start else []) + ['-i', a.video]
-        if a.end is not None: cmd += ['-t', str(a.end - (a.start or 0.0))]
-        subprocess.run(cmd + ['-an', '-c:v', 'libx264', '-crf', '14', '-preset', 'fast', trimmed], check=True); a.video = trimmed
+    # normalise first: any phone file (HEVC .mov, rotated portrait, variable frame rate, 4K) -> upright H.264, constant
+    # 30 fps, at most 1280 px tall, trimmed; every time below is then video time from 0
+    if not os.path.exists(a.video): sys.exit(f'no such video: {a.video}')
+    trimmed = os.path.join(os.path.dirname(os.path.abspath(a.out)), '.normalised.mp4')
+    cmd = ['ffmpeg', '-v', 'error', '-y'] + (['-ss', str(a.start)] if a.start else []) + ['-i', a.video]
+    if a.end is not None: cmd += ['-t', str(a.end - (a.start or 0.0))]
+    fps = min(30.0, a.max_fps)
+    subprocess.run(cmd + ['-an', '-vf', f"fps={fps:g},scale='if(gt(iw,ih),min(1280,iw),-2)':'if(gt(iw,ih),-2,min(1280,ih))'",
+                          '-c:v', 'libx264', '-crf', '16', '-preset', 'fast', '-pix_fmt', 'yuv420p', trimmed], check=True)
+    a.video = trimmed
 
     # ---- pass 1: perception at 10 fps, exactly as on a call ----
     cap = cv2.VideoCapture(a.video); src_fps = cap.get(cv2.CAP_PROP_FPS) or FPS
@@ -136,17 +140,15 @@ def main():
         if pst.on_bar and not started:
             started = True; ev('session', t, state='active', item=0, exercise='pull ups', target=pull_target, count=0)
         for kind, val in pst.events:
-            if done: break
             if kind == 'rep': ev('rep', t, n=val)
             elif kind == 'fault': ev('fault', t, label=val)
             else: ev('cue', t, text=val, intent='count' if val[0].isupper() and val in COUNT_TEXT else 'correction')
         if started and not done and pst.count >= pull_target:
             done = True; ev('cue', t + 1.0, text=f"That's {COUNT_WORDS_L[pull_target - 1]}, nice work", intent='milestone')
-            ev('session', t + 1.0, state='done', item=0, exercise=None, target=pull_target, count=pst.count, done=True)
         import copy
-        samples.append((t, lm, pst.count, pull_target, 'pull ups', 'done' if done else ('active' if pst.on_bar else 'wait'), copy.copy(pst)))
+        samples.append((t, lm, pst.count, pull_target, 'pull ups', 'active' if pst.on_bar else ('done' if done else 'wait'), copy.copy(pst)))
     cap.release(); duration = i / src_fps
-    if pull_target is not None and not done:
+    if pull_target is not None:                           # every rep counts, extra reps past the target too
         ev('session', duration, state='done', item=0, exercise=None, target=pull_target, count=pc.st.count, done=True)
     events.sort(key=lambda e: e['t'])
     reps = [e for e in events if e.get('type') == 'rep']; cues = [e for e in events if e.get('type') == 'cue']
@@ -154,7 +156,8 @@ def main():
         f"{sum(e.get('type') == 'fault' for e in events)} corrections")
 
     # ---- the cards: one per closed set, the heat map filling in ----
-    closes = [k + 1 for k, e in enumerate(events) if e.get('type') == 'session' and e.get('state') in ('rest', 'done')]
+    # the card after every rep and every closed set (an open set is closed with the reps so far), so it fills in live
+    closes = [k + 1 for k, e in enumerate(events) if e.get('type') == 'rep' or (e.get('type') == 'session' and e.get('state') in ('rest', 'done'))]
     card_times = [(0.0, card_for(events, a.plan, 0))] + [(events[k - 1]['t'], card_for(events, a.plan, k)) for k in closes]
     final = card_for(events, a.plan, len(events))
     if a.save:
@@ -164,7 +167,7 @@ def main():
         view = sink.finish('demo video')
         final = png_to_panel(get_recap_png(view))
         log(f"saved session {view['session']['id']}; recap {os.environ.get('WEB_URL', '')}/r/{view['session']['share_token']}")
-    log(f'{len(card_times)} card states (one per closed set)')
+    log(f'{len(card_times)} card states (one per rep and closed set)')
 
     # ---- pass 2: render ----
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)

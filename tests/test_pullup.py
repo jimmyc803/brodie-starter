@@ -73,3 +73,39 @@ def test_overlay_turns_green_on_clear_and_red_on_a_no_rep():
     assert fault is not None
     img = compose_pullup(rgb, body(0.4), fault, now=fault.fault_t + 0.1)
     assert (np.abs(img.astype(int) - RED).sum(axis=2) < 30).sum() > 2000
+
+
+# Real pull-ups: MediaPipe landmarks (10 fps, the pipeline's rate) from six free Mixkit clips (the videos are not in the repo).
+# Counts checked by eye against the footage: mk25248 front-ish outdoor 5; mk44410 from behind, close, low camera 9; mk735 front,
+# the clip opens at the top of a rep, then 1 from a hang; mk40140 close-up, masked, opens mid-pull, then 2; mk40151 side view,
+# chin never over the bar: 0 and "Chin over the bar"; mk40157 portrait, too close (arms never straight): unstable, no runaway.
+import os
+import pytest
+
+FIXTURE = os.path.join(os.path.dirname(__file__), 'fixtures', 'pullup_landmarks.npz')   # git-ignored: scripts/pullup_fixture.py
+real = pytest.mark.skipif(not os.path.exists(FIXTURE), reason='no real-clip fixture: run scripts/pullup_fixture.py')
+REAL = {'mk25248': 5, 'mk44410': 9, 'mk735': 1, 'mk40140': (2, 3), 'mk40151': 0}
+
+
+def replay(arr):
+    pc = PullupCounter(target=5); events = []
+    for i, lm in enumerate(arr.astype(np.float32)):
+        st = pc.update(None if np.isnan(lm).any() else lm, i / 10)
+        events += st.events
+    return pc.st.count, events
+
+
+@real
+@pytest.mark.parametrize('clip,want', sorted(REAL.items()))
+def test_real_clips_count_like_a_coach(clip, want):
+    n, events = replay(np.load(FIXTURE)[clip])
+    assert n in want if isinstance(want, tuple) else n == want    # mk40140 opens mid-pull: that first rep may or may not count
+    faults = [e[1] for e in events if e[0] == 'fault']
+    if want: assert not faults, faults                  # clean sets: no false calls
+    else: assert faults.count(FAULT_CHIN) >= 2          # the side-view half reps are called out
+
+
+@real
+def test_real_clip_too_close_does_not_overcount():
+    n, _ = replay(np.load(FIXTURE)['mk40157'])
+    assert n <= 4                                       # about 3 tops on screen: no runaway counting
