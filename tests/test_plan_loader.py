@@ -1,3 +1,7 @@
+import copy
+
+import pytest
+
 from facetime.plan_loader import load_assignment, persona_text
 
 
@@ -34,3 +38,46 @@ def test_persona_text():
     r = load_assignment('cid', FakeDb([ROW]))
     assert persona_text('BASE', r) == "BASE\n\nThe client's name is Ryan. Their coach Tristan says: Be blunt."
     assert persona_text('BASE', None) == 'BASE'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('sets', 0), ('sets', -1), ('sets', 101), ('sets', True),
+    ('sets', '2'), ('sets', 1.5), ('sets', None),
+    ('reps', 0), ('reps', -2), ('reps', 1001), ('reps', False),
+    ('reps', '10'), ('reps', 2.5), ('reps', None),
+])
+def test_rejects_invalid_supported_counts(field, value):
+    row = copy.deepcopy(ROW)
+    row['program_days']['exercises'][0][field] = value
+    assert load_assignment('cid', FakeDb([row])) is None
+
+
+@pytest.mark.parametrize('field', ['sets', 'reps'])
+def test_rejects_missing_supported_counts(field):
+    row = copy.deepcopy(ROW)
+    del row['program_days']['exercises'][0][field]
+    assert load_assignment('cid', FakeDb([row])) is None
+
+
+def test_accepts_count_boundaries():
+    row = copy.deepcopy(ROW)
+    row['program_days']['exercises'] = [
+        {'exercise_key': 'bicep_curl', 'supported': True, 'sets': 100, 'reps': 1000}]
+    result = load_assignment('cid', FakeDb([row]))
+    assert len(result['plan'].split(',')) == 100
+    assert result['plan'].split(',')[0] == 'bicep curls:1000'
+
+
+def test_no_raw_database_error_in_logs(capsys):
+    class BrokenDb:
+        def select(self, *args, **kwargs):
+            raise RuntimeError('secret-token-and-private-response')
+    assert load_assignment('cid', BrokenDb()) is None
+    assert 'secret-token-and-private-response' not in capsys.readouterr().out
+
+
+def test_manual_only_assignment_is_unavailable():
+    row = copy.deepcopy(ROW)
+    row['program_days']['exercises'] = [
+        {'exercise_key': None, 'name': 'Bench press', 'supported': False, 'sets': 3, 'reps': 8}]
+    assert load_assignment('cid', FakeDb([row])) is None

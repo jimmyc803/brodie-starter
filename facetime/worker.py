@@ -23,7 +23,7 @@ Events (one JSON object each, schema in facetime/perception.py and docs/STARTER_
     the data channel is for rooms we own).
 Cues the player finished or dropped go to --cue-log / RTCOACH_CUE_LOG (the coach_agent --log record shape) and to stdout.
 
-Plan: --plan, else env PLAN, else starter/plan.txt (the hackathon script; ships with the demo plan), else the demo plan (DEFAULT_PLAN);
+Plan: --plan, else env PLAN, else DEMO_CLIENT_ID active assignment at call start, else starter/plan.txt, else DEFAULT_PLAN;
 --exercise for one exercise, --auto for auto-detect. Job metadata is read for chert_call and media and logged (never acted on).
 
 Voice (--voice gemini, default off: the default and events-only modes are untouched): facetime/voice.py runs Gemini Live (voice Puck)
@@ -140,8 +140,9 @@ def read_plan_text(path):
         return None
 
 
-def resolve_mode(a):
-    """--plan, else PLAN, else starter/plan.txt, else the demo plan; --exercise and --auto take precedence over the default plan.
+def resolve_mode(a, *, load_client=True):
+    """--plan, else PLAN, else client assignment, else starter/demo; --exercise and --auto override.
+    load_client=False defers assignment resolution for registration/prewarm (never chooses a fallback).
     Handlers: --handlers PATH, else starter/handlers.py whenever it exists (every mode, so a team's on_event runs with say_now even
     without the voice), `none` for nothing."""
     if perception_off(a):                       # no session script: the plan is free text for the persona (a recipe), kept across the two parses
@@ -152,15 +153,18 @@ def resolve_mode(a):
         if a.exercise: a.plan = None
         elif getattr(a, 'auto', False): a.plan = None
         else:
-            if not a.plan and not os.environ.get('PLAN') and os.environ.get('DEMO_CLIENT_ID') and not getattr(a, 'assignment', None):
-                from facetime.plan_loader import load_assignment
-                a.assignment = load_assignment(os.environ['DEMO_CLIENT_ID'])
-                if a.assignment:
+            if not a.plan and not os.environ.get('PLAN') and os.environ.get('DEMO_CLIENT_ID'):
+                # Resolve on each call, never while registering or warming a process.
+                # A missing assignment must not turn into an unrelated demo workout.
+                if load_client:
+                    from facetime.plan_loader import AssignmentUnavailable, load_assignment
+                    a.assignment = load_assignment(os.environ['DEMO_CLIENT_ID'])
+                    if not a.assignment:
+                        raise AssignmentUnavailable('Client assignment unavailable; check the active day and database connection.')
                     a.plan = a.assignment['plan']
-                    print(f"[plan] loaded {a.assignment['day_title']} for {a.assignment['client_name']} (coach {a.assignment['coach_name']}): {a.plan}", flush=True)
-                else:
-                    print(f"[plan] no assignment for DEMO_CLIENT_ID, using {'starter/plan.txt' if read_plan_file(getattr(a, 'plan_file', None)) else 'default plan'}", flush=True)
-            a.plan = a.plan or os.environ.get('PLAN') or read_plan_file(getattr(a, 'plan_file', None)) or DEFAULT_PLAN
+                    print('[plan] loaded active client assignment', flush=True)
+            else:
+                a.plan = a.plan or os.environ.get('PLAN') or read_plan_file(getattr(a, 'plan_file', None)) or DEFAULT_PLAN
     a.vision_fps = max(0.1, min(float(getattr(a, 'vision_fps', 1.0) or 1.0), 2.0))
     h = getattr(a, 'handlers', None)
     if h and str(h).strip().lower() in ('none', 'off'): a.handlers = 'none'          # kept as the string: the job process resolves the flags again
@@ -184,13 +188,13 @@ def read_plan_file(path):
         return None
 
 
-def load_args():
+def load_args(*, load_client=True):
     """The flags main() parsed, from the environment (a job process is a fresh interpreter); defaults when run without main()."""
     a = build_parser().parse_args([])
     try: d = json.loads(os.environ.get(ARGS_ENV) or '{}')
     except ValueError: d = {}
     for k, v in d.items(): setattr(a, k, v)
-    return resolve_mode(a)
+    return resolve_mode(a, load_client=load_client)
 
 
 def parse_metadata(md):
@@ -204,7 +208,7 @@ def parse_metadata(md):
 
 def prewarm(proc: JobProcess):
     """Runs in each job process before any job: models, trigger, thresholds and (unless events-only) the cue bank."""
-    a = load_args(); cfg = Config.from_args(a); t = time.time()
+    a = load_args(load_client=False); cfg = Config.from_args(a); t = time.time()
     proc.userdata['args'] = a; proc.userdata['cfg'] = cfg
     if perception_off(a):                                      # no pose model, no classifier: nothing to load but the bank
         proc.userdata['pipe'] = None
@@ -224,12 +228,22 @@ def prewarm(proc: JobProcess):
 def describe_mode(a):
     """The mode words for the console lines: plan/single/auto with perception, 'voice' without."""
     if perception_off(a): return 'voice (perception off' + (', vision on' if getattr(a, 'vision', False) else '') + f', floor {a.floor})'
+    if not a.plan and not a.exercise and not getattr(a, 'auto', False) and os.environ.get('DEMO_CLIENT_ID'):
+        return 'client assignment (resolved at call start)'
     return f'{"plan" if a.plan else ("single" if a.exercise else "auto")} ({a.plan or a.exercise or "auto-detect"})'
 
 
 async def entrypoint(ctx: JobContext):
     ud = ctx.proc.userdata
-    a = ud.get('args') or load_args(); cfg = ud.get('cfg') or Config.from_args(a)
+    from facetime.plan_loader import AssignmentUnavailable
+    try:
+        # Re-read the active assignment after prewarm; only the model/bank are cached.
+        a = await asyncio.to_thread(load_args)
+    except AssignmentUnavailable:
+        log.warning('Client assignment unavailable; refusing to start a demo workout')
+        ctx.shutdown(reason='client assignment unavailable')
+        return
+    cfg = Config.from_args(a)
     pipe = ud.pop('pipe', None)
     if pipe is None and not perception_off(a): pipe = build_pipeline(cfg)   # single use: a Perception owns it until the job ends
     bank = ud.get('bank')
@@ -659,7 +673,7 @@ def main(argv=None):
     ap = build_parser(); a, rest = ap.parse_known_args(argv)
     if a.help or (not rest and '--help' in argv):
         ap.print_help(); return 0
-    resolve_mode(a)
+    resolve_mode(a, load_client=False)
     if rest and rest[0] not in LK_COMMANDS and rest[0].startswith('-'):
         print(f'[worker] unknown flag {rest[0]!r} (our flags go before the LiveKit subcommand: {", ".join(LK_COMMANDS)})', file=sys.stderr); return 2
     os.environ[ARGS_ENV] = json.dumps({k: v for k, v in vars(a).items() if k != 'help'})
