@@ -220,7 +220,7 @@ class Perception:
             conf = self._confidence(rc); ex = spoken_name(self.pipe.exercise) if self.pipe.exercise else None
             tt = r.get('turning_t'); turning_t = self._rc_t.get(int(round(tt * self.fps))) if tt is not None else None   # the turning point on the event clock
             for n in range(self._last_count + 1, c + 1):               # the counter can confirm two reps on one frame
-                self._emit('rep', exercise=ex, n=n, confidence=conf, turning_t=(round(turning_t, 3) if turning_t is not None else None),
+                self._emit('rep', exercise=ex, **({'exercise_key': 'bicep_curl'} if ex == 'bicep curls' else {}), n=n, confidence=conf, turning_t=(round(turning_t, 3) if turning_t is not None else None),
                            lag_s=(round(self._t - turning_t, 3) if turning_t is not None else None))
             self._last_count = c
         if r.get('ex_probs') is not None and self.pipe.clf is not None:

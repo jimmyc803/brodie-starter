@@ -16,6 +16,9 @@ def make_counter(rep_params, exercise=None, fps=10):
     """rep_params {'v2': True, ...} -> RepCounter2 (E1b, exercise hint fixes the rest side; the other keys are RepCounter2 kwargs:
     the live default facetime.pipeline.REP_PARAMS_V2 adds select='mask', gate=True, settle=True, see rtcoach.repcount2);
     otherwise the E1 RepCounter."""
+    from .curl_counter import CURL_NAMES, CurlCounter
+    if exercise in CURL_NAMES:
+        return CurlCounter(fps=fps)
     rp=dict(rep_params or {})
     if rp.pop('v2', False):
         from .repcount2 import RepCounter2

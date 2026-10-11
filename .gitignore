@@ -21,3 +21,6 @@ models/
 
 !.env.example
 !assets/avatar/*.png
+
+# Downloaded licensed starter archives
+*.tgz
