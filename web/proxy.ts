@@ -11,8 +11,8 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{4,80}$/;
 
 async function sessionExists(token: string): Promise<boolean> {
   if (!TOKEN_RE.test(token)) return false;
-  if (token === "demo") return true;
-  if (!hasSupabase()) return token === SAMPLE_SESSION_TOKEN;
+  if (token === "demo" || token === SAMPLE_SESSION_TOKEN) return true; // the sample session always works
+  if (!hasSupabase()) return false;
   const { data, error } = await supabaseServer().from("sessions").select("id").eq("share_token", token).maybeSingle();
   if (error) return true; // let the page surface the real error
   return Boolean(data);
