@@ -36,7 +36,7 @@ export async function getSessionView(token: string): Promise<SessionView | null>
     .eq("share_token", token)
     .maybeSingle();
   if (error) throw new Error(`sessions lookup failed: ${error.message}`);
-  if (!s) return token === "demo" ? sampleSessionView() : null;
+  if (!s) return token === "demo" || token === SAMPLE_SESSION_TOKEN ? sampleSessionView() : null;
   return assembleView(s as unknown as SessionRow);
 }
 
