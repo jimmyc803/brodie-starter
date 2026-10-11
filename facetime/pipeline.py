@@ -19,6 +19,7 @@ from rtcoach.pose import Pose
 from rtcoach.coach import Coach
 from rtcoach.model import Classifier
 from rtcoach.exmap import LR2CLF, COUNTABLE
+from rtcoach.curl_counter import CURL_NAMES
 from facetime.visibility import Visibility
 from facetime.probe import ArmRaise, TPose
 
@@ -67,7 +68,10 @@ def resolve_trigger(arg):
 SHORT_SIDE = 288
 FPS = 10
 PLAIN = {'squats': 'squats', 'pushups': 'pushups', 'jumping jacks': 'jumping jacks', 'lunges': 'alternating forward lunges'}
+PLAIN.update({name: 'bicep curls' for name in CURL_NAMES})
 CLF2NAME = {v: k for k, v in sorted(LR2CLF.items())}; CLF2NAME.update({v: k for k, v in PLAIN.items()})   # classifier class -> spoken name
+
+CLF2NAME['bicep curls'] = 'bicep curls'
 
 def to_short_side(rgb, short=SHORT_SIDE):
     h, w = rgb.shape[:2]
@@ -138,8 +142,10 @@ class FramePipeline:
         ex = map_exercise(name, self.clf) if name else None
         self.exercise = ex; self.countable = ex in COUNTABLE; self.armed = armed
         p = dict(self.params, **(params or {}))
-        self.coach = Coach(clf=self.clf, exercise=ex, fps=self.fps, params=p,
-                           rep_params=(self.rep_params if self.countable else None), thresholds=self.thresholds, trigger=self.trigger)
+        # Curls have no trained form labels: do not emit another exercise's faults.
+        curl = ex in CURL_NAMES
+        self.coach = Coach(clf=None if curl else self.clf, exercise=ex, fps=self.fps, params=p,
+                           rep_params=(self.rep_params if self.countable else None), thresholds=self.thresholds, trigger=None if curl else self.trigger)
         if not p.get('start_line', True):
             self.coach.last_say = 0.0            # the session script spoke instead; praise waits praise_after s as usual
         return ex
@@ -226,6 +232,7 @@ class FramePipeline:
         """Amplitude gate: E1 sets .state once the window's amplitude passes min_amp; RepCounter2 has a tracker per
         signal, moving = any tracker has left its rest level."""
         if rc is None: return False
+        if hasattr(rc, 'moving'): return rc.moving
         if hasattr(rc, 'tr'): return any(t.state in ('active', 'fired') for t in rc.tr.values())
         return getattr(rc, 'state', None) is not None
 

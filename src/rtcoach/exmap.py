@@ -6,4 +6,4 @@ LR2CLF={'squats':'squats','pushups':'pushups','jumping jacks':'jumping jacks','h
  'boxing squat punches':'squat punch','squat kicks':'squat kick','butt kickers':'buttkickers','mountain climbers':'mountain-climbers',
  'standing kicks':'standing kick (alternate legs)','squat jumps':'squat jump','lunge jumps':'jumping lunges','walking lunges':'alternating forward lunges',
  'plank taps':'plank taps','quick feet':'quick feet','puddle jumps':'puddle jump','moving plank':'moving plank'}
-COUNTABLE={'squats','pushups','jumping jacks','squat kick','squat jump','jumping lunges','alternating forward lunges','good morning','squat punch','plank taps','puddle jump','floor touches','toe touch'}
+COUNTABLE={'bicep curls','squats','pushups','jumping jacks','squat kick','squat jump','jumping lunges','alternating forward lunges','good morning','squat punch','plank taps','puddle jump','floor touches','toe touch'}

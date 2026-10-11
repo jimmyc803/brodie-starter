@@ -1,0 +1,14 @@
+{
+  "name": "brodie-local-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node run.mjs"
+  },
+  "dependencies": {
+    "@playwright/test": "1.64.0",
+    "async-exit-hook": "2.0.1",
+    "embedded-postgres": "18.4.0-beta.17",
+    "pg": "8.23.1"
+  }
+}

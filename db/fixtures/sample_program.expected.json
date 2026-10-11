@@ -1,0 +1,143 @@
+{
+  "title": "Tristan's Three-Day Foundation Program",
+  "days": [
+    {
+      "day_number": 1,
+      "title": "Full Body Foundations",
+      "exercises": [
+        {
+          "exercise_key": "squat",
+          "name": "Squats",
+          "sets": 3,
+          "reps": 10,
+          "notes": "Bodyweight. Lower with control; stand tall. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "pushup",
+          "name": "Pushups",
+          "sets": 3,
+          "reps": 8,
+          "notes": "Keep a straight trunk and controlled lowering. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "lunge",
+          "name": "Lunges",
+          "sets": 2,
+          "reps": 10,
+          "notes": "Alternate legs; 10 total repetitions per set. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "bicep_curl",
+          "name": "Bicep curls",
+          "sets": 3,
+          "reps": 12,
+          "notes": "Light dumbbells. Side view; keep elbows still. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": null,
+          "name": "Bench press",
+          "sets": 3,
+          "reps": 8,
+          "notes": "Light barbell load with a spotter. Manual tracking. Rest 90 seconds.",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "day_number": 2,
+      "title": "Lower Body and Conditioning",
+      "exercises": [
+        {
+          "exercise_key": "jumping_jack",
+          "name": "Jumping jacks",
+          "sets": 3,
+          "reps": 20,
+          "notes": "Land softly and move at a steady pace. Rest 45 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "squat",
+          "name": "Bodyweight squats",
+          "sets": 3,
+          "reps": 12,
+          "notes": "Smooth tempo and balanced feet. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "lunge",
+          "name": "Alternating lunges",
+          "sets": 3,
+          "reps": 10,
+          "notes": "10 total repetitions per set. Keep the front knee stable. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": null,
+          "name": "Romanian deadlift",
+          "sets": 3,
+          "reps": 10,
+          "notes": "Light dumbbells; hinge at the hips. Manual tracking. Rest 90 seconds.",
+          "supported": false
+        },
+        {
+          "exercise_key": null,
+          "name": "Standing calf raises",
+          "sets": 2,
+          "reps": 15,
+          "notes": "Pause briefly at the top. Manual tracking. Rest 45 seconds.",
+          "supported": false
+        }
+      ]
+    },
+    {
+      "day_number": 3,
+      "title": "Upper Body and Full Body Practice",
+      "exercises": [
+        {
+          "exercise_key": "pushup",
+          "name": "Push-ups",
+          "sets": 3,
+          "reps": 8,
+          "notes": "Controlled range of motion and steady breathing. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "bicep_curl",
+          "name": "Dumbbell biceps curls",
+          "sets": 3,
+          "reps": 12,
+          "notes": "Side view; avoid swinging the torso. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": "squat",
+          "name": "Squats",
+          "sets": 2,
+          "reps": 10,
+          "notes": "Easy bodyweight practice. Rest 60 seconds.",
+          "supported": true
+        },
+        {
+          "exercise_key": null,
+          "name": "Seated cable row",
+          "sets": 3,
+          "reps": 12,
+          "notes": "Keep shoulders relaxed; pull with control. Manual tracking. Rest 75 seconds.",
+          "supported": false
+        },
+        {
+          "exercise_key": "jumping_jack",
+          "name": "Jumping jacks",
+          "sets": 2,
+          "reps": 20,
+          "notes": "Comfortable pace to finish. Rest 45 seconds.",
+          "supported": true
+        }
+      ]
+    }
+  ]
+}

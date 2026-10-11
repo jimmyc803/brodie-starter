@@ -1,5 +1,8 @@
 """Load a client's assigned program day + coach persona from Supabase (see docs/STARTER_EVENTS.md section 2)."""
-import os
+
+
+class AssignmentUnavailable(RuntimeError):
+    """An identified client's workout cannot safely be started."""
 
 
 def _known():
@@ -21,20 +24,29 @@ def load_assignment(client_id, db=None):
         rows = db.select('assignments', client_id=f'eq.{client_id}', active='eq.true', order='assigned_at.desc', limit=1,
                          select='program_day_id,clients(name),program_days(id,day_number,title,exercises,programs(coach_id,coaches(name,persona)))')
         if not rows:
-            print(f'[plan] no assignment found for client {client_id}', flush=True)
+            print('[plan] no active assignment found for client', flush=True)
             return None
         row = rows[0]; day = row.get('program_days') or {}
         coach = ((day.get('programs') or {}).get('coaches')) or {}
         known = _known(); items = []
         from shared.scoring import plan_name
-        exercises = day.get('exercises') or []
+        exercises = day.get('exercises')
+        if not isinstance(exercises, list) or not 1 <= len(exercises) <= 50:
+            raise ValueError('invalid exercises')
         for ex in exercises:
+            if not isinstance(ex, dict):
+                raise ValueError('invalid exercise')
             key = ex.get('exercise_key')
             try: name = plan_name(key) if key and ex.get('supported', True) else None
             except KeyError: name = None
             if name not in known:
-                print(f"[plan] warning: skipping {ex.get('name') or key!r} (not supported by Brodie yet)", flush=True); continue
-            items += [f'{name}:{int(ex.get("reps", 10))}'] * max(1, int(ex.get('sets', 1) or 1))
+                print("[plan] skipping an exercise not supported by Brodie yet", flush=True); continue
+            sets, reps = ex.get('sets'), ex.get('reps')
+            if type(sets) is not int or not 1 <= sets <= 100:
+                raise ValueError('invalid sets')
+            if type(reps) is not int or not 1 <= reps <= 1000:
+                raise ValueError('invalid reps')
+            items.extend([f'{name}:{reps}'] * sets)
         if not items:
             print('[plan] assignment has no supported exercises', flush=True)
             return None
@@ -47,7 +59,7 @@ def load_assignment(client_id, db=None):
         return {'plan': ','.join(items), 'program_day_id': row.get('program_day_id') or day.get('id'), 'day_title': day.get('title'), 'day_number': day.get('day_number'), 'items': exercises,
                 'client_name': client.get('name'), 'coach_name': coach.get('name'), 'persona': coach.get('persona')}
     except Exception as e:
-        print(f'[plan] could not load assignment: {type(e).__name__}: {str(e)[:200]}', flush=True)
+        print(f'[plan] could not load assignment: {type(e).__name__}', flush=True)
         return None
 
 
