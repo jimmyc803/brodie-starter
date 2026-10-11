@@ -1,0 +1,66 @@
+// The heat map look ("neon", chosen in /lab/heatmap): color slides with the stored score, with the team's three colors
+// pinned at the contract thresholds; secondary muscles are a paler version (worked a little); trained muscles are lit
+// from inside and glow, solid ones most, so problem areas stay readable. One description of the drawing feeds the web
+// heat map (React) and the recap PNG (SVG string), so they always match.
+import { SHAPES, type BodySide } from "@/lib/body/shapes";
+import { mixOklch, ramp } from "@/lib/color";
+import { COLORS, MUSCLE_KEYS, THRESHOLDS, type Color, type Coverage, type MuscleKey } from "@/lib/contract";
+
+export type Fill = { fill: string; glow: number }; // glow 0..1
+export type Fills = Partial<Record<MuscleKey, Fill>>;
+export type MuscleInput = { muscle: MuscleKey; score: number; color: Color; coverage: Coverage };
+
+export const UNTRAINED = "#52525b"; // a muscle no exercise hit ("not trained this session")
+export const BODY_BASE = "#3f3f46"; // unscored parts: head, neck, knees, lower back
+export const BODY_STROKE = "#18181b";
+
+export const SCORE_STOPS: [number, string][] = [
+  [0, "#dc2626"],
+  [0.3, COLORS.red],
+  [THRESHOLDS.yellow_min, COLORS.yellow],
+  [THRESHOLDS.green_min, COLORS.green],
+  [1, "#4ade80"],
+];
+export const scoreColor = (score: number) => ramp(SCORE_STOPS, score);
+export const SCORE_GRADIENT_CSS = `linear-gradient(90deg, ${SCORE_STOPS.map(([p, c]) => `${c} ${Math.round(p * 100)}%`).join(", ")})`;
+
+export function neonFill(m: MuscleInput): Fill {
+  if (m.color === "gray") return { fill: UNTRAINED, glow: 0 };
+  const base = scoreColor(m.score);
+  if (m.coverage === "secondary") return { fill: mixOklch(base, UNTRAINED, 0.45), glow: 0.2 * m.score };
+  return { fill: base, glow: 0.35 + 0.65 * m.score };
+}
+
+// Every contract muscle gets a fill; muscles missing from the input are untrained.
+export function neonFills(muscles: MuscleInput[]): Fills {
+  const by = new Map(muscles.map((m) => [m.muscle, m]));
+  return Object.fromEntries(
+    MUSCLE_KEYS.map((k) => [k, by.has(k) ? neonFill(by.get(k)!) : { fill: UNTRAINED, glow: 0 }]),
+  ) as Fills;
+}
+
+export type NeonLayers = {
+  gradients: { id: string; inner: string; outer: string }[];
+  halo: { points: string; fill: string; opacity: number; muscle: MuscleKey }[];
+  shapes: { points: string; muscle: MuscleKey | null; fill: string; solid: string }[]; // fill may be url(#gradient)
+};
+
+export function neonLayers(side: BodySide, fills: Fills, idPrefix: string, glow = true): NeonLayers {
+  const out: NeonLayers = { gradients: [], halo: [], shapes: [] };
+  SHAPES[side].forEach((s, i) => {
+    const f = s.muscle ? fills[s.muscle] : undefined;
+    if (!s.muscle || !f) {
+      out.shapes.push({ points: s.points, muscle: s.muscle, fill: BODY_BASE, solid: BODY_BASE });
+      return;
+    }
+    if (glow && f.glow > 0) {
+      const id = `${idPrefix}-g${i}`;
+      out.gradients.push({ id, inner: mixOklch(f.fill, "#ffffff", 0.35 * f.glow), outer: mixOklch(f.fill, "#000000", 0.25) });
+      out.halo.push({ points: s.points, fill: f.fill, opacity: 0.75 * f.glow, muscle: s.muscle });
+      out.shapes.push({ points: s.points, muscle: s.muscle, fill: `url(#${id})`, solid: f.fill });
+    } else {
+      out.shapes.push({ points: s.points, muscle: s.muscle, fill: f.fill, solid: f.fill });
+    }
+  });
+  return out;
+}

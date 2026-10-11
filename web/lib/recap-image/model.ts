@@ -1,6 +1,7 @@
 // Text and numbers for the recap image (GET /api/recap-image/[token]), derived from the session view. Pure, so the
 // wording is unit-tested without rendering a PNG. Muscle colors come from muscle_scores as stored (never recomputed).
-import { allMuscles, MUSCLES, type Color, type MuscleKey, type SessionView } from "@/lib/contract";
+import { neonFills, type Fills } from "@/lib/body/neon";
+import { allMuscles, MUSCLES, type Color, type SessionView } from "@/lib/contract";
 import { sessionStats } from "@/lib/recap";
 
 export const LEGEND: { color: Color; label: string }[] = [
@@ -20,7 +21,7 @@ export type RecapCard = {
   kicker: string;
   title: string;
   subtitle: string;
-  colors: Partial<Record<MuscleKey, Color>>;
+  fills: Fills; // the neon heat map fills, same as the web page
   stats: { value: string; label: string }[];
   focus: string[]; // up to 3 muscle labels, red first then yellow, lowest score first
   focusKind: "focus" | "solid" | "empty"; // empty = no reps counted, so nothing to praise or fix
@@ -31,7 +32,6 @@ export type RecapCard = {
 export function recapCard(view: SessionView): RecapCard {
   const s = sessionStats(view);
   const muscles = allMuscles(view);
-  const colors = Object.fromEntries(muscles.map((m) => [m.muscle, m.color])) as Record<MuscleKey, Color>;
 
   const rank = (c: Color) => (c === "red" ? 0 : 1);
   const focus = muscles
@@ -48,7 +48,7 @@ export function recapCard(view: SessionView): RecapCard {
     kicker: "BRODIE FOR COACHES",
     title: `${possessive(name)} workout`,
     subtitle,
-    colors,
+    fills: neonFills(muscles),
     stats: [
       { value: `${s.completed}/${s.planned}`, label: "reps counted" },
       { value: `${s.setsDone}/${s.setsPlanned}`, label: "sets" },

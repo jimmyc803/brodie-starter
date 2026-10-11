@@ -1,8 +1,10 @@
 // The 1080 x 1920 recap card as Satori JSX (flexbox only; every multi-child div sets display: flex).
 // Shown as video on the FaceTime call, sent as the iMessage image and used as the recap link's preview.
+import { SCORE_GRADIENT_CSS, UNTRAINED } from "@/lib/body/neon";
+import { VIEWBOX } from "@/lib/body/shapes";
 import { bodySvgDataUri } from "@/lib/body/svg";
 import { COLORS } from "@/lib/contract";
-import { LEGEND, type RecapCard } from "@/lib/recap-image/model";
+import type { RecapCard } from "@/lib/recap-image/model";
 
 export const CARD_WIDTH = 1080;
 export const CARD_HEIGHT = 1920;
@@ -14,14 +16,14 @@ const TEXT = "#fafafa";
 const MUTED = "#a1a1aa";
 const FAINT = "#71717a";
 
-const BODY_W = 410;
-const BODY_H = BODY_W * 2; // body viewBox is 100 x 200
+const BODY_W = 400;
+const BODY_H = Math.round((BODY_W * (VIEWBOX.height + 12)) / 112); // body viewBox plus a 6-unit glow margin
 
 function Body({ side, card }: { side: "front" | "back"; card: RecapCard }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       {/* eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text */}
-      <img src={bodySvgDataUri(side, card.colors, { width: BODY_W })} width={BODY_W} height={BODY_H} />
+      <img src={bodySvgDataUri(side, card.fills, { width: BODY_W, id: side })} width={BODY_W} height={BODY_H} />
       <div style={{ display: "flex", marginTop: 12, fontSize: 30, letterSpacing: 8, color: FAINT }}>
         {side.toUpperCase()}
       </div>
@@ -72,14 +74,18 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
         <Body side="back" card={card} />
       </div>
 
-      {/* Legend */}
-      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "center", marginTop: 36, fontSize: 28, color: MUTED }}>
-        {LEGEND.map((l) => (
-          <div key={l.color} style={{ display: "flex", alignItems: "center", margin: "0 18px 10px" }}>
-            <div style={{ display: "flex", width: 24, height: 24, borderRadius: 6, backgroundColor: COLORS[l.color], marginRight: 12 }} />
-            {l.label}
-          </div>
-        ))}
+      {/* Legend: the score bar (team colors, blended) and "not trained" */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 30, fontSize: 26, color: MUTED }}>
+        <div style={{ display: "flex", width: 640, height: 18, borderRadius: 9, backgroundImage: SCORE_GRADIENT_CSS }} />
+        <div style={{ display: "flex", width: 640, justifyContent: "space-between", marginTop: 10 }}>
+          <div style={{ display: "flex" }}>Needs work</div>
+          <div style={{ display: "flex" }}>Room to improve</div>
+          <div style={{ display: "flex" }}>Solid</div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", marginTop: 14 }}>
+          <div style={{ display: "flex", width: 22, height: 22, borderRadius: 11, backgroundColor: UNTRAINED, marginRight: 12 }} />
+          Not trained this session
+        </div>
       </div>
 
       {/* Stats */}

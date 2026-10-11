@@ -3,6 +3,7 @@
 import {
   allMuscles,
   completedReps,
+  EXERCISES,
   exercisesForMuscle,
   faultyReps,
   GRAY_LABEL,
@@ -12,6 +13,7 @@ import {
   topFaults,
   type Color,
   type Coverage,
+  type ExerciseKey,
   type MuscleKey,
   type SessionView,
 } from "@/lib/contract";
@@ -92,4 +94,15 @@ export function flaggedSets(view: SessionView) {
         out.push({ exercise: ex.name, set_number: s.set_number, completed: s.completed_reps, planned: s.planned_reps, faulty, reason: reasons.join(" · ") });
     }
   return out;
+}
+
+// Order in which muscles light up in the heat map reveal animation: by the first exercise (in workout order) that hit them.
+export function revealOrder(view: SessionView): Partial<Record<MuscleKey, number>> {
+  const order: Partial<Record<MuscleKey, number>> = {};
+  view.exercises.forEach((ex, i) => {
+    const info = EXERCISES[ex.exercise_key as ExerciseKey];
+    if (!info || !completedReps(ex)) return;
+    for (const m of [...info.primary, ...info.secondary]) if (order[m] === undefined) order[m] = i;
+  });
+  return order;
 }

@@ -1,7 +1,7 @@
 import { Heatmap } from "@/components/heatmap/heatmap";
 import { ExerciseCard } from "@/components/recap/exercise-card";
 import type { SessionView } from "@/lib/contract";
-import { muscleDetails, sessionStats } from "@/lib/recap";
+import { muscleDetails, revealOrder, sessionStats } from "@/lib/recap";
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -80,7 +80,7 @@ export function RecapView({ view }: { view: SessionView }) {
       <section className="mt-12">
         <SectionTitle sub="Estimated coverage from the exercises you did">Muscles worked</SectionTitle>
         <div className="rounded-3xl border border-white/5 bg-zinc-900 p-4 sm:p-6">
-          <Heatmap details={muscleDetails(view)} />
+          <Heatmap details={muscleDetails(view)} order={revealOrder(view)} />
         </div>
       </section>
 
