@@ -7,9 +7,8 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFile,callsFile,results=[],acquireBrowser=create=>create()}) {
-  const token='harness_coach_tristan_0001';
-  const coach=(await db.query('insert into coaches(name,share_token) values($1,$2) returning id',['Tristan',token])).rows[0];
-  const client=(await db.query('insert into clients(coach_id,name) values($1,$2) returning id',[coach.id,'Ryan'])).rows[0];
+  let token, coach, client;
+  await db.query('insert into coaches(name,share_token) values($1,$2)', ['Public Demo Coach','demo-tristan-R7mQ2vK9xL4pN8sW1tY3aB5c']);
   const browser=await acquireBrowser(()=>chromium.launch({headless:true}));
   let context;
   try {
@@ -19,7 +18,30 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
   const errors=[]; page.on('pageerror',error=>errors.push(error.message));
   const check=async(name,fn)=>{await fn();results.push({name,status:'passed'});console.log(`PASS browser: ${name}`);};
   try {
-    await page.goto(`${url}/c/${token}/program`);
+    await check('demo has one read-only explanation and working private workspace onboarding',async()=>{
+      const beforeCoaches=(await db.query('select * from coaches order by id')).rows;
+      const beforeClients=(await db.query('select * from clients order by id')).rows;
+      await page.goto(`${url}/c/demo-tristan-R7mQ2vK9xL4pN8sW1tY3aB5c/program`);
+      await expect(page.getByRole('link',{name:'Create private workspace'})).toBeVisible({timeout:90000});
+      await expect(page.getByText(/public demo coach link.*view-only/)).toHaveCount(1);
+      await expect(page.getByLabel('Program PDF')).toHaveCount(0);
+      await expect(page.getByRole('button',{name:'Assign training day',exact:true})).toHaveCount(0);
+      await expect(page.locator('form')).toHaveCount(0);
+      assert.deepEqual((await db.query('select * from coaches order by id')).rows,beforeCoaches);
+      assert.deepEqual((await db.query('select * from clients order by id')).rows,beforeClients);
+      await page.getByRole('link',{name:'Create private workspace'}).click();
+      await page.locator('[name="coach_name"]').fill('Tristan');
+      await page.locator('[name="client_name"]').fill('Ryan');
+      await page.getByRole('button',{name:'Create private workspace',exact:true}).click();
+      await expect(page).toHaveURL(/\/c\/[a-f0-9]{64}\/program$/, {timeout:30000});
+      token=new URL(page.url()).pathname.split('/')[2];
+      coach=(await db.query('select * from coaches where share_token=$1',[token])).rows[0];
+      assert.equal(coach.name,'Tristan');
+      const clients=(await db.query('select * from clients where coach_id=$1',[coach.id])).rows;
+      assert.equal(clients.length,1); client=clients[0]; assert.equal(client.name,'Ryan');
+      assert.match(client.share_token,/^[a-f0-9]{64}$/); assert.notEqual(client.share_token,token);
+      await expect(page.getByText(/public demo coach link.*view-only/)).toHaveCount(0);
+    });
     await expect(page.getByRole('heading',{name:'Upload a program'})).toBeVisible({timeout:90000});
     await check('responsive styled desktop and mobile forms',async()=>{
       const button=page.getByRole('button',{name:'Upload & parse program'});
@@ -35,6 +57,18 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       await page.screenshot({path:path.join(artifacts,'mobile-program.png'),fullPage:true});
       await page.setViewportSize({width:1440,height:1100});
     });
+    await check('private coach can add a client without changing another coach',async()=>{
+      const beforeOtherClients=(await db.query('select * from clients where coach_id<>$1 order by id',[coach.id])).rows;
+      const requestStart=gateway.requests.length;
+      await page.locator('[name="client_name"]').fill('Jordan');
+      await page.getByRole('button',{name:'Add client',exact:true}).click();
+      await expect(page.getByLabel('Client',{exact:true}).getByRole('option',{name:'Jordan',exact:true})).toHaveCount(1);
+      const added=(await db.query('select * from clients where coach_id=$1 and name=$2',[coach.id,'Jordan'])).rows;
+      assert.equal(added.length,1); assert.match(added[0].share_token,/^[a-f0-9]{64}$/);
+      assert.deepEqual((await db.query('select * from clients where coach_id<>$1 order by id',[coach.id])).rows,beforeOtherClients);
+      assert(gateway.requests.slice(requestStart).some(r=>r.method==='POST' && r.path==='/rest/v1/clients'));
+      await page.reload();
+    });
     await check('PDF upload through UI, actual parser, storage and SQL',async()=>{
       await page.getByLabel('Program PDF').setInputFiles(path.join(repoRoot,'db/fixtures/sample_program.pdf'));
       await page.getByRole('button',{name:'Upload & parse program'}).click();
@@ -47,7 +81,9 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       assert.equal(days.length,3);
       const expected=JSON.parse(await readFile(path.join(repoRoot,'db/fixtures/sample_program.expected.json'),'utf8'));
       assert.deepEqual(days.map(d=>({day_number:d.day_number,title:d.title,exercises:d.exercises})),expected.days);
-      await expect(page.getByText('Manual tracking',{exact:true})).toHaveCount(4);
+      await expect(page.getByText('No video tracking',{exact:true})).toHaveCount(4);
+      await expect(page.getByRole('heading',{name:'Exercise support review'})).toBeVisible();
+      await expect(page.getByRole('button',{name:'Copy exercise brief',exact:true})).toBeVisible();
       assert.equal(JSON.parse((await readFile(callsFile,'utf8')).trim()).mode,'success');
       await page.screenshot({path:path.join(artifacts,'program-upload.png'),fullPage:true});
     });
@@ -129,7 +165,7 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
         await writeFile(modeFile,mode);
         await page.getByLabel('Program PDF').setInputFiles(path.join(repoRoot,'db/fixtures/sample_program.pdf'));
         await page.getByRole('button',{name:'Upload & parse program'}).click();
-        await expect(page.locator('form [role=alert]')).toContainText('Program could not be saved. Check the parser');
+        await expect(page.locator('form [role=alert]')).toContainText(mode === 'failure' ? 'PDF reading is temporarily unavailable.' : 'We could not read a complete training plan from this PDF.');
         assert.deepEqual([...gateway.objects.entries()],beforeObjects);
         assert.deepEqual((await db.query('select * from programs order by id')).rows,beforePrograms);
         assert.deepEqual((await db.query('select * from program_days order by id')).rows,beforeDays);
@@ -183,6 +219,37 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       assert.equal(day1.day_number,1);assert.equal(day1.day_title,'Full Body Foundations');
       assert.equal(day1.plan,'squats:10,squats:10,squats:10,pushups:8,pushups:8,pushups:8,lunges:10,lunges:10,bicep curls:12,bicep curls:12,bicep curls:12');
       assert.deepEqual(day1.items,days[0].exercises);
+    });
+    await check('exhausted parser budget makes no paid request and removes temporary PDF',async()=>{
+      await page.reload();
+      const beforePrograms=(await db.query('select * from programs order by id')).rows;
+      const beforeObjects=[...gateway.objects.entries()];
+      const beforeCalls=await readFile(callsFile,'utf8');
+      await db.query("delete from program_request_budget where action='parser'");
+      await db.query("insert into program_request_budget(action,started_at) select 'parser',clock_timestamp() from generate_series(1,60)");
+      try {
+        await page.getByLabel('Program PDF').setInputFiles(path.join(repoRoot,'db/fixtures/sample_program.pdf'));
+        await page.getByRole('button',{name:'Upload & parse program'}).click();
+        await expect(page.locator('form [role=alert]')).toContainText('PDF reading is at its hourly limit');
+        assert.equal(await readFile(callsFile,'utf8'),beforeCalls);
+        assert.deepEqual([...gateway.objects.entries()],beforeObjects);
+        assert.deepEqual((await db.query('select * from programs order by id')).rows,beforePrograms);
+      } finally { await db.query("delete from program_request_budget where action='parser'"); }
+    });
+    await check('exhausted workspace budget prevents new coach and client rows',async()=>{
+      const beforeCoaches=(await db.query('select * from coaches order by id')).rows;
+      const beforeClients=(await db.query('select * from clients order by id')).rows;
+      await db.query("delete from program_request_budget where action='workspace'");
+      await db.query("insert into program_request_budget(action,started_at) select 'workspace',clock_timestamp() from generate_series(1,30)");
+      try {
+        await page.goto(`${url}/coach/start`);
+        await page.locator('[name="coach_name"]').fill('Over budget coach');
+        await page.locator('[name="client_name"]').fill('Over budget client');
+        await page.getByRole('button',{name:'Create private workspace',exact:true}).click();
+        await expect(page.locator('form [role=alert]')).toContainText('Workspace creation is at its hourly limit');
+        assert.deepEqual((await db.query('select * from coaches order by id')).rows,beforeCoaches);
+        assert.deepEqual((await db.query('select * from clients order by id')).rows,beforeClients);
+      } finally { await db.query("delete from program_request_budget where action='workspace'"); }
     });
     await check('unknown coach reveals no upload controls',async()=>{
       await page.goto(`${url}/c/harness_unknown_coach_0001/program`);

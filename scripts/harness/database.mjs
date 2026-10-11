@@ -91,6 +91,7 @@ export async function createDatabaseHarness({ repoRoot = fileURLToPath(new URL('
       grant select, insert, update, delete on all tables in schema public to anon, authenticated, service_role;
     `);
     await client.query(await readFile(join(repoRoot, 'db/migrations/20261011_program_upload.sql'), 'utf8'));
+    await client.query(await readFile(join(repoRoot, 'db/migrations/20261011_program_budgets.sql'), 'utf8'));
     return { port, query: (text, values) => client.query(text, values), connect, stop };
   } catch (error) {
     try { await stop(); }
