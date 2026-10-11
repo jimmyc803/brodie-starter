@@ -34,12 +34,12 @@ function roster(): CoachView {
   return {
     coach: { name: "Tristan" },
     clients: [
-      { id: "ryan", name: "Ryan", next: "Day 2 - Lower body", sessions: [fake("Ryan", 0, "lab-ryan-1", false), fake("Ryan", 2, "lab-ryan-2", true)] },
-      { id: "maya", name: "Maya", next: "Day 4 - Upper body", sessions: [fake("Maya", 1, "lab-maya-1", false)] },
-      { id: "jordan", name: "Jordan", next: "Day 3 - Full body", sessions: [fake("Jordan", 0, "lab-jordan-1", true), fake("Jordan", 2, "lab-jordan-2", true), fake("Jordan", 4, "lab-jordan-3", true)] },
-      { id: "priya", name: "Priya", next: "Day 7 - Lower body", sessions: [fake("Priya", 2, "lab-priya-1", true)] },
-      { id: "sam", name: "Sam", next: null, sessions: [fake("Sam", 3, "lab-sam-1", true)] },
-      { id: "leo", name: "Leo", next: "Day 3 - Full body", sessions: [fake("Leo", 9, "lab-leo-1", false)] },
+      { id: "ryan", name: "Ryan", next: "Day 2 - Lower body", link: null, sessions: [fake("Ryan", 0, "lab-ryan-1", false), fake("Ryan", 2, "lab-ryan-2", true)] },
+      { id: "maya", name: "Maya", next: "Day 4 - Upper body", link: null, sessions: [fake("Maya", 1, "lab-maya-1", false)] },
+      { id: "jordan", name: "Jordan", next: "Day 3 - Full body", link: null, sessions: [fake("Jordan", 0, "lab-jordan-1", true), fake("Jordan", 2, "lab-jordan-2", true), fake("Jordan", 4, "lab-jordan-3", true)] },
+      { id: "priya", name: "Priya", next: "Day 7 - Lower body", link: null, sessions: [fake("Priya", 2, "lab-priya-1", true)] },
+      { id: "sam", name: "Sam", next: null, link: null, sessions: [fake("Sam", 3, "lab-sam-1", true)] },
+      { id: "leo", name: "Leo", next: "Day 3 - Full body", link: null, sessions: [fake("Leo", 9, "lab-leo-1", false)] },
     ],
   };
 }

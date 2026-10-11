@@ -55,7 +55,7 @@ Run:
   GEMINI_API_KEY=... .venv/bin/python -m facetime.worker --voice gemini dev                                      # + GEMINI_LIVE_MODEL, GEMINI_VOICE
 The flags before the LiveKit subcommand are ours; `dev`, `start`, `connect`, `download-files` and their options are the LiveKit Agents CLI's.
 """
-import argparse, asyncio, collections, json, logging, os, sys, threading, time
+import argparse, asyncio, collections, json, logging, os, re, sys, threading, time
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli
 from facetime import DATA, AUDIO_TRACK_NAME
@@ -140,6 +140,22 @@ def read_plan_text(path):
         return None
 
 
+# Client calls from the web app's /go/<client link> join a room named client-<clients.id>-<random> (web/lib/livekit.ts):
+# that call loads this client's active assignment and saves the session to them. Any other room uses DEMO_CLIENT_ID as before.
+CLIENT_ROOM_RE = re.compile(r'^client-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-', re.I)
+
+
+def client_for_room(room_name):
+    """The clients.id encoded in a client call's room name, else None."""
+    m = CLIENT_ROOM_RE.match(room_name or '')
+    return m.group(1).lower() if m else None
+
+
+def call_client_id(a):
+    """Whose call this is: the room's client, else the DEMO_CLIENT_ID env (single-client demo setups)."""
+    return getattr(a, 'client_id', None) or os.environ.get('DEMO_CLIENT_ID')
+
+
 def resolve_mode(a, *, load_client=True):
     """--plan, else PLAN, else client assignment, else starter/demo; --exercise and --auto override.
     load_client=False defers assignment resolution for registration/prewarm (never chooses a fallback).
@@ -153,12 +169,12 @@ def resolve_mode(a, *, load_client=True):
         if a.exercise: a.plan = None
         elif getattr(a, 'auto', False): a.plan = None
         else:
-            if not a.plan and not os.environ.get('PLAN') and os.environ.get('DEMO_CLIENT_ID'):
+            if not a.plan and not os.environ.get('PLAN') and call_client_id(a):
                 # Resolve on each call, never while registering or warming a process.
                 # A missing assignment must not turn into an unrelated demo workout.
                 if load_client:
                     from facetime.plan_loader import AssignmentUnavailable, load_assignment
-                    a.assignment = load_assignment(os.environ['DEMO_CLIENT_ID'])
+                    a.assignment = load_assignment(call_client_id(a))
                     if not a.assignment:
                         raise AssignmentUnavailable('Client assignment unavailable; check the active day and database connection.')
                     a.plan = a.assignment['plan']
@@ -188,12 +204,14 @@ def read_plan_file(path):
         return None
 
 
-def load_args(*, load_client=True):
-    """The flags main() parsed, from the environment (a job process is a fresh interpreter); defaults when run without main()."""
+def load_args(*, load_client=True, client_id=None):
+    """The flags main() parsed, from the environment (a job process is a fresh interpreter); defaults when run without main().
+    client_id: the client this call belongs to (client_for_room), else DEMO_CLIENT_ID applies."""
     a = build_parser().parse_args([])
     try: d = json.loads(os.environ.get(ARGS_ENV) or '{}')
     except ValueError: d = {}
     for k, v in d.items(): setattr(a, k, v)
+    a.client_id = client_id
     return resolve_mode(a, load_client=load_client)
 
 
@@ -238,7 +256,10 @@ async def entrypoint(ctx: JobContext):
     from facetime.plan_loader import AssignmentUnavailable
     try:
         # Re-read the active assignment after prewarm; only the model/bank are cached.
-        a = await asyncio.to_thread(load_args)
+        room_name = getattr(getattr(getattr(ctx, 'job', None), 'room', None), 'name', None)
+        room_client = client_for_room(room_name)
+        if room_client: print(f'[worker] client call: room {room_name!r} -> client {room_client}', flush=True)
+        a = await asyncio.to_thread(load_args, client_id=room_client) if room_client else await asyncio.to_thread(load_args)
     except AssignmentUnavailable:
         log.warning('Client assignment unavailable; refusing to start a demo workout')
         ctx.shutdown(reason='client assignment unavailable')
@@ -428,9 +449,9 @@ class CoachJob:
         extra = getattr(self.event_writer, 'extra', None)                   # the JSONL lines carry the call id from the bind on (null before it)
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
-        if self.recap is None and not self.warm and not self.voice_mode and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
+        if self.recap is None and not self.warm and not self.voice_mode and self.a.plan and call_client_id(self.a):
             from facetime.call_recap import CallRecap
-            self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None))
+            self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None), client_id=call_client_id(self.a))
             self.recap.start_task = asyncio.create_task(self.recap.start(), name='session-start')
         if self.voice_mode:
             if not self.session_opened and self.open_task is None:
