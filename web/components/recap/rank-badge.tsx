@@ -1,52 +1,40 @@
 import { RANKS, type SessionRank } from "@/lib/ranks";
 
-// Today's rank: the big shareable badge on the recap. Text only for now; Brodie tier art slots in at `art`.
+// Today's rank on the recap: one compact card, name in the tier colour, the ladder underneath. Tier art slots in later.
 export function RankBadge({ r }: { r: SessionRank }) {
   const { rank, next, skipped } = r;
-  const ascended = rank.tier === RANKS.length; // top of the ladder (Godmode Griffin)
   const pts = r.score === null ? null : Math.floor(r.score * 100); // floor, so points never reach the next tier before the rank does
   return (
-    <section
-      aria-label="Today's rank"
-      className="relative mt-8 overflow-hidden rounded-3xl border bg-zinc-900 px-5 py-6 text-center"
-      style={{ borderColor: `${rank.color}55`, boxShadow: ascended ? `0 0 60px ${rank.color}55` : `0 0 40px ${rank.color}22` }}
-    >
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 -top-16 mx-auto h-40 w-72 rounded-full blur-3xl"
-        style={{ background: `${rank.color}${ascended ? "40" : "26"}` }}
-      />
-      <div className="relative">
-        <p className="text-xs font-semibold uppercase tracking-[0.25em] text-zinc-400">Today&apos;s rank</p>
-        <p
-          className="mt-2 text-4xl font-black uppercase leading-none tracking-tight sm:text-5xl"
-          style={{ color: rank.color, textShadow: ascended ? `0 0 24px ${rank.color}` : undefined }}
-        >
-          {rank.name}
+    <section aria-label="Today's rank" className="rounded-2xl border border-zinc-800 bg-zinc-900 px-5 py-4">
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-sm text-zinc-400">Today&apos;s rank</p>
+        <p className="text-xs tabular-nums text-zinc-500">
+          {skipped ? "No reps counted" : `Tier ${rank.tier} of ${RANKS.length}${pts !== null ? ` · ${pts} pts` : ""}`}
         </p>
-        <p className="mt-2 text-sm text-zinc-400">
-          {skipped
-            ? "No reps counted this session. Every Brodie starts somewhere."
-            : `Tier ${rank.tier} of ${RANKS.length}${pts !== null ? ` · ${pts} pts` : ""}${next ? ` · ${Math.max(1, Math.round(next.minScore * 100) - (pts ?? 0))} to ${next.name}` : " · top of the ladder"}`}
-        </p>
-
-        {/* the ladder: every tier as a pip, earned ones lit */}
-        <ol className="mx-auto mt-4 flex max-w-xs items-center justify-between gap-1" aria-label="Rank ladder">
-          {RANKS.map((x) => {
-            const earned = !skipped && x.tier <= rank.tier;
-            const current = !skipped && x.key === rank.key;
-            return (
-              <li key={x.key} className="flex flex-1 flex-col items-center" title={x.name}>
-                <span
-                  className="block h-2 w-full rounded-full"
-                  style={{ background: earned ? x.color : "#27272a", boxShadow: current ? `0 0 10px ${x.color}` : undefined }}
-                />
-              </li>
-            );
-          })}
-        </ol>
-        <p className="mt-3 text-[11px] text-zinc-500">Based on form and completion today, not strength.</p>
       </div>
+      <p className="mt-1 text-2xl font-bold tracking-tight" style={{ color: skipped ? undefined : rank.color }}>
+        {skipped ? "Every Brodie starts somewhere" : rank.name}
+      </p>
+
+      {/* the ladder: every tier as a pip, earned ones lit */}
+      <ol className="mt-3 flex items-center gap-1" aria-label="Rank ladder">
+        {RANKS.map((x) => {
+          const earned = !skipped && x.tier <= rank.tier;
+          return (
+            <li key={x.key} className="flex-1" title={x.name}>
+              <span className="block h-1.5 w-full rounded-full" style={{ background: earned ? x.color : "#27272a" }} />
+            </li>
+          );
+        })}
+      </ol>
+      <p className="mt-2 text-xs text-zinc-500">
+        {!skipped && next
+          ? `${Math.max(1, Math.round(next.minScore * 100) - (pts ?? 0))} pts to ${next.name}. `
+          : !skipped
+            ? "Top of the ladder. "
+            : ""}
+        Based on form and completion, not strength.
+      </p>
     </section>
   );
 }
