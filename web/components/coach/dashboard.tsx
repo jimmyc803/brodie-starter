@@ -1,4 +1,6 @@
 import type { CoachView } from "@/lib/coach-view";
+import Link from "next/link";
+import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
 import { flaggedSets } from "@/lib/recap";
 import { ClientCard } from "@/components/coach/client-card";
 import { SessionDetail } from "@/components/coach/session-detail";
@@ -28,6 +30,9 @@ export function CoachDashboard({ view, token, selected }: { view: CoachView; tok
           </span>
           <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Coach {view.coach.name}</h1>
           <p className="mt-1 text-sm text-zinc-400">How your clients&apos; workouts with Brodie went.</p>
+          <Link className="mt-4 inline-flex rounded-full bg-teal-800 px-6 py-3 text-sm font-semibold text-white" href={`/c/${encodeURIComponent(token === "demo" ? SAMPLE_COACH_TOKEN : token)}/program`}>
+            Upload &amp; assign a program
+          </Link>
         </div>
         <ul className="flex flex-wrap gap-2">
           <Chip value={view.clients.length} label={view.clients.length === 1 ? "client" : "clients"} />

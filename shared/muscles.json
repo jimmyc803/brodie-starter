@@ -8,6 +8,7 @@
     "hamstrings": {"label": "Hamstrings",  "view": "back"},
     "calves":     {"label": "Calves",      "view": "back"},
     "adductors":  {"label": "Adductors",   "view": "front"},
+    "abductors":  {"label": "Abductors",   "view": "both"},
     "chest":      {"label": "Chest",       "view": "front"},
     "front_delts":{"label": "Front delts", "view": "front"},
     "triceps":    {"label": "Triceps",     "view": "back"},
@@ -16,7 +17,7 @@
     "abs":        {"label": "Abs",         "view": "front"},
     "obliques":   {"label": "Obliques",    "view": "front"},
     "lats":       {"label": "Lats",        "view": "back"},
-    "upper_back": {"label": "Upper back",  "view": "back"},
+    "traps":      {"label": "Traps",       "view": "both"},
     "rear_delts": {"label": "Rear delts",  "view": "back"}
   },
 

@@ -76,7 +76,7 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
           padding: "14px 34px",
           borderRadius: 999,
           border: `3px solid ${card.rank.color}`,
-          boxShadow: `0 0 ${card.rank.id === "ascended" ? 60 : 30}px ${card.rank.color}66`,
+          boxShadow: `0 0 ${card.rank.tier === 8 ? 60 : 30}px ${card.rank.color}66`,
           fontSize: 40,
           letterSpacing: 4,
           color: card.rank.color,

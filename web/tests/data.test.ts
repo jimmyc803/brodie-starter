@@ -37,7 +37,7 @@ describe("contract helpers", () => {
     expect(faultText("alternating forward lunges - leaning forward")).toBe("Keep chest up");
     expect(faultText("bicep curls - swinging")).toBe("Swinging"); // no cue yet: label text
   });
-  it("covers all 15 muscles, untrained ones gray", () => {
+  it("covers every muscle, untrained ones gray", () => {
     const view = sampleSessionView();
     view.muscles = view.muscles.filter((m) => m.muscle !== "lats");
     const all = allMuscles(view);

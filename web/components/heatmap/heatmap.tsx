@@ -7,7 +7,9 @@ import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
 import type { Color, MuscleKey } from "@/lib/contract";
 import { muscleRank } from "@/lib/ranks";
 import type { MuscleDetail } from "@/lib/recap";
+import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
+import { RankBadge } from "@/components/heatmap/rank-badge";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
 // score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows.
@@ -95,13 +97,13 @@ function revealTimeline(details: MuscleDetail[], order?: Partial<Record<MuscleKe
 }
 
 function RevealCaption({ phase, id }: { phase: "idle" | "main" | "helpers" | "done"; id: string }) {
-  const show = phase === "main" || phase === "helpers";
+  const show = phase !== "idle"; // stays on screen once the reveal has run
   return (
     <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium" aria-hidden>
       <span className={`flex items-center gap-1.5 transition-opacity duration-300 ${show ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="main" id={`${id}cm`} /> Main muscles
       </span>
-      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" ? "opacity-100" : "opacity-0"}`}>
+      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" || phase === "done" ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="helper" id={`${id}ch`} /> + helpers
       </span>
     </div>
@@ -188,9 +190,8 @@ function Body({
   );
 }
 
-const COLOR_WORD: Record<Color, string> = { green: "Solid", yellow: "Room to improve", red: "Needs work", gray: "Not trained" };
-
 function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: string; onClose: () => void }) {
+  const rank = detail.color !== "gray" ? rankForScore(detail.score) : null;
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -212,14 +213,19 @@ function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: str
             ) : null;
           })()}
         </div>
-        <div className="text-right">
-          {detail.color !== "gray" ? (
-            <>
+        {rank ? (
+          <div className="flex items-center gap-2.5">
+            <RankBadge rank={rank} className="h-12 w-auto shrink-0" />
+            <div className="text-right">
               <div className="text-2xl font-bold tabular-nums">{Math.round(detail.score * 100)}</div>
-              <div className="text-xs text-zinc-400">{COLOR_WORD[detail.color]}</div>
-            </>
-          ) : null}
-        </div>
+              <div className="text-xs font-semibold" style={{ color: rank.color }}>
+                {rank.name}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-right text-xs text-zinc-400">Not trained</div>
+        )}
       </div>
       {detail.exercises.length ? (
         <ul className="mt-3 space-y-2">

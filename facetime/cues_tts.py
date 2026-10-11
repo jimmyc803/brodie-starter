@@ -17,6 +17,7 @@ import numpy as np
 from facetime import CUES_DIR, CUES_DIR_GEMINI, SAMPLE_RATE
 from rtcoach.coach import CUES, PRAISE, COUNT_WORDS
 from rtcoach.exmap import LR2CLF
+from shared.scoring import RULES, plan_name
 
 MANIFEST = os.path.join(CUES_DIR, 'manifest.json')      # openai bank; the gemini bank has its own
 SILENCE_DBFS = -40.0
@@ -40,8 +41,8 @@ def number_word(n):
     return 'thirty'
 
 def exercise_names():
-    """Every exercise name the coach can say: the LR2CLF keys plus the plain demo names."""
-    return sorted(set(LR2CLF) | {'squats', 'pushups', 'lunges', 'jumping jacks'})
+    """Classifier names plus the canonical names used by assigned program days."""
+    return sorted(set(LR2CLF) | {plan_name(key) for key in RULES['exercises']})
 
 def vocabulary():
     """Every string the coach can say. Order is stable (sorted) so the manifest diff is readable."""
