@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:parser": "node --conditions=react-server --test tests/parseProgram.test.ts",
+    "parse:program": "node --conditions=react-server --env-file-if-exists=../.env.local --env-file-if-exists=.env.local scripts/parse-program.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
