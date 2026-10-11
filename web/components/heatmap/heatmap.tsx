@@ -4,7 +4,7 @@ import { useEffect, useId, useState } from "react";
 
 import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
-import type { Color, MuscleKey } from "@/lib/contract";
+import type { MuscleKey } from "@/lib/contract";
 import type { MuscleDetail } from "@/lib/recap";
 import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
