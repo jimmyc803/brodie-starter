@@ -6,6 +6,7 @@ import { readOnlyCoachToken, READ_ONLY_MESSAGE, validToken } from '@/lib/program
 import { currentAssignments } from '@/lib/currentAssignments';
 import type { ProgramExercise } from '@/lib/parseProgram';
 import { UploadForm, AssignForm } from './forms';
+import { Surface } from '@/components/ui/apple';
 import { SiteHeader } from '@/components/site-header';
 
 export const metadata = { title: 'Training programs | Brodie', robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
@@ -17,7 +18,7 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   if (!validToken(token)) notFound();
   let db;
   try { db = supabaseServer(); } catch {
-    return <p className="rounded-2xl border border-zinc-800 bg-zinc-900 p-8">Program service is not configured yet. Add the server credentials to enable uploads and assignments.</p>;
+    return <p className="m-6 rounded-[18px] bg-surface p-8 text-ink-2">Program service is not configured yet. Add the server credentials to enable uploads and assignments.</p>;
   }
   const coachResult = await db.from('coaches').select('id,name').eq('share_token', token).maybeSingle();
   if (coachResult.error) return <p role="alert">Program service is temporarily unavailable. Please retry.</p>;
@@ -47,26 +48,29 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   const titles = new Map(programs.map(p => [p.id, p.title]));
   const dayLabels = days.map(day => ({ id: day.id, label: `${titles.get(day.program_id)} · Day ${day.day_number}: ${day.title}` }));
   const current = currentAssignments(clients, dayLabels, assignments);
+  const assignable = days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }));
   return <>
-    <SiteHeader context={<Link href={`/c/${encodeURIComponent(token)}`} className="hover:text-zinc-100">← Coach {coach.name}</Link>} />
-    <header className="mb-8 mt-8"><h1 className="text-3xl font-bold tracking-tight text-zinc-50">Programs</h1><p className="mt-1 max-w-2xl text-sm text-zinc-400">Upload a program PDF, check the days Brodie read from it, then pick what each client trains on their next call.</p>{readOnlyCoachToken(token) ? <p role="note" className="mt-4 max-w-2xl rounded-xl border border-yellow-400/20 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-100">{READ_ONLY_MESSAGE}</p> : null}</header>
-    <div className="grid gap-6 md:grid-cols-2">
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 1</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Upload a program</h2><UploadForm token={token} /></section>
-      <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 2</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }))} /></section>
+    <SiteHeader context={<Link href={`/c/${encodeURIComponent(token)}`} className="hover:text-ink">← Coach {coach.name}</Link>} />
+    <div className="mx-auto max-w-[980px] px-5 pb-16 sm:px-6">
+    <header className="mb-8 mt-10"><h1 className="t-display text-ink">Programs</h1><p className="mt-2 max-w-2xl t-body text-ink-2">Upload a program PDF, check the days Brodie read from it, then pick what each client trains on their next call.</p>{readOnlyCoachToken(token) ? <p role="note" className="mt-4 max-w-2xl rounded-[14px] bg-fill px-4 py-3 t-callout text-warning">{READ_ONLY_MESSAGE}</p> : null}</header>
+    <div className="grid gap-5 md:grid-cols-2">
+      <Surface as="section" className="p-6"><p className="t-footnote text-ink-3">Step 1</p><h2 className="mb-5 mt-0.5 t-title-2 text-ink">Upload a program</h2><UploadForm token={token} /></Surface>
+      <Surface as="section" className="p-6"><p className="t-footnote text-ink-3">Step 2</p><h2 className="mb-5 mt-0.5 t-title-2 text-ink">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={assignable} /></Surface>
     </div>
-    <section aria-labelledby="current-assignments-title" className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
-      <h2 id="current-assignments-title" className="text-lg font-semibold text-zinc-50">Current assignments</h2>
-      <p className="mt-0.5 text-sm text-zinc-500">The training day each client will load on their next call.</p>
-      {assignmentError ? <p role="alert" className="mt-4 text-sm text-red-400">Current assignments could not be loaded. Refresh to retry.</p>
-        : current.length ? <ul className="mt-5 divide-y divide-zinc-800">{current.map(client => <li key={client.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6"><span className="font-medium text-zinc-100">{client.name}</span><span className="text-sm text-zinc-400">{client.assignment}</span></li>)}</ul>
-          : <p className="mt-4 text-sm text-zinc-400">No clients yet. Add a client to this coach account to assign a day.</p>}
+    <Surface as="section" className="mt-5 p-6">
+      <h2 id="current-assignments-title" className="t-title-2 text-ink">Current assignments</h2>
+      <p className="mt-0.5 t-callout text-ink-2">The training day each client will load on their next call.</p>
+      {assignmentError ? <p role="alert" className="mt-4 t-callout text-critical">Current assignments could not be loaded. Refresh to retry.</p>
+        : current.length ? <ul className="mt-4 divide-y divide-hairline">{current.map(client => <li key={client.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6"><span className="t-headline text-ink">{client.name}</span><span className="t-callout text-ink-2">{client.assignment}</span></li>)}</ul>
+          : <p className="mt-4 t-callout text-ink-2">No clients yet. Add a client to this coach account to assign a day.</p>}
+    </Surface>
+    <section className="mt-12"><h2 className="t-title text-ink">Program library</h2><p className="mt-1 max-w-3xl t-callout text-ink-2">Review the parsed prescriptions before assigning. Manual exercises stay in the plan; Brodie counts supported movements. Days with only manual exercises cannot be assigned to a Brodie call.</p>
+      {!programs.length && <div className="mt-5 rounded-[18px] border border-dashed border-hairline p-10 text-center t-callout text-ink-2">Your first training plan starts with a PDF.</div>}
+      {programs.map(program => <article key={program.id} className="mt-6"><h3 className="t-title-2 text-ink">{program.title}</h3><div className="mt-4 grid gap-5 lg:grid-cols-3">{days.filter(d => d.program_id === program.id).map(day => <div key={day.id}><p className="mb-2 px-1 t-footnote text-ink-2">Day {day.day_number} · {day.title}</p><Surface as="div" className="overflow-hidden"><ul className="divide-y divide-hairline">{day.exercises.map((exercise, i) => <li key={i} className="px-4 py-3"><div className="flex items-start justify-between gap-3"><span className="t-headline text-ink">{exercise.name}</span><span className="shrink-0 t-callout tabular-nums text-ink-2">{exercise.sets} × {exercise.reps === 0 ? 'timed' : exercise.reps}</span></div><span className={`mt-1 inline-block t-caption ${exercise.supported ? 'text-positive' : 'text-ink-3'}`}>{exercise.supported ? 'Brodie counts' : 'Manual tracking'}</span>{exercise.notes && <p className="mt-1 t-footnote text-ink-3">{exercise.notes}</p>}</li>)}</ul></Surface></div>)}</div></article>)}
     </section>
-    <section className="mt-10"><h2 className="text-lg font-semibold text-zinc-50">Program library</h2><p className="mt-0.5 max-w-3xl text-sm text-zinc-500">Review the parsed prescriptions before assigning. Manual exercises stay in the plan; Brodie counts supported movements. Days with only manual exercises cannot be assigned to a Brodie call.</p>
-      {!programs.length && <div className="mt-5 rounded-2xl border border-dashed border-zinc-800 p-10 text-center text-zinc-500">Your first training plan starts with a PDF.</div>}
-      {programs.map(program => <article key={program.id} className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><h3 className="text-lg font-semibold text-zinc-50">{program.title}</h3><div className="mt-5 grid gap-5 lg:grid-cols-3">{days.filter(d => d.program_id === program.id).map(day => <div key={day.id} className="rounded-xl border border-zinc-800 bg-zinc-950/40 p-4"><p className="text-xs text-zinc-500">Day {day.day_number}</p><h4 className="mt-0.5 font-semibold text-zinc-100">{day.title}</h4><ul className="mt-4 space-y-4">{day.exercises.map((exercise, i) => <li key={i} className="text-sm"><div className="flex items-start justify-between gap-3"><span className="font-medium text-zinc-200">{exercise.name}</span><span className="shrink-0 tabular-nums text-zinc-400">{exercise.sets} × {exercise.reps === 0 ? 'timed' : exercise.reps}</span></div><span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${exercise.supported ? 'bg-green-500/10 text-green-300' : 'bg-zinc-800 text-zinc-400'}`}>{exercise.supported ? 'Brodie counts' : 'Manual tracking'}</span>{exercise.notes && <p className="mt-1 text-xs leading-relaxed text-zinc-500">{exercise.notes}</p>}</li>)}</ul></div>)}</div></article>)}
-    </section>
+    </div>
   </>;
 }
 export default function ProgramPage({ params }: { params: Promise<{ token: string }> }) {
-  return <main className="min-h-screen bg-zinc-950 px-4 pb-12 pt-5 text-zinc-100 sm:px-6 sm:pt-8"><div className="mx-auto max-w-6xl"><Suspense fallback={<p role="status" className="text-zinc-400">Loading your training programs…</p>}><ProgramContent params={params} /></Suspense></div></main>;
+  return <main className="min-h-screen bg-canvas text-ink"><Suspense fallback={<p role="status" className="p-6 text-ink-2">Loading your training programs…</p>}><ProgramContent params={params} /></Suspense></main>;
 }

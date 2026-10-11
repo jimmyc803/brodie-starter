@@ -10,12 +10,12 @@ import type { RecapCard } from "@/lib/recap-image/model";
 export const CARD_WIDTH = 1080;
 export const CARD_HEIGHT = 1920;
 
-const BG = "#09090b";
-const PANEL = "#18181b";
-const BORDER = "#27272a";
-const TEXT = "#fafafa";
-const MUTED = "#a1a1aa";
-const FAINT = "#71717a";
+const BG = "#000000";
+const PANEL = "#1c1c1e";
+const TEXT = "#f5f5f7";
+const MUTED = "#a1a1a6";
+const FAINT = "#86868b";
+const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif';
 
 const BODY_W = 370;
 const BODY_H = Math.round((BODY_W * (VIEWBOX.height + 12)) / 112); // body viewBox plus a 6-unit glow margin
@@ -25,8 +25,8 @@ function Body({ side, card }: { side: "front" | "back"; card: RecapCard }) {
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       {/* eslint-disable-next-line @next/next/no-img-element, jsx-a11y/alt-text */}
       <img src={bodySvgDataUri(side, card.fills, { width: BODY_W, id: side })} width={BODY_W} height={BODY_H} />
-      <div style={{ display: "flex", marginTop: 12, fontSize: 30, letterSpacing: 8, color: FAINT }}>
-        {side.toUpperCase()}
+      <div style={{ display: "flex", marginTop: 12, fontSize: 28, color: FAINT }}>
+        {side === "front" ? "Front" : "Back"}
       </div>
     </div>
   );
@@ -34,7 +34,7 @@ function Body({ side, card }: { side: "front" | "back"; card: RecapCard }) {
 
 export function RecapCardImage({ card }: { card: RecapCard }) {
   const accent = { focus: COLORS.red, solid: COLORS.green, empty: COLORS.gray }[card.focusKind];
-  const kicker = { focus: "FOCUS NEXT", solid: "NICE WORK", empty: "NO REPS COUNTED" }[card.focusKind];
+  const kicker = { focus: "Focus next", solid: "Nice work", empty: "No reps counted" }[card.focusKind];
   return (
     <div
       style={{
@@ -44,13 +44,13 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
         flexDirection: "column",
         alignItems: "center",
         backgroundColor: BG,
-        backgroundImage: "radial-gradient(circle at 50% 42%, #1c1c22 0%, #09090b 62%)",
+        fontFamily: FONT,
         color: TEXT,
         padding: "64px 64px 48px",
       }}
     >
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", fontSize: 30, letterSpacing: 10, color: COLORS.green }}>
+      <div style={{ display: "flex", alignItems: "center", fontSize: 32, fontWeight: 600, color: COLORS.green }}>
         <div style={{ display: "flex", width: 16, height: 16, borderRadius: 8, backgroundColor: COLORS.green, marginRight: 18 }} />
         {card.kicker}
       </div>
@@ -61,12 +61,14 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
           fontSize: card.title.length <= 15 ? 120 : card.title.length <= 19 ? 100 : 80,
           lineHeight: 1.05,
           letterSpacing: -3,
+          fontWeight: 700,
+          color: "#ffffff",
           textAlign: "center",
         }}
       >
         {card.title}
       </div>
-      <div style={{ display: "flex", marginTop: 16, fontSize: 38, color: MUTED, textAlign: "center" }}>{card.subtitle}</div>
+      <div style={{ display: "flex", marginTop: 16, fontSize: 38, color: MUTED, letterSpacing: -0.5, textAlign: "center" }}>{card.subtitle}</div>
 
       {/* Today's rank */}
       <div
@@ -78,11 +80,11 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
           borderRadius: 999,
           border: `3px solid ${card.rank.color}`,
           fontSize: 40,
-          letterSpacing: 4,
+          fontWeight: 600,
           color: card.rank.color,
         }}
       >
-        <div style={{ display: "flex", fontSize: 24, letterSpacing: 6, color: MUTED, marginRight: 20 }}>RANK</div>
+        <div style={{ display: "flex", fontSize: 26, color: MUTED, marginRight: 20 }}>Rank</div>
         {card.rank.name.toUpperCase()}
       </div>
 
@@ -122,13 +124,12 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
               padding: "28px 0 24px",
               marginLeft: i ? 20 : 0,
               backgroundColor: PANEL,
-              border: `2px solid ${BORDER}`,
               borderRadius: 28,
             }}
           >
-            <div style={{ display: "flex", fontSize: 76, letterSpacing: -2, lineHeight: 1 }}>{s.value}</div>
-            <div style={{ display: "flex", marginTop: 14, fontSize: 26, letterSpacing: 3, color: MUTED }}>
-              {s.label.toUpperCase()}
+            <div style={{ display: "flex", fontSize: 76, letterSpacing: -2, lineHeight: 1, fontWeight: 700, color: "#ffffff" }}>{s.value}</div>
+            <div style={{ display: "flex", marginTop: 14, fontSize: 28, color: MUTED }}>
+              {s.label}
             </div>
           </div>
         ))}
@@ -144,15 +145,14 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
           marginTop: 20,
           padding: "26px 36px 30px",
           backgroundColor: PANEL,
-          border: `2px solid ${BORDER}`,
           borderRadius: 28,
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", fontSize: 26, letterSpacing: 4, color: accent }}>
+        <div style={{ display: "flex", alignItems: "center", fontSize: 28, fontWeight: 600, color: accent }}>
           <div style={{ display: "flex", width: 14, height: 14, borderRadius: 7, backgroundColor: accent, marginRight: 14 }} />
           {kicker}
         </div>
-        <div style={{ display: "flex", marginTop: 12, fontSize: card.focusLine.length > 34 ? 42 : 50, textAlign: "center" }}>
+        <div style={{ display: "flex", marginTop: 12, fontSize: card.focusLine.length > 34 ? 42 : 50, fontWeight: 600, letterSpacing: -1, textAlign: "center" }}>
           {card.focusLine}
         </div>
       </div>
