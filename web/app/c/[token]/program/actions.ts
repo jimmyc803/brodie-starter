@@ -1,12 +1,19 @@
 'use server';
 import { revalidatePath } from 'next/cache';
-import { parseProgram } from '@/lib/parseProgram';
+import { parseProgram, ProgramParseError } from '@/lib/parseProgram';
+import { parserFailureMessage } from '@/lib/programSupport';
 import { programStore } from '@/lib/programStore';
-import { assignProgramDay, uploadProgram, type ActionState } from '@/lib/programWorkflow';
+import { assignProgramDay, uploadProgram, WorkflowError, type ActionState } from '@/lib/programWorkflow';
 
 export async function uploadAction(token: string, _previous: ActionState, form: FormData): Promise<ActionState> {
   let state: ActionState;
-  try { state = await uploadProgram(programStore(), parseProgram, token, form.get('pdf')); }
+  try { state = await uploadProgram(programStore(), async bytes => {
+    try { return await parseProgram(bytes); }
+    catch (error) {
+      if (error instanceof ProgramParseError) throw new WorkflowError(parserFailureMessage(error.code));
+      throw error;
+    }
+  }, token, form.get('pdf')); }
   catch { return { ok: false, message: 'Program service is not configured yet. Please try again once setup is complete.' }; }
   if (state.ok) revalidatePath(`/c/${encodeURIComponent(token)}/program`);
   return state;
