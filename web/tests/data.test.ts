@@ -94,3 +94,11 @@ describe("body svg (neon)", () => {
     expect(s.glow).toBeLessThan(p.glow);
   });
 });
+
+describe("public demo coach link", () => {
+  it("the sample coach token is view-only for program upload and assign", async () => {
+    const { readOnlyCoachToken } = await import("@/lib/programWorkflow");
+    expect(readOnlyCoachToken(SAMPLE_COACH_TOKEN)).toBe(true);
+    expect(readOnlyCoachToken("some-private-coach-token-1234")).toBe(false);
+  });
+});

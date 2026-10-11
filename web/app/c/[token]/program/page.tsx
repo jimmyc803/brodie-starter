@@ -2,7 +2,7 @@ import { Suspense } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { supabaseServer } from '@/lib/supabase/server';
-import { validToken } from '@/lib/programWorkflow';
+import { readOnlyCoachToken, READ_ONLY_MESSAGE, validToken } from '@/lib/programWorkflow';
 import { currentAssignments } from '@/lib/currentAssignments';
 import type { ProgramExercise } from '@/lib/parseProgram';
 import { UploadForm, AssignForm } from './forms';
@@ -48,7 +48,7 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   const current = currentAssignments(clients, dayLabels, assignments);
   return <>
     <Link href={`/c/${encodeURIComponent(token)}`} className="text-sm text-teal-800 hover:underline">← Coach dashboard</Link>
-    <header className="my-8"><p className="text-xs font-semibold uppercase tracking-[.2em] text-teal-700">Brodie for coaches / {coach.name}</p><h1 className="mt-3 text-4xl font-semibold tracking-tight">A plan. A day. A stronger client.</h1><p className="mt-4 max-w-2xl text-slate-600">Turn your program into guided training. Upload a PDF, review its days, and choose what your client trains next.</p></header>
+    <header className="my-8"><p className="text-xs font-semibold uppercase tracking-[.2em] text-teal-700">Brodie for coaches / {coach.name}</p><h1 className="mt-3 text-4xl font-semibold tracking-tight">A plan. A day. A stronger client.</h1><p className="mt-4 max-w-2xl text-slate-600">Turn your program into guided training. Upload a PDF, review its days, and choose what your client trains next.</p>{readOnlyCoachToken(token) ? <p role="note" className="mt-4 max-w-2xl rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">{READ_ONLY_MESSAGE}</p> : null}</header>
     <div className="grid gap-6 md:grid-cols-2">
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><p className="text-xs font-semibold text-teal-700">01 / BUILD THE PLAN</p><h2 className="mb-6 mt-2 text-xl font-semibold">Upload your program</h2><UploadForm token={token} /></section>
       <section className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm"><p className="text-xs font-semibold text-teal-700">02 / MAKE IT PERSONAL</p><h2 className="mb-6 mt-2 text-xl font-semibold">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }))} /></section>
