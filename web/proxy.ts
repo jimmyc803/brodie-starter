@@ -5,7 +5,7 @@ import { supabaseServer } from "@/lib/supabase/server";
 
 // Unknown recap (/r) and coach dashboard (/c) links get a real 404 status. Both pages stream (Cache Components), so a notFound() inside it can
 // only produce a soft 404 (status 200 + noindex); this one cheap lookup runs before the response starts.
-export const config = { matcher: ["/r/:token", "/c/:token"] };
+export const config = { matcher: ["/r/:token", "/c/:token", "/c/:token/clients"] };
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{4,80}$/;
 

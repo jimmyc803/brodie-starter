@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
+import { CoachShell } from "@/components/coach/coach-shell";
 import { CoachDashboard } from "@/components/coach/dashboard";
 import type { CoachView } from "@/lib/coach-view";
 import type { SessionView } from "@/lib/contract";
@@ -57,5 +58,9 @@ async function Lab({ searchParams }: { searchParams: PageProps<"/lab/coach">["se
   await connection();
   const sp = await searchParams;
   const pick = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
-  return <CoachDashboard view={roster()} token="demo" base="/lab/coach" selectedClient={pick(sp.c)} selectedSession={pick(sp.s)} />;
+  return (
+    <CoachShell token="demo" coachName="Tristan" active="clients">
+      <CoachDashboard view={roster()} token="demo" base="/lab/coach" selectedClient={pick(sp.c)} selectedSession={pick(sp.s)} />
+    </CoachShell>
+  );
 }
