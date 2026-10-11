@@ -15,6 +15,7 @@ import { supabaseServer } from "@/lib/supabase/server";
 export type CoachView = {
   coach: { name: string };
   clients: CoachClient[];
+  programs: number; // uploaded programs (for the getting-started checklist)
 };
 // next: the program day the client loads on their next call (their active assignment), if any.
 // link: the client's personal workout link code (/go/<link>), null for the built-in sample.
@@ -28,7 +29,7 @@ export async function getCoachView(token: string): Promise<CoachView | null> {
   const isSample = token === "demo" || token === SAMPLE_COACH_TOKEN;
   const sample = (): CoachView => {
     const view = sampleSessionView();
-    return { coach: view.coach, clients: [{ id: "sample-client", name: view.client.name, sessions: [view], next: view.day?.title ?? null, link: null }] };
+    return { coach: view.coach, programs: 1, clients: [{ id: "sample-client", name: view.client.name, sessions: [view], next: view.day?.title ?? null, link: null }] };
   };
   if (!hasSupabase()) return isSample ? sample() : null;
 
@@ -77,5 +78,6 @@ export async function getCoachView(token: string): Promise<CoachView | null> {
       return { id: c.id as string, name: c.name as string, sessions, next, link: (c.share_token as string | null) ?? null };
     }),
   );
-  return { coach: { name: coach.name }, clients: out };
+  const { count: programs } = await db.from("programs").select("id", { count: "exact", head: true }).eq("coach_id", coach.id);
+  return { coach: { name: coach.name }, clients: out, programs: programs ?? 0 };
 }

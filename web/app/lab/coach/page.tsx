@@ -33,6 +33,7 @@ function fake(name: string, daysAgo: number, token: string, clean: boolean): Ses
 function roster(): CoachView {
   return {
     coach: { name: "Tristan" },
+    programs: 1,
     clients: [
       { id: "ryan", name: "Ryan", next: "Day 2 - Lower body", link: null, sessions: [fake("Ryan", 0, "lab-ryan-1", false), fake("Ryan", 2, "lab-ryan-2", true)] },
       { id: "maya", name: "Maya", next: "Day 4 - Upper body", link: null, sessions: [fake("Maya", 1, "lab-maya-1", false)] },

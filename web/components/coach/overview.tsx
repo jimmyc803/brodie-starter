@@ -16,7 +16,9 @@ export function Overview({ o, token, coachName }: { o: CoachOverview; token: str
     <>
       <header>
         <p className="text-sm text-zinc-500">{today}</p>
-        <h1 className="mt-1 text-3xl font-bold tracking-tight text-zinc-50">Welcome back, Coach {coachName}</h1>
+        <h1 className="mt-1 text-3xl font-bold tracking-tight text-zinc-50">
+          {o.summaries.length || o.recent.length ? "Welcome back" : "Your dashboard"}, Coach {coachName}
+        </h1>
       </header>
 
       <section aria-label="This week" className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
