@@ -6,11 +6,11 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
-export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFile,callsFile,results=[]}) {
+export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFile,callsFile,results=[],acquireBrowser=create=>create()}) {
   const token='harness_coach_tristan_0001';
   const coach=(await db.query('insert into coaches(name,share_token) values($1,$2) returning id',['Tristan',token])).rows[0];
   const client=(await db.query('insert into clients(coach_id,name) values($1,$2) returning id',[coach.id,'Ryan'])).rows[0];
-  const browser=await chromium.launch({headless:true});
+  const browser=await acquireBrowser(()=>chromium.launch({headless:true}));
   let context;
   try {
   context=await browser.newContext({viewport:{width:1440,height:1100}});
