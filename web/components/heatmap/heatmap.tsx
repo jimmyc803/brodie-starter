@@ -4,9 +4,11 @@ import { useEffect, useId, useState } from "react";
 
 import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
-import type { Color, MuscleKey } from "@/lib/contract";
+import type { MuscleKey } from "@/lib/contract";
 import type { MuscleDetail } from "@/lib/recap";
+import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
+import { RankBadge } from "@/components/heatmap/rank-badge";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
 // score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows.
@@ -187,9 +189,8 @@ function Body({
   );
 }
 
-const COLOR_WORD: Record<Color, string> = { green: "Solid", yellow: "Room to improve", red: "Needs work", gray: "Not trained" };
-
 function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: string; onClose: () => void }) {
+  const rank = detail.color !== "gray" ? rankForScore(detail.score) : null;
   return (
     <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -200,14 +201,19 @@ function MuscleCard({ detail, fill, onClose }: { detail: MuscleDetail; fill: str
           </div>
           <p className="mt-0.5 text-xs text-zinc-400">{detail.note}</p>
         </div>
-        <div className="text-right">
-          {detail.color !== "gray" ? (
-            <>
+        {rank ? (
+          <div className="flex items-center gap-2.5">
+            <RankBadge rank={rank} className="h-12 w-auto shrink-0" />
+            <div className="text-right">
               <div className="text-2xl font-bold tabular-nums">{Math.round(detail.score * 100)}</div>
-              <div className="text-xs text-zinc-400">{COLOR_WORD[detail.color]}</div>
-            </>
-          ) : null}
-        </div>
+              <div className="text-xs font-semibold" style={{ color: rank.color }}>
+                {rank.name}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="text-right text-xs text-zinc-400">Not trained</div>
+        )}
       </div>
       {detail.exercises.length ? (
         <ul className="mt-3 space-y-2">
