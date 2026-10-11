@@ -11,7 +11,7 @@ function Status({ state }: { state: typeof initial }) {
 export function UploadForm({ token }: { token: string }) {
   const [state, action, pending] = useActionState(uploadAction.bind(null, token), initial);
   const [selection, setSelection] = useState('');
-  return <form action={action} aria-busy={pending}>
+  return <form action={action} aria-busy={pending} onReset={() => setSelection('')}>
     <label className="text-sm font-medium text-zinc-200" htmlFor="program-pdf">Program PDF</label>
     <input className={control} id="program-pdf" name="pdf" type="file" accept="application/pdf,.pdf" required disabled={pending} onChange={event => { const file = event.currentTarget.files?.[0]; setSelection(file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB` : ''); event.currentTarget.setCustomValidity(file && file.size > MAX_UPLOAD_BYTES ? 'Choose a PDF no larger than 3 MB.' : ''); event.currentTarget.reportValidity(); }} />
     <p className="mt-2 text-xs text-zinc-500">Up to 3 MB. Your PDF stays private. Reading complex PDFs may take up to a minute. Scanned pages should be clear and upright.</p>
