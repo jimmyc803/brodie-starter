@@ -2,6 +2,7 @@
 // wording is unit-tested without rendering a PNG. Muscle colors come from muscle_scores as stored (never recomputed).
 import { neonFills, type Fills } from "@/lib/body/neon";
 import { allMuscles, MUSCLES, type Color, type SessionView } from "@/lib/contract";
+import { sessionRank, type Rank } from "@/lib/ranks";
 import { sessionStats } from "@/lib/recap";
 
 export const LEGEND: { color: Color; label: string }[] = [
@@ -21,6 +22,7 @@ export type RecapCard = {
   kicker: string;
   title: string;
   subtitle: string;
+  rank: Rank; // today's rank (Chud Chicken when no reps were counted)
   fills: Fills; // the neon heat map fills, same as the web page
   stats: { value: string; label: string }[];
   focus: string[]; // up to 3 muscle labels, red first then yellow, lowest score first
@@ -48,6 +50,7 @@ export function recapCard(view: SessionView): RecapCard {
     kicker: "BRODIE FOR COACHES",
     title: `${possessive(name)} workout`,
     subtitle,
+    rank: sessionRank(view).rank,
     fills: neonFills(muscles),
     stats: [
       { value: `${s.completed}/${s.planned}`, label: "reps counted" },

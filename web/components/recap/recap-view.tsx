@@ -1,6 +1,8 @@
 import { Heatmap } from "@/components/heatmap/heatmap";
 import { ExerciseCard } from "@/components/recap/exercise-card";
+import { RankBadge } from "@/components/recap/rank-badge";
 import type { SessionView } from "@/lib/contract";
+import { sessionRank } from "@/lib/ranks";
 import { muscleDetails, revealOrder, sessionStats } from "@/lib/recap";
 
 function formatDate(iso: string): string {
@@ -56,6 +58,8 @@ export function RecapView({ view }: { view: SessionView }) {
           <p className="mt-3 text-base font-medium text-zinc-400">{subline}</p>
         </div>
       </header>
+
+      <RankBadge r={sessionRank(view)} />
 
       <section aria-label="Session stats" className="mt-8 grid grid-cols-2 gap-3">
         <div className="col-span-2 rounded-3xl border border-green-500/20 bg-gradient-to-br from-green-500/15 to-zinc-900 px-5 py-5">
