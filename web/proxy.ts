@@ -21,7 +21,8 @@ async function sessionExists(token: string): Promise<boolean> {
 // Mirrors lib/coach-view.ts: without Supabase env vars only "demo" and the sample coach token exist.
 async function coachExists(token: string): Promise<boolean> {
   if (!TOKEN_RE.test(token)) return false;
-  if (!hasSupabase()) return token === "demo" || token === SAMPLE_COACH_TOKEN;
+  if (token === "demo" || token === SAMPLE_COACH_TOKEN) return true; // the demo coach always works
+  if (!hasSupabase()) return false;
   const { data, error } = await supabaseServer().from("coaches").select("id").eq("share_token", token).maybeSingle();
   if (error) return true; // let the page surface the real error
   return Boolean(data);
