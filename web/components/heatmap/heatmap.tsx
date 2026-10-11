@@ -54,7 +54,7 @@ export function Heatmap({
               selected={selected}
               onSelect={(m) => setSelected(m === selected ? null : m)}
             />
-            <figcaption className="mt-1 text-xs font-medium uppercase tracking-widest text-zinc-500">{side}</figcaption>
+            <figcaption className="mt-1 text-xs font-medium capitalize text-on-stage-2">{side}</figcaption>
           </figure>
         ))}
       </div>
@@ -63,14 +63,14 @@ export function Heatmap({
       {order ? (
         <button
           onClick={() => setPhase("idle")}
-          className="mx-auto mt-2 block text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
+          className="mx-auto mt-2 block rounded-full px-3 py-1 text-xs font-medium text-on-stage-2 hover:bg-fill hover:text-on-stage"
         >
           Replay
         </button>
       ) : null}
       <div aria-live="polite" className="mt-4">
         {sel ? <MuscleCard detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
-          <p className="text-center text-sm text-zinc-500">
+          <p className="text-center text-sm text-on-stage-2">
             {clips?.length ? "Tap a muscle to see what worked it — and watch the reps" : "Tap a muscle to see what worked it"}
           </p>
         )}
@@ -103,11 +103,11 @@ function revealTimeline(details: MuscleDetail[], order?: Partial<Record<MuscleKe
 function RevealCaption({ phase, id }: { phase: "idle" | "main" | "helpers" | "done"; id: string }) {
   const show = phase !== "idle"; // stays on screen once the reveal has run
   return (
-    <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium" aria-hidden>
+    <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium text-on-stage" aria-hidden>
       <span className={`flex items-center gap-1.5 transition-opacity duration-300 ${show ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="main" id={`${id}cm`} /> Main muscles
       </span>
-      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" || phase === "done" ? "opacity-100" : "opacity-0"}`}>
+      <span className={`flex items-center gap-1.5 text-on-stage-2 transition-opacity duration-300 ${phase === "helpers" || phase === "done" ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="helper" id={`${id}ch`} /> + helpers
       </span>
     </div>
@@ -208,14 +208,14 @@ function MuscleCard({
   const [playing, setPlaying] = useState<{ clip: ExerciseClip; ex: MuscleDetail["exercises"][number] } | null>(null);
   const rank = detail.color !== "gray" ? rankForScore(detail.score) : null;
   return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
+    <div className="rounded-[18px] bg-fill p-4 text-on-stage">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <span className="size-3 rounded-full" style={{ background: fill }} />
             <h3 className="text-lg font-semibold">{detail.label}</h3>
           </div>
-          <p className="mt-0.5 text-xs text-zinc-400">{detail.note}</p>
+          <p className="mt-0.5 text-xs text-on-stage-2">{detail.note}</p>
         </div>
         {rank ? (
           <div className="text-right">
@@ -225,7 +225,7 @@ function MuscleCard({
             </div>
           </div>
         ) : (
-          <div className="text-right text-xs text-zinc-400">Not trained</div>
+          <div className="text-right text-xs text-on-stage-2">Not trained</div>
         )}
       </div>
       {detail.exercises.length ? (
@@ -233,24 +233,24 @@ function MuscleCard({
           {detail.exercises.map((e) => {
             const clip = clips?.find((c) => c.exercise_key === e.key);
             return (
-              <li key={e.name} className="rounded-xl bg-zinc-800/60 px-3 py-2 text-sm">
+              <li key={e.name} className="rounded-xl bg-fill px-3 py-2 text-sm">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium">{e.name}</span>
                   <span className="flex items-center gap-2">
-                    <span className="tabular-nums text-zinc-300">
+                    <span className="tabular-nums text-on-stage-2">
                       {e.completed}/{e.planned} reps
                     </span>
                     {clip ? (
                       <button
                         onClick={() => setPlaying({ clip, ex: e })}
-                        className="inline-flex items-center gap-1 rounded-full bg-green-500 px-2.5 py-1 text-xs font-bold text-zinc-950 hover:bg-green-400"
+                        className="inline-flex items-center gap-1 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-white hover:bg-accent-hover"
                       >
-                        <span aria-hidden>▶</span> Watch
+                        Watch
                       </button>
                     ) : null}
                   </span>
                 </div>
-                <div className="mt-0.5 text-xs text-zinc-400">
+                <div className="mt-0.5 text-xs text-on-stage-2">
                   {e.role === "primary" ? "Main muscle" : "Helper muscle"}
                   {e.flags.length ? ` · form flags: ${e.flags.map(([t, n]) => `${t} ×${n}`).join(", ")}` : " · no form flags"}
                 </div>
@@ -267,7 +267,7 @@ function MuscleCard({
           onClose={() => setPlaying(null)}
         />
       ) : null}
-      <button onClick={onClose} className="mt-3 w-full text-center text-xs text-zinc-500 underline-offset-2 hover:underline">
+      <button onClick={onClose} className="mt-3 w-full rounded-full py-1.5 text-center text-xs font-medium text-on-stage-2 hover:bg-fill">
         Close
       </button>
     </div>

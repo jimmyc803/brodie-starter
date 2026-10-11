@@ -37,22 +37,22 @@ export function ClipPlayer({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center" role="dialog" aria-modal aria-label={title}>
-      <button aria-label="Close video" onClick={onClose} className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
-      <div className="relative w-full max-w-sm animate-in slide-in-from-bottom-8 fade-in rounded-t-3xl border border-white/10 bg-zinc-950 p-4 pb-6 duration-300 sm:rounded-3xl">
-        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-zinc-700 sm:hidden" />
+      <button aria-label="Close video" onClick={onClose} className="absolute inset-0 bg-canvas/80 backdrop-blur-sm" />
+      <div className="relative w-full max-w-sm animate-in slide-in-from-bottom-8 fade-in rounded-t-[24px] bg-stage p-4 pb-6 text-on-stage duration-300 sm:rounded-[24px]">
+        <div className="mx-auto mb-3 h-1 w-10 rounded-full bg-fill sm:hidden" />
         <div className="mb-3 flex items-start justify-between gap-3">
           <div>
-            <h3 className="text-lg font-bold">{title}</h3>
-            <p className="text-xs text-zinc-400">{subtitle}</p>
+            <h3 className="t-headline">{title}</h3>
+            <p className="t-footnote text-on-stage-2">{subtitle}</p>
           </div>
-          <button onClick={onClose} className="rounded-full bg-zinc-800 px-3 py-1 text-xs font-medium text-zinc-300 hover:bg-zinc-700">
+          <button onClick={onClose} className="rounded-full bg-fill px-3.5 py-1 text-xs font-medium text-on-stage hover:bg-surface-2">
             Close
           </button>
         </div>
         <video
           ref={ref}
           src={clip.url}
-          className="mx-auto max-h-[65dvh] w-full rounded-2xl bg-black object-contain"
+          className="mx-auto max-h-[65dvh] w-full rounded-[18px] bg-canvas object-contain"
           playsInline
           muted
           autoPlay
@@ -63,7 +63,7 @@ export function ClipPlayer({
           onTimeUpdate={onTime}
           onEnded={seekStart}
         />
-        <p className="mt-3 text-center text-[11px] text-zinc-500">From your workout recording · camera-counted reps</p>
+        <p className="mt-3 text-center t-caption text-on-stage-2">From your workout recording · camera-counted reps</p>
       </div>
     </div>
   );

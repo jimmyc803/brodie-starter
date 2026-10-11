@@ -25,7 +25,7 @@ export async function generateMetadata({ params }: PageProps<"/r/[token]">): Pro
 
 export default function RecapPage({ params }: PageProps<"/r/[token]">) {
   return (
-    <main className="flex-1 overflow-x-clip bg-zinc-950 font-[family-name:var(--font-geist-sans)] text-white">
+    <main className="flex-1 overflow-x-clip bg-canvas text-ink">
       <Suspense fallback={<div className="min-h-dvh" />}>
         <Recap params={params} />
       </Suspense>
