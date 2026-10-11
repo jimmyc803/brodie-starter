@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 
+import { AddClient } from "@/components/coach/add-client";
 import type { ClientStatus, ClientSummary } from "@/lib/coach-status";
 
 const GROUPS: { status: ClientStatus; label: string; dot: string }[] = [
@@ -12,7 +13,17 @@ const GROUPS: { status: ClientStatus; label: string; dot: string }[] = [
 ];
 
 // The coach's roster: search, a filter per status, and clients grouped so the ones that need the coach come first.
-export function ClientList({ clients, base, selectedId }: { clients: ClientSummary[]; base: string; selectedId: string | null }) {
+export function ClientList({
+  clients,
+  base,
+  selectedId,
+  addToken,
+}: {
+  clients: ClientSummary[];
+  base: string;
+  selectedId: string | null;
+  addToken?: string; // the coach link, when this coach may add clients (never on the public demo)
+}) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<ClientStatus | "all">("all");
   const q = query.trim().toLowerCase();
@@ -21,6 +32,11 @@ export function ClientList({ clients, base, selectedId }: { clients: ClientSumma
 
   return (
     <nav aria-label="Clients" className="rounded-2xl border border-zinc-800 bg-zinc-900 p-3">
+      {addToken ? (
+        <div className="mb-2">
+          <AddClient token={addToken} base={base} />
+        </div>
+      ) : null}
       {clients.length > 3 ? (
         <input
           type="search"
