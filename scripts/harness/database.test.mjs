@@ -52,3 +52,16 @@ test('real PostgreSQL enforces upload transactions, ownership, RLS and assignmen
     assert.equal((await db.query("select public from storage.buckets where id='programs'")).rows[0].public, false);
   } finally { await db.stop(); }
 });
+
+test('cleanup finishes after PostgreSQL was externally terminated', { timeout: 10000 }, async () => {
+  const db = await createDatabaseHarness({ repoRoot: root });
+  try {
+    const pid = Number((await db.query("select split_part(pg_read_file('postmaster.pid'), E'\\n', 1) as pid")).rows[0].pid);
+    process.kill(pid, 'SIGINT');
+    await new Promise(resolve => setTimeout(resolve, 100));
+  } finally { await db.stop(); }
+});
+
+test('failed schema setup preserves the original error and cleans up', { timeout: 10000 }, async () => {
+  await assert.rejects(createDatabaseHarness({ repoRoot: '/nonexistent-brodie-harness-fixture' }), /ENOENT/);
+});
