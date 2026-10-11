@@ -1,6 +1,7 @@
 import { Heatmap } from "@/components/heatmap/heatmap";
 import { ExerciseCard } from "@/components/recap/exercise-card";
 import { RankBadge } from "@/components/recap/rank-badge";
+import { ReviewLauncher } from "@/components/rep-review/review-launcher";
 import { SectionHeading, SiteHeader } from "@/components/site-header";
 import type { ExerciseClip, SessionView } from "@/lib/contract";
 import { sessionRank } from "@/lib/ranks";
@@ -62,10 +63,14 @@ export function RecapView({ view, clips }: { view: SessionView; clips?: Exercise
         <RankBadge r={sessionRank(view)} />
       </div>
 
+      <div className="mt-6">
+        <ReviewLauncher mode="client" clientName={view.client.name} muscles={view.muscles.filter((m) => m.coverage !== "none").map((m) => m.muscle)} />
+      </div>
+
       <section className="mt-10">
         <SectionHeading sub={`${stats.trained} muscles · estimated from the exercises you did`}>Muscles worked</SectionHeading>
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900 p-4 sm:p-6">
-          <Heatmap details={muscleDetails(view)} order={revealOrder(view)} clips={clips} />
+          <Heatmap details={muscleDetails(view)} order={revealOrder(view)} clips={clips} review={{ mode: "client", clientName: view.client.name }} />
         </div>
       </section>
 

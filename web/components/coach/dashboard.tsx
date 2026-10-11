@@ -95,7 +95,7 @@ export function CoachDashboard({
             <div className="min-w-0 space-y-4">
               <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} />
               {session ? (
-                <SessionDetail view={session} clientName={client.name} clips={clips} />
+                <SessionDetail view={session} clientName={client.name} clips={clips} programHref={programsHref} />
               ) : (
                 <p className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center text-zinc-400">
                   No sessions yet. When {client.name} finishes a workout with Brodie, it shows up here.
