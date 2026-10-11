@@ -89,7 +89,7 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`rounded-full px-3 py-1 transition-colors ${active ? "bg-accent text-white" : "bg-fill text-ink-2 hover:text-ink"}`}
+      className={`rounded-full px-3 py-1 transition-colors ${active ? "bg-accent-fill text-white" : "bg-fill text-ink-2 hover:text-ink"}`}
     >
       {children}
     </button>

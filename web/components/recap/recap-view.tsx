@@ -7,6 +7,9 @@ import type { ExerciseClip, SessionView } from "@/lib/contract";
 import { sessionRank } from "@/lib/ranks";
 import { muscleDetails, revealOrder, sessionStats } from "@/lib/recap";
 
+// Stat cells sit centered between the hairline dividers, with room on both sides.
+const STAT_CELL = "min-w-0 px-2 text-center sm:px-5";
+
 function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
@@ -30,10 +33,10 @@ export function RecapView({ view, clips }: { view: SessionView; clips?: Exercise
 
         <Surface className="mt-6">
           <section aria-label="Session stats" className="grid grid-cols-4 divide-x divide-hairline py-4">
-            <Stat value={String(stats.completed)} suffix={`/${stats.planned}`} label="reps" />
-            <Stat value={String(stats.setsDone)} suffix={`/${stats.setsPlanned}`} label="sets" />
-            <Stat value={clean === null ? "–" : String(clean)} suffix={clean === null ? undefined : "%"} label="clean" />
-            <Stat value={stats.minutes === null ? "–" : String(stats.minutes)} label="min" />
+            <Stat className={STAT_CELL} value={String(stats.completed)} suffix={`/${stats.planned}`} label="reps" />
+            <Stat className={STAT_CELL} value={String(stats.setsDone)} suffix={`/${stats.setsPlanned}`} label="sets" />
+            <Stat className={STAT_CELL} value={clean === null ? "–" : String(clean)} suffix={clean === null ? undefined : "%"} label="clean" />
+            <Stat className={STAT_CELL} value={stats.minutes === null ? "–" : String(stats.minutes)} label="min" />
           </section>
         </Surface>
 

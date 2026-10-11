@@ -14,7 +14,7 @@ export function RankBadge({ r }: { r: SessionRank }) {
       </div>
       <p className="mt-1 flex items-center gap-2.5 t-title">
         {skipped ? null : <span className="size-3 shrink-0 rounded-full" style={{ background: rank.color }} aria-hidden />}
-        <span>{skipped ? "Every Brodie starts somewhere" : rank.name}</span>
+        <span style={{ color: skipped ? undefined : rank.color }}>{skipped ? "Every Brodie starts somewhere" : rank.name}</span>
       </p>
 
       {/* Keep every swatch in its exact rank color; outline the current tier. */}

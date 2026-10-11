@@ -5,7 +5,7 @@ import { MAX_UPLOAD_BYTES } from '@/lib/programWorkflow';
 const initial = { ok: false, message: '' };
 const control = 'mt-2 block w-full rounded-[10px] bg-fill px-3 py-2.5 [color-scheme:dark] t-callout text-ink outline-none focus:ring-2 focus:ring-accent disabled:opacity-60';
 const dropzone = 'mt-2 block w-full rounded-[14px] border border-dashed border-hairline bg-surface-2 p-5 t-callout text-ink-2 file:mr-3 file:rounded-full file:border-0 file:bg-fill file:px-4 file:py-1.5 file:text-ink file:font-medium disabled:opacity-60';
-const button = 'mt-5 rounded-full bg-accent px-5 py-2.5 t-callout font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-40';
+const button = 'mt-5 rounded-full bg-accent-fill px-5 py-2.5 t-callout font-medium text-white transition-colors hover:bg-accent-fill-hover disabled:cursor-not-allowed disabled:opacity-40';
 const label = 't-callout font-semibold text-ink';
 const hint = 'mt-2 t-footnote text-ink-3';
 function Status({ state }: { state: typeof initial }) {

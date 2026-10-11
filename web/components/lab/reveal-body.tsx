@@ -45,7 +45,7 @@ export function RevealBodies({ fills, order }: { fills: Fills; order: Partial<Re
           setLit(false);
           setRun((r) => r + 1);
         }}
-        className="mt-3 w-full rounded-full border border-zinc-700 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+        className="mt-3 w-full rounded-full bg-fill py-2 t-callout text-ink hover:bg-white/[.12]"
       >
         Replay reveal
       </button>

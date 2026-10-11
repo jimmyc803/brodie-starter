@@ -53,7 +53,7 @@ export default function Home() {
           ))}
         </ol>
 
-        <Stage className="mt-4 overflow-hidden px-6 pb-0 pt-12 text-center sm:px-12 sm:pt-16">
+        <Stage className="mt-4 overflow-hidden px-6 pb-10 pt-12 text-center sm:px-12 sm:pt-16">
           <h2 className="t-display mx-auto max-w-[20ch] text-balance">Every set, in one glance.</h2>
           <p className="t-body mx-auto mt-4 max-w-[32rem] text-on-stage-2">
             The recap shows reps, form and the muscles worked. Clients open it from a private link.
@@ -62,7 +62,7 @@ export default function Home() {
           <img
             src="/api/recap-image/demo"
             alt="A workout recap card with a muscle heat map"
-            className="mx-auto mt-10 block w-full max-w-[520px] rounded-t-[18px]"
+            className="mx-auto mt-10 block w-full max-w-[520px] rounded-[20px]"
           />
         </Stage>
 

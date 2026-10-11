@@ -158,7 +158,7 @@ function ClientHeader({
                     href={`${base}?c=${encodeURIComponent(client.id)}&s=${encodeURIComponent(s.session.share_token)}#session`}
                     aria-current={active ? "true" : undefined}
                     className={`block rounded-full px-3.5 py-1.5 t-footnote transition-colors ${
-                      active ? "bg-accent text-white" : "bg-fill text-ink-2 hover:text-ink"
+                      active ? "bg-accent-fill text-white" : "bg-fill text-ink-2 hover:text-ink"
                     } ${st.completed === 0 && !active ? "opacity-60" : ""}`}
                   >
                     <span className="font-medium">{shortDate(s.session.started_at)}</span>

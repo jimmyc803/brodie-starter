@@ -243,7 +243,7 @@ function MuscleCard({
                     {clip ? (
                       <button
                         onClick={() => setPlaying({ clip, ex: e })}
-                        className="inline-flex items-center gap-1 rounded-full bg-accent px-3 py-1 text-xs font-semibold text-white hover:bg-accent-hover"
+                        className="inline-flex items-center gap-1 rounded-full bg-accent-fill px-3 py-1 text-xs font-semibold text-white hover:bg-accent-fill-hover"
                       >
                         Watch
                       </button>

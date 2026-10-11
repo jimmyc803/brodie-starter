@@ -15,7 +15,7 @@ export function Stage({ className = "", children }: Children) {
 }
 
 const PILL_VARIANT = {
-  primary: "bg-accent text-white hover:bg-accent-hover",
+  primary: "bg-accent-fill text-white hover:bg-accent-fill-hover",
   secondary: "bg-fill text-ink hover:bg-white/[.12]",
   plain: "text-accent hover:underline underline-offset-4",
 } as const;

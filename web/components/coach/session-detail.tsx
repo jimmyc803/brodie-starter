@@ -14,7 +14,7 @@ import {
 import { flaggedSets, muscleDetails, revealOrder, sessionStats } from "@/lib/recap";
 import { colorOf, pct, shortDate } from "@/components/coach/format";
 
-// The selected session, top to bottom: what it was, the numbers, what needs a look, then the heat map beside one exercise table.
+// The selected session, top to bottom: what it was, the numbers, what needs a look, then the full-width heat map with the exercise table below it.
 export function SessionDetail({ view, clientName }: { view: SessionView; clientName: string }) {
   const st = sessionStats(view);
   const flagged = flaggedSets(view);
@@ -52,11 +52,11 @@ export function SessionDetail({ view, clientName }: { view: SessionView; clientN
       <div className="p-5 sm:p-6">
         <NeedsALook flagged={flagged} stats={st} />
 
-        <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <div>
+        <div className="mt-6 grid gap-8">
+          <div className="min-w-0">
             <h3 className="t-headline mb-3 text-ink">Muscle heat map</h3>
-            <Stage className="p-5">
-              <Heatmap key={view.session.share_token} details={muscleDetails(view)} order={revealOrder(view)} className="mx-auto max-w-sm" />
+            <Stage className="p-5 sm:p-8">
+              <Heatmap key={view.session.share_token} details={muscleDetails(view)} order={revealOrder(view)} className="mx-auto max-w-xl" />
             </Stage>
           </div>
           <div className="min-w-0">
@@ -138,14 +138,15 @@ function setColor(s: SetView): Color {
 
 function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
   return (
-    <div className="overflow-x-auto rounded-xl border border-hairline">
-      <table className="w-full t-callout">
+    <div className="rounded-xl border border-hairline">
+      <table className="w-full table-fixed t-callout">
         <thead className="text-left t-footnote text-ink-2">
           <tr>
-            <th className="px-3 py-2 font-medium">Exercise</th>
-            <th className="px-3 py-2 font-medium">Sets</th>
-            <th className="px-3 py-2 text-right font-medium">Reps</th>
-            <th className="px-3 py-2 font-medium">Brodie&apos;s cues</th>
+            <th className="px-3 py-2 font-medium sm:px-4">
+              Exercise <span className="font-normal text-ink-3">· Brodie&apos;s cues</span>
+            </th>
+            <th className="w-[38%] px-3 py-2 font-medium">Sets</th>
+            <th className="w-16 px-3 py-2 text-right font-medium sm:w-20 sm:px-4">Reps</th>
           </tr>
         </thead>
         <tbody>
@@ -153,9 +154,14 @@ function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
             const cues = topFaults(ex.sets.flatMap((s) => s.reps));
             return (
               <tr key={ex.exercise_key + ex.name} className="border-t border-hairline align-top">
-                <td className="whitespace-nowrap px-3 py-2.5 font-medium text-ink">{ex.name}</td>
+                <td className="px-3 py-2.5 sm:px-4">
+                  <div className="font-medium text-ink">{ex.name}</div>
+                  <div className="mt-0.5 t-footnote text-ink-2">
+                    {cues.length ? cues.map(([cue, n]) => `${cue} ×${n}`).join(", ") : ex.sets.some(setReached) ? <span className="text-positive">Clean</span> : <span className="text-ink-3">Not reached</span>}
+                  </div>
+                </td>
                 <td className="px-3 py-2.5">
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
                     {ex.sets.map((s) =>
                       setReached(s) ? (
                         <span
@@ -178,12 +184,9 @@ function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
                     )}
                   </div>
                 </td>
-                <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink">
+                <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums text-ink sm:px-4">
                   {completedReps(ex)}
                   <span className="text-ink-3">/{plannedReps(ex)}</span>
-                </td>
-                <td className="px-3 py-2.5 text-ink-2">
-                  {cues.length ? cues.map(([cue, n]) => `${cue} ×${n}`).join(", ") : ex.sets.some(setReached) ? <span className="text-positive">Clean</span> : <span className="text-ink-3">Not reached</span>}
                 </td>
               </tr>
             );
