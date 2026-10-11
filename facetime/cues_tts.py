@@ -62,7 +62,8 @@ def vocabulary():
     v.update(["Rest for a moment", "All done, great session", "Nice work", "Slow down", "Pick up the pace"])
     v.update(["Okay, moving on"])                                    # --gesture-next: the T-pose command (facetime/probe.py TPose)
     v.update(["Step back so I can see your whole body", "Great, I can see you", "I will wait here, step into view when you are ready"])   # facetime/visibility.py
-    v.update(["Probe ready, raise both arms"])                      # latency probe (coach_agent --latency-probe)
+    v.update(["Probe ready, raise both arms"])
+    v.update(["Chin over the bar", "Full hang at the bottom"])        # pull-ups (facetime/pullup.py)                      # latency probe (coach_agent --latency-probe)
     bad = [t for t in v if '\u2014' in t or '\u2013' in t]
     assert not bad, f'dashes in cue text: {bad}'
     return sorted(v)

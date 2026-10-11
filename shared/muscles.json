@@ -26,11 +26,12 @@
     "pushup":       {"name": "Push-ups",      "plan_name": "pushups",       "primary": ["chest", "triceps"],         "secondary": ["front_delts", "abs"]},
     "lunge":        {"name": "Lunges",        "plan_name": "lunges",        "primary": ["quads", "glutes"],          "secondary": ["hamstrings", "adductors", "calves"]},
     "jumping_jack": {"name": "Jumping jacks", "plan_name": "jumping jacks", "primary": ["calves", "front_delts"],    "secondary": ["quads", "glutes", "adductors"]},
-    "bicep_curl":   {"name": "Bicep curls",   "plan_name": "bicep curls",   "primary": ["biceps"],                   "secondary": ["forearms", "front_delts"]}
+    "bicep_curl":   {"name": "Bicep curls",   "plan_name": "bicep curls",   "primary": ["biceps"],                   "secondary": ["forearms", "front_delts"]},
+    "pullup":       {"name": "Pull-ups",      "plan_name": "pull ups",      "primary": ["lats", "biceps"],           "secondary": ["rear_delts", "forearms", "traps", "abs"]}
   },
 
   "fault_prefix": {"doc": "Brodie fault labels start with the classifier name, which differs from the plan name for lunges",
-                   "squat": "squats", "pushup": "pushups", "lunge": "alternating forward lunges", "jumping_jack": "jumping jacks", "bicep_curl": "bicep curls"},
+                   "squat": "squats", "pushup": "pushups", "lunge": "alternating forward lunges", "jumping_jack": "jumping jacks", "bicep_curl": "bicep curls", "pullup": "pull ups"},
 
   "scoring": {
     "doc": [

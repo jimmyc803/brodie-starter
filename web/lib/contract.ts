@@ -6,7 +6,7 @@ import faultCues from "@/lib/generated/fault_cues.json";
 export type MuscleKey =
   | "quads" | "glutes" | "hamstrings" | "calves" | "adductors" | "abductors" | "chest" | "front_delts" | "triceps"
   | "biceps" | "forearms" | "abs" | "obliques" | "lats" | "traps" | "rear_delts";
-export type ExerciseKey = "squat" | "pushup" | "lunge" | "jumping_jack" | "bicep_curl";
+export type ExerciseKey = "squat" | "pushup" | "lunge" | "jumping_jack" | "bicep_curl" | "pullup";
 export type Color = "green" | "yellow" | "red" | "gray";
 export type Coverage = "primary" | "secondary" | "none";
 

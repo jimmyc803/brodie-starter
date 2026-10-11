@@ -34,6 +34,8 @@ from facetime.session_sink import SessionSink
 from facetime.recap_video import render_recap_png
 from facetime.replay_local import mix_audio
 
+from facetime.pullup import COUNT_WORDS as COUNT_TEXT
+COUNT_WORDS_L = [w.lower() for w in COUNT_TEXT]
 CW, CH = 1920, 1080                       # canvas
 PW, PH = 540, 960                         # each 9:16 panel
 LX, RX, PY = 360, 1020, 84                # panel positions
@@ -89,6 +91,9 @@ def main():
     add_arguments(ap)
     a = ap.parse_args()
     if not a.plan and not a.exercise: a.plan = 'squats:10'
+    pull_target = None                                    # pull-up mode: facetime/pullup.py counts, not the Session
+    if a.plan and a.plan.split(':')[0].strip().lower().replace('-', ' ') in ('pull ups', 'pullups', 'pull up', 'pullup'):
+        pull_target = int(a.plan.rpartition(':')[2] or 5); a.plan = f'pull ups:{pull_target}'
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     trimmed = None
     if a.start is not None or a.end is not None:          # cut first, so every time below is video time from 0
@@ -101,9 +106,17 @@ def main():
     cap = cv2.VideoCapture(a.video); src_fps = cap.get(cv2.CAP_PROP_FPS) or FPS
     n_src = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)); out_fps = min(src_fps, a.max_fps)
     log(f'{a.video}: {n_src} frames at {src_fps:g} fps; plan {a.plan or a.exercise}')
-    bank = CueBank(); per = Perception(Config.from_args(a), clip_s=bank.duration, t0=0.0)
-    events = []; per.on_event(events.append)
-    samples = []                         # (t, landmarks, count, target, exercise, state)
+    bank = CueBank(); events = []
+    if pull_target is None:
+        per = Perception(Config.from_args(a), clip_s=bank.duration, t0=0.0); per.on_event(events.append); pipe = per.pipe
+    else:
+        from facetime.pipeline import FramePipeline, load_json_arg, COUNTERS
+        from facetime.pullup import PullupCounter
+        per = None; pc = PullupCounter(target=pull_target); started = done = False
+        pipe = FramePipeline(a.model, None, a.pose, load_json_arg(a.params, {}), load_json_arg(a.thr), rep_params=COUNTERS[a.counter], trigger='none')
+        def ev(type_, t, **kw): events.append(dict(type=type_, t=round(t, 2), **kw))
+        ev('cue', 0.0, text="Let's do pull ups", intent='announce'); ev('session', 0.0, state='wait', item=0, exercise='pull ups', target=pull_target, count=0)
+    samples = []                         # (t, landmarks, count, target, exercise, state[, PullupState])
     next_t = 0.0; i = 0; t_start = time.time()
     while True:
         ok, bgr = cap.read()
@@ -112,11 +125,30 @@ def main():
         if t + 1e-6 < next_t: continue
         next_t += 1.0 / FPS
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        per.process_frame(rgb, t_recv=t, t_ms=t * 1000.0, meta=dict(frame=len(samples), t_clip=t))
-        lm = per.pipe.last_landmarks
-        s = per.session
-        samples.append((t, None if lm is None else np.array(lm, np.float32), s.last_count, getattr(s, 'target', None), per.pipe.exercise, s.state))
+        if per is not None:
+            per.process_frame(rgb, t_recv=t, t_ms=t * 1000.0, meta=dict(frame=len(samples), t_clip=t))
+            lm = pipe.last_landmarks; s = per.session
+            samples.append((t, None if lm is None else np.array(lm, np.float32), s.last_count, getattr(s, 'target', None), pipe.exercise, s.state))
+            continue
+        pipe.process(rgb, t_ms=t * 1000.0); lm = pipe.last_landmarks
+        lm = None if lm is None else np.array(lm, np.float32)
+        pst = pc.update(lm, t)
+        if pst.on_bar and not started:
+            started = True; ev('session', t, state='active', item=0, exercise='pull ups', target=pull_target, count=0)
+        for kind, val in pst.events:
+            if done: break
+            if kind == 'rep': ev('rep', t, n=val)
+            elif kind == 'fault': ev('fault', t, label=val)
+            else: ev('cue', t, text=val, intent='count' if val[0].isupper() and val in COUNT_TEXT else 'correction')
+        if started and not done and pst.count >= pull_target:
+            done = True; ev('cue', t + 1.0, text=f"That's {COUNT_WORDS_L[pull_target - 1]}, nice work", intent='milestone')
+            ev('session', t + 1.0, state='done', item=0, exercise=None, target=pull_target, count=pst.count, done=True)
+        import copy
+        samples.append((t, lm, pst.count, pull_target, 'pull ups', 'done' if done else ('active' if pst.on_bar else 'wait'), copy.copy(pst)))
     cap.release(); duration = i / src_fps
+    if pull_target is not None and not done:
+        ev('session', duration, state='done', item=0, exercise=None, target=pull_target, count=pc.st.count, done=True)
+    events.sort(key=lambda e: e['t'])
     reps = [e for e in events if e.get('type') == 'rep']; cues = [e for e in events if e.get('type') == 'cue']
     log(f'perception: {len(samples)} frames in {time.time() - t_start:.1f} s, {len(reps)} reps, {len(cues)} cues, '
         f"{sum(e.get('type') == 'fault' for e in events)} corrections")
@@ -155,8 +187,12 @@ def main():
         last = [c for c in spoken if c[0] <= t]; cue, cue_t = (last[-1][2], last[-1][0]) if last else (None, 0.0)
         speaking = any(c0 <= t < c1 for c0, c1, _ in spoken)
         face = av.frame(speaking=speaking, now=t)
-        mirror = compose(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), lm, s0[2], s0[3], s0[4], s0[5], cue, cue_t, face, now=t)
-        left = cv2.resize(mirror, (PW, PH), interpolation=cv2.INTER_AREA)
+        if pull_target is None:
+            pane = compose(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), lm, s0[2], s0[3], s0[4], s0[5], cue, cue_t, face, now=t)
+        else:
+            from facetime.pullup import compose_pullup
+            pane = compose_pullup(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB), lm, s0[6], cue, cue_t, face, now=t)
+        left = cv2.resize(pane, (PW, PH), interpolation=cv2.INTER_AREA)
         right = [c for ct, c in card_times if ct <= t][-1]
         enc.stdin.write(frame_canvas(left, right).tobytes())
     cap.release()
@@ -177,7 +213,7 @@ def main():
     os.rmdir(tmp)
     if trimmed: os.remove(trimmed)
     log(f'wrote {a.out}: {total:.1f} s, {CW}x{CH} at {out_fps:g} fps')
-    if hasattr(per, 'close'): per.close()
+    if per is not None and hasattr(per, 'close'): per.close()
 
 
 if __name__ == '__main__':
