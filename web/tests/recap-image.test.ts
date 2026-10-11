@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ALL_SOLID, LEGEND, recapCard } from "@/lib/recap-image/model";
+import { ALL_SOLID, LEGEND, NO_REPS, recapCard } from "@/lib/recap-image/model";
 import { sampleSessionView } from "@/lib/session-view";
 
 describe("recap image card", () => {
@@ -23,5 +23,13 @@ describe("recap image card", () => {
   it("never uses the word weak", () => {
     const text = JSON.stringify([recapCard(sampleSessionView()), LEGEND]);
     expect(text.toLowerCase()).not.toContain("weak");
+  });
+  it("does not praise a session where no reps were counted", () => {
+    const view = sampleSessionView();
+    for (const ex of view.exercises) for (const set of ex.sets) { set.completed_reps = 0; set.reps = []; }
+    view.muscles = view.muscles.map((m) => ({ ...m, score: 0, color: "gray" as const, coverage: "none" as const }));
+    const card = recapCard(view);
+    expect(card.focusKind).toBe("empty");
+    expect(card.focusLine).toBe(NO_REPS);
   });
 });

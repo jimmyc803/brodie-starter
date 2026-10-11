@@ -30,8 +30,8 @@ function Body({ side, card }: { side: "front" | "back"; card: RecapCard }) {
 }
 
 export function RecapCardImage({ card }: { card: RecapCard }) {
-  const hasFocus = card.focus.length > 0;
-  const accent = hasFocus ? COLORS.red : COLORS.green;
+  const accent = { focus: COLORS.red, solid: COLORS.green, empty: COLORS.gray }[card.focusKind];
+  const kicker = { focus: "FOCUS NEXT", solid: "NICE WORK", empty: "NO REPS COUNTED" }[card.focusKind];
   return (
     <div
       style={{
@@ -123,7 +123,7 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
       >
         <div style={{ display: "flex", alignItems: "center", fontSize: 26, letterSpacing: 4, color: accent }}>
           <div style={{ display: "flex", width: 14, height: 14, borderRadius: 7, backgroundColor: accent, marginRight: 14 }} />
-          {hasFocus ? "FOCUS NEXT" : "NICE WORK"}
+          {kicker}
         </div>
         <div style={{ display: "flex", marginTop: 12, fontSize: card.focusLine.length > 34 ? 42 : 50, textAlign: "center" }}>
           {card.focusLine}

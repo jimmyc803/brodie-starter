@@ -73,7 +73,7 @@ export function RecapView({ view }: { view: SessionView }) {
 
       {stats.endedEarly ? (
         <p className="mt-4 rounded-2xl border border-white/5 bg-zinc-900/60 px-4 py-3 text-sm text-zinc-300">
-          Call ended before the last set.
+          {stats.completed === 0 ? "Call ended before any reps were counted." : "Call ended before the last set."}
         </p>
       ) : null}
 
