@@ -1,44 +1,72 @@
-import type { CoachView } from "@/lib/coach-view";
 import Link from "next/link";
-import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
-import { flaggedSets } from "@/lib/recap";
-import { ClientCard } from "@/components/coach/client-card";
+
+import { ClientList } from "@/components/coach/client-list";
 import { SessionDetail } from "@/components/coach/session-detail";
+import { shortDate } from "@/components/coach/format";
+import { SiteHeader } from "@/components/site-header";
+import type { CoachClient, CoachView } from "@/lib/coach-view";
+import { sortSummaries, summarizeClient, type ClientSummary } from "@/lib/coach-status";
+import { sessionStats } from "@/lib/recap";
+import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
 
-const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
-const withinLastWeek = (iso: string) => Date.now() - Date.parse(iso) <= WEEK_MS;
+const STATUS_LABEL: Record<ClientSummary["status"], { text: string; className: string }> = {
+  review: { text: "Needs review", className: "bg-red-500/10 text-red-300" },
+  on_track: { text: "On track", className: "bg-green-500/10 text-green-300" },
+  inactive: { text: "Inactive", className: "bg-zinc-800 text-zinc-400" },
+};
 
-// Coach dashboard body: header with summary chips, clients on the left, the selected session on the right.
-export function CoachDashboard({ view, token, selected }: { view: CoachView; token: string; selected: string | null }) {
-  const all = view.clients.flatMap((c) => c.sessions.map((s) => ({ client: c, session: s })));
-  const picked =
-    (selected && all.find((x) => x.session.session.share_token === selected)) ||
-    all.find((x) => x.client.sessions[0] === x.session) ||
-    null;
+// Coach dashboard (triage inbox): the roster on the left, sorted so clients who need the coach come first;
+// the selected client on the right, with what they do next, their session history and the chosen session.
+export function CoachDashboard({
+  view,
+  token,
+  selectedClient,
+  selectedSession,
+  base = `/c/${encodeURIComponent(token)}`,
+}: {
+  view: CoachView;
+  token: string;
+  selectedClient: string | null;
+  selectedSession: string | null;
+  base?: string; // where client/session links point; the lab page overrides it
+}) {
+  const summaries = sortSummaries(view.clients.map((c) => summarizeClient(c)));
+  const bySession = selectedSession ? view.clients.find((c) => c.sessions.some((s) => s.session.share_token === selectedSession)) : undefined;
+  const client: CoachClient | undefined =
+    view.clients.find((c) => c.id === selectedClient) ?? bySession ?? view.clients.find((c) => c.id === summaries[0]?.id);
+  const summary = summaries.find((s) => s.id === client?.id);
+  const session = client?.sessions.find((s) => s.session.share_token === selectedSession) ?? client?.sessions[0];
 
-  const thisWeek = all.filter((x) => withinLastWeek(x.session.session.started_at)).length;
-  const toReview = view.clients.reduce((n, c) => n + (c.sessions[0] ? flaggedSets(c.sessions[0]).length : 0), 0);
-  const activeToken = picked?.session.session.share_token ?? null;
+  const sessionsThisWeek = summaries.reduce((n, s) => n + s.thisWeek, 0);
+  const toReview = summaries.filter((s) => s.status === "review").length;
+  const programsHref = `/c/${encodeURIComponent(token === "demo" ? SAMPLE_COACH_TOKEN : token)}/program`;
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 sm:py-10">
-      <header className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-zinc-800 bg-zinc-900 px-3 py-1 text-xs font-medium text-zinc-300">
-            <span className="size-1.5 rounded-full bg-[#22c55e]" />
-            Brodie for Coaches
-          </span>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">Coach {view.coach.name}</h1>
-          <p className="mt-1 text-sm text-zinc-400">How your clients&apos; workouts with Brodie went.</p>
-          <Link className="mt-4 inline-flex rounded-full bg-teal-800 px-6 py-3 text-sm font-semibold text-white" href={`/c/${encodeURIComponent(token === "demo" ? SAMPLE_COACH_TOKEN : token)}/program`}>
-            Upload &amp; assign a program
+    <div className="mx-auto w-full max-w-7xl px-4 pb-10 pt-5 sm:px-6 sm:pt-8">
+      <SiteHeader
+        context={
+          <Link
+            className="rounded-full bg-zinc-50 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200"
+            href={programsHref}
+          >
+            Programs
           </Link>
-        </div>
-        <ul className="flex flex-wrap gap-2">
-          <Chip value={view.clients.length} label={view.clients.length === 1 ? "client" : "clients"} />
-          <Chip value={thisWeek} label={thisWeek === 1 ? "session this week" : "sessions this week"} />
-          <Chip value={toReview} label={toReview === 1 ? "set needs a look" : "sets need a look"} accent={toReview > 0} />
-        </ul>
+        }
+      />
+      <header className="mt-8">
+        <h1 className="text-3xl font-bold tracking-tight text-zinc-50">Coach {view.coach.name}</h1>
+        <p className="mt-1 text-sm text-zinc-400">
+          {view.clients.length} {view.clients.length === 1 ? "client" : "clients"} · {sessionsThisWeek}{" "}
+          {sessionsThisWeek === 1 ? "session" : "sessions"} this week
+          {toReview ? (
+            <>
+              {" · "}
+              <span className="text-red-300">
+                {toReview} {toReview === 1 ? "needs" : "need"} review
+              </span>
+            </>
+          ) : null}
+        </p>
       </header>
 
       {view.clients.length === 0 ? (
@@ -46,36 +74,101 @@ export function CoachDashboard({ view, token, selected }: { view: CoachView; tok
           No clients yet. Assign a program day to a client and their sessions show up here.
         </p>
       ) : (
-        <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] lg:items-start">
-          <div className="space-y-4">
-            <h2 className="text-xs font-medium uppercase tracking-widest text-zinc-500">Clients</h2>
-            {view.clients.map((c) => (
-              <ClientCard key={c.id} client={c} token={token} selected={activeToken} />
-            ))}
+        <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,280px)_minmax(0,1fr)] lg:items-start">
+          <div className="lg:sticky lg:top-6">
+            <ClientList clients={summaries} base={base} selectedId={client?.id ?? null} />
           </div>
-          <div className="space-y-4 lg:sticky lg:top-6">
-            <h2 className="text-xs font-medium uppercase tracking-widest text-zinc-500">Session</h2>
-            {picked ? (
-              <SessionDetail view={picked.session} clientName={picked.client.name} />
-            ) : (
-              <p className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center text-zinc-400">
-                No sessions yet. When a client finishes a workout with Brodie, the details show up here.
-              </p>
-            )}
-          </div>
+
+          {client && summary ? (
+            <div className="min-w-0 space-y-4">
+              <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} />
+              {session ? (
+                <SessionDetail view={session} clientName={client.name} />
+              ) : (
+                <p className="rounded-2xl border border-dashed border-zinc-800 p-8 text-center text-zinc-400">
+                  No sessions yet. When {client.name} finishes a workout with Brodie, it shows up here.
+                </p>
+              )}
+            </div>
+          ) : null}
         </div>
       )}
     </div>
   );
 }
 
-function Chip({ value, label, accent }: { value: number; label: string; accent?: boolean }) {
+// The selected client: status, what they train next, this week, and their recent sessions as a switcher.
+function ClientHeader({
+  client,
+  summary,
+  base,
+  activeSession,
+  programsHref,
+}: {
+  client: CoachClient;
+  summary: ClientSummary;
+  base: string;
+  activeSession: string | null;
+  programsHref: string;
+}) {
+  const status = STATUS_LABEL[summary.status];
   return (
-    <li className="flex items-baseline gap-1.5 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2">
-      <span className="text-lg font-semibold tabular-nums" style={{ color: accent ? "#eab308" : "#fafafa" }}>
-        {value}
-      </span>
-      <span className="text-xs text-zinc-400">{label}</span>
-    </li>
+    <section aria-label={client.name} className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5 sm:p-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="grid size-10 place-items-center rounded-full bg-zinc-800 text-base font-semibold text-zinc-200">
+          {client.name.charAt(0).toUpperCase()}
+        </span>
+        <h2 className="text-xl font-semibold text-zinc-50">{client.name}</h2>
+        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.className}`}>{status.text}</span>
+      </div>
+
+      <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl bg-zinc-950/40 px-4 py-3">
+          <dt className="text-xs text-zinc-500">Next up</dt>
+          <dd className="mt-0.5 flex items-baseline justify-between gap-2">
+            <span className="truncate text-sm font-medium text-zinc-100">{client.next ?? "Nothing assigned"}</span>
+            <Link href={programsHref} className="shrink-0 text-xs text-zinc-400 hover:text-zinc-100">
+              Change
+            </Link>
+          </dd>
+        </div>
+        <div className="rounded-xl bg-zinc-950/40 px-4 py-3">
+          <dt className="text-xs text-zinc-500">This week</dt>
+          <dd className="mt-0.5 text-sm font-medium text-zinc-100">
+            {summary.thisWeek} {summary.thisWeek === 1 ? "session" : "sessions"}
+          </dd>
+        </div>
+        <div className="rounded-xl bg-zinc-950/40 px-4 py-3">
+          <dt className="text-xs text-zinc-500">Last session</dt>
+          <dd className="mt-0.5 truncate text-sm font-medium text-zinc-100">{summary.detail}</dd>
+        </div>
+      </dl>
+
+      {client.sessions.length > 1 ? (
+        <div className="mt-4">
+          <p className="mb-2 text-xs text-zinc-500">Sessions</p>
+          <ul className="flex gap-2 overflow-x-auto pb-1">
+            {client.sessions.map((s) => {
+              const st = sessionStats(s);
+              const active = s.session.share_token === activeSession;
+              return (
+                <li key={s.session.share_token} className="shrink-0">
+                  <Link
+                    href={`${base}?c=${encodeURIComponent(client.id)}&s=${encodeURIComponent(s.session.share_token)}#session`}
+                    aria-current={active ? "true" : undefined}
+                    className={`block rounded-lg border px-3 py-1.5 text-xs transition-colors ${
+                      active ? "border-zinc-500 bg-zinc-800 text-zinc-100" : "border-zinc-800 text-zinc-400 hover:border-zinc-700"
+                    } ${st.completed === 0 && !active ? "opacity-50" : ""}`}
+                  >
+                    <span className="font-medium">{shortDate(s.session.started_at)}</span>
+                    <span className="text-zinc-500"> · {st.completed}/{st.planned} reps</span>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+    </section>
   );
 }

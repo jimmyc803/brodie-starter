@@ -30,3 +30,17 @@ def test_roast_handlers_space_out_mid_set_roasts():
     h.on_event({'type': 'fault', 'label': 'squats - shallow'}, say, ask)      # inside the gap: no second roast
     h.on_event({'type': 'session', 'state': 'rest'}, say, ask)
     assert len(said) == 2 and all(s in ROAST_LINES for s in said) and len(asked) == 1
+
+
+def test_letterbox_keeps_a_landscape_body_whole_and_the_skeleton_on_it():
+    import numpy as np
+    from facetime import mirror
+    rgb = np.zeros((720, 1280, 3), np.uint8); rgb[300:420, 100:1180] = 255           # a long white "body" across the frame
+    lm = np.zeros((33, 4), np.float32); lm[:, 3] = 1.0; lm[:, 0] = [0.1 + 0.8 * k / 32 for k in range(33)]; lm[:, 1] = 0.5
+    old = mirror.LETTERBOX; mirror.LETTERBOX = True
+    try: img, box = mirror.crop_portrait(rgb, lm)
+    finally: mirror.LETTERBOX = old
+    assert img.shape == (mirror.H, mirror.W, 3)
+    pts = mirror._map(lm, box, 1280, 720)
+    assert min(p[0] for p in pts) >= 0 and max(p[0] for p in pts) < mirror.W              # head to feet all in the view
+    for x, y, _ in pts: assert img[y, x].mean() > 200                                       # every joint lands on the body
