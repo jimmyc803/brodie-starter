@@ -1,9 +1,10 @@
-// The heat map look ("neon", chosen in /lab/heatmap): color slides with the stored score, with the team's three colors
-// pinned at the contract thresholds; secondary muscles are a paler version (worked a little); trained muscles are lit
-// from inside and glow, solid ones most, so problem areas stay readable. One description of the drawing feeds the web
+// The heat map look ("neon", chosen in /lab/heatmap): each trained muscle is painted its rank's color (see lib/ranks),
+// so the body and the rank ladder always agree; secondary muscles are a paler version (worked a little); trained
+// muscles are lit from inside and glow, solid ones most, so problem areas stay readable. One description of the drawing feeds the web
 // heat map (React) and the recap PNG (SVG string), so they always match.
 import { SHAPES, type BodySide } from "@/lib/body/shapes";
 import { mixOklch, ramp } from "@/lib/color";
+import { rankForScore } from "@/lib/ranks";
 import { COLORS, MUSCLE_KEYS, THRESHOLDS, type Color, type Coverage, type MuscleKey } from "@/lib/contract";
 
 export type Fill = { fill: string; glow: number }; // glow 0..1
@@ -14,6 +15,7 @@ export const UNTRAINED = "#52525b"; // a muscle no exercise hit ("not trained th
 export const BODY_BASE = "#3f3f46"; // unscored parts: head, neck, knees, lower back
 export const BODY_STROKE = "#18181b";
 
+// The continuous score ramp (team colors pinned at the contract thresholds), kept for the /lab/heatmap variants.
 export const SCORE_STOPS: [number, string][] = [
   [0, "#dc2626"],
   [0.3, COLORS.red],
@@ -22,11 +24,10 @@ export const SCORE_STOPS: [number, string][] = [
   [1, "#4ade80"],
 ];
 export const scoreColor = (score: number) => ramp(SCORE_STOPS, score);
-export const SCORE_GRADIENT_CSS = `linear-gradient(90deg, ${SCORE_STOPS.map(([p, c]) => `${c} ${Math.round(p * 100)}%`).join(", ")})`;
 
 export function neonFill(m: MuscleInput): Fill {
   if (m.color === "gray") return { fill: UNTRAINED, glow: 0 };
-  const base = scoreColor(m.score);
+  const base = rankForScore(m.score).color;
   if (m.coverage === "secondary") return { fill: mixOklch(base, UNTRAINED, 0.45), glow: 0.2 * m.score };
   return { fill: base, glow: 0.35 + 0.65 * m.score };
 }

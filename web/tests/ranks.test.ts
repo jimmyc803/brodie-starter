@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { neonFill } from "@/lib/body/neon";
+import { COLORS } from "@/lib/contract";
 import { muscleRank, RANKS, rankForScore, sessionRank } from "@/lib/ranks";
 import { sampleSessionView } from "@/lib/session-view";
 
@@ -32,19 +34,19 @@ describe("rank ladder", () => {
   });
 
   it("awards the highest tier a score reaches", () => {
-    expect(rankForScore(0).key).toBe("chud-chicken");
-    expect(rankForScore(0.1).key).toBe("chud-chicken");
-    expect(rankForScore(0.15).key).toBe("egolift-elephant");
-    expect(rankForScore(0.5).key).toBe("hypertrophy-hippo");
-    expect(rankForScore(0.75).key).toBe("strength-gorilla");
-    expect(rankForScore(0.86).key).toBe("strength-gorilla");
-    expect(rankForScore(0.88).key).toBe("mega-mammoth");
-    expect(rankForScore(1).key).toBe("godmode-griffin");
+    expect(rankForScore(0).key).toBe("novice");
+    expect(rankForScore(0.1).key).toBe("novice");
+    expect(rankForScore(0.2).key).toBe("beginner");
+    expect(rankForScore(0.5).key).toBe("advanced");
+    expect(rankForScore(0.75).key).toBe("elite");
+    expect(rankForScore(0.86).key).toBe("elite");
+    expect(rankForScore(0.88).key).toBe("master");
+    expect(rankForScore(1).key).toBe("legendary");
   });
 
   it("clamps below the first and at/above the last tier", () => {
-    expect(rankForScore(-1).key).toBe("chud-chicken");
-    expect(rankForScore(2).key).toBe("godmode-griffin");
+    expect(rankForScore(-1).key).toBe("novice");
+    expect(rankForScore(2).key).toBe("legendary");
   });
 
   it("never uses a pink tier color", () => {
@@ -54,17 +56,35 @@ describe("rank ladder", () => {
     }
   });
 
-  it("tops out at white (god form)", () => {
-    expect(RANKS[RANKS.length - 1].color.toUpperCase()).toBe("#F4F4F0");
+  it("uses plain skill-level names", () => {
+    expect(RANKS.map((r) => r.name)).toEqual(["Novice", "Beginner", "Intermediate", "Advanced", "Expert", "Elite", "Master", "Legendary"]);
+  });
+
+  it("starts the yellow and green tiers at the contract thresholds, in the team colors", () => {
+    expect(rankForScore(0.5).color).toBe(COLORS.yellow);
+    expect(rankForScore(0.49).color).not.toBe(COLORS.yellow);
+    expect(rankForScore(0.75).color).toBe(COLORS.green);
+  });
+
+  it("paints every trained main muscle exactly its rank's color", () => {
+    for (const r of RANKS) {
+      for (const score of [r.minScore, r.minScore + 0.01]) {
+        expect(neonFill({ muscle: "quads", score, color: "green", coverage: "primary" }).fill).toBe(rankForScore(score).color);
+      }
+    }
+  });
+
+  it("gives every tier its own color", () => {
+    expect(new Set(RANKS.map((r) => r.color)).size).toBe(RANKS.length);
   });
 });
 
 describe("session rank", () => {
-  it("gives Chud Chicken (skipped) to a workout with no reps counted", () => {
+  it("gives Novice (skipped) to a workout with no reps counted", () => {
     const view = sampleSessionView();
     for (const ex of view.exercises) for (const s of ex.sets) { s.completed_reps = 0; s.reps = []; }
     view.muscles = view.muscles.map((m) => ({ ...m, score: 0, color: "gray" as const, coverage: "none" as const }));
-    expect(sessionRank(view)).toMatchObject({ skipped: true, rank: { key: "chud-chicken" } });
+    expect(sessionRank(view)).toMatchObject({ skipped: true, rank: { key: "novice" } });
   });
 
   it("ranks the sample session and its muscles; untrained muscles get no rank", () => {
@@ -72,6 +92,6 @@ describe("session rank", () => {
     expect(r.skipped).toBe(false);
     expect(r.score).toBeGreaterThan(0);
     expect(muscleRank({ muscle: "lats", score: 0, color: "gray" })).toBeNull();
-    expect(muscleRank({ muscle: "lats", score: 0.8, color: "green" })?.key).toBe("strength-gorilla");
+    expect(muscleRank({ muscle: "lats", score: 0.8, color: "green" })?.key).toBe("elite");
   });
 });

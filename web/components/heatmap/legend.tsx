@@ -5,7 +5,6 @@ import { useId } from "react";
 import { neonFill, UNTRAINED } from "@/lib/body/neon";
 import { mixOklch } from "@/lib/color";
 import { RANKS } from "@/lib/ranks";
-import { RankBadge } from "@/components/heatmap/rank-badge";
 
 // A tiny muscle shape drawn exactly like the heat map: a bright, glowing main muscle or a pale helper muscle.
 export function MuscleSwatch({ kind, id, className }: { kind: "main" | "helper"; id?: string; className?: string }) {
@@ -30,23 +29,20 @@ export function MuscleSwatch({ kind, id, className }: { kind: "main" | "helper";
   );
 }
 
-// Legend for the neon heat map: the rank ladder (named Brodie tiers, weakest -> god, replacing the old score gradient),
-// what bright vs pale means, and "not trained".
+// Legend for the neon heat map: the rank ladder (each tier's color is exactly the color its muscles are painted), what
+// bright vs pale means, and "not trained".
 export function HeatmapLegend({ className }: { className?: string }) {
   return (
-    <div className={`mx-auto max-w-xs text-xs text-zinc-400 ${className ?? ""}`}>
-      <div className="flex items-end justify-between gap-0.5">
+    <div className={`mx-auto max-w-sm text-xs text-zinc-400 ${className ?? ""}`}>
+      <ol className="grid grid-cols-4 gap-x-3 gap-y-1.5" aria-label="Ranks, lowest to highest">
         {RANKS.map((r) => (
-          <span key={r.key} title={`${r.name} — ${r.brodie}`} className="flex min-w-0 flex-1 justify-center">
-            <RankBadge rank={r} className="h-7 w-auto" />
-          </span>
+          <li key={r.key} className="flex items-center gap-1.5">
+            <span className="size-2.5 shrink-0 rounded-sm" style={{ background: r.color }} />
+            <span className="truncate">{r.name}</span>
+          </li>
         ))}
-      </div>
-      <div className="mt-1 flex justify-between">
-        <span>Chud Chicken</span>
-        <span>Godmode Griffin</span>
-      </div>
-      <div className="mt-2.5 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5">
+      </ol>
+      <div className="mt-3 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 border-t border-zinc-800 pt-3">
         <span className="flex items-center gap-1.5">
           <MuscleSwatch kind="main" /> Main muscle
         </span>

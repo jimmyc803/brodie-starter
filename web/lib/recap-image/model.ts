@@ -22,7 +22,7 @@ export type RecapCard = {
   kicker: string;
   title: string;
   subtitle: string;
-  rank: Rank; // today's rank (Chud Chicken when no reps were counted)
+  rank: Rank; // today's rank (Novice when no reps were counted)
   fills: Fills; // the neon heat map fills, same as the web page
   stats: { value: string; label: string }[];
   focus: string[]; // up to 3 muscle labels, red first then yellow, lowest score first
