@@ -54,7 +54,7 @@ export function ExerciseCard({ exercise }: { exercise: ExerciseView }) {
   const faults = topFaults(exercise.sets.flatMap((s) => s.reps));
 
   return (
-    <article className="rounded-2xl border border-white/5 bg-zinc-900 px-4 py-3">
+    <article className="rounded-2xl border border-zinc-800 bg-zinc-900 px-4 py-3">
       <header className="flex items-baseline justify-between gap-3">
         <h3 className="text-base font-bold tracking-tight">{exercise.name}</h3>
         <p className="shrink-0 tabular-nums">
