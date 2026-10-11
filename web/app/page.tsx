@@ -1,54 +1,74 @@
-import Link from "next/link";
+import { Camera, FileText, LayoutDashboard } from "lucide-react";
 
 import { SiteHeader } from "@/components/site-header";
+import { PillLink, Stage, Surface } from "@/components/ui/apple";
 
 const STEPS = [
-  { n: "1", title: "Coach uploads a program", body: "A PDF they already use. Brodie reads the days, exercises, sets and reps." },
-  { n: "2", title: "Client FaceTimes Brodie", body: "Brodie counts every rep on camera, cues form out loud and talks between sets." },
-  { n: "3", title: "Everyone sees how it went", body: "A recap with a muscle heat map for the client, and a dashboard for the coach." },
+  {
+    Icon: FileText,
+    title: "Upload the program",
+    body: "Drop in the PDF you already use. Brodie reads the days, exercises, sets and reps.",
+  },
+  {
+    Icon: Camera,
+    title: "Train over FaceTime",
+    body: "Brodie counts every rep on camera, cues form out loud and keeps pace between sets.",
+  },
+  {
+    Icon: LayoutDashboard,
+    title: "See how it went",
+    body: "Clients get a recap with a muscle heat map. Coaches get a dashboard of every session.",
+  },
 ];
 
 export default function Home() {
   return (
-    <main className="flex-1 bg-zinc-950 text-zinc-100">
-      <div className="mx-auto w-full max-w-4xl px-4 pb-16 pt-5 sm:px-6 sm:pt-8">
-        <SiteHeader context="IvyHacks · Beat Muse" />
+    <main className="flex-1 bg-canvas text-ink">
+      <SiteHeader context="IvyHacks 2026" />
 
-        <section className="mt-16 max-w-2xl sm:mt-24">
-          <h1 className="text-4xl font-bold tracking-tight text-balance text-zinc-50 sm:text-5xl">
-            Your program, coached rep by rep.
-          </h1>
-          <p className="mt-4 text-lg text-zinc-400">
-            Coaches write the program. Brodie runs the workout over FaceTime. Coaches see exactly how it went. No app
-            to install, no account to make.
+      <div className="mx-auto w-full max-w-[980px] px-5 sm:px-6">
+        <section className="flex flex-col items-center pb-16 pt-20 text-center sm:pb-24 sm:pt-32">
+          <h1 className="t-hero max-w-[16ch] text-balance">Your program, coached rep by rep.</h1>
+          <p className="t-body mt-5 max-w-[34rem] text-balance text-ink-2">
+            Write the program. Brodie runs the workout over FaceTime, and you see exactly how it went. No app to
+            install, no account to make.
           </p>
-          <div className="mt-8 flex flex-wrap gap-3 text-sm">
-            <Link
-              href="/r/demo"
-              className="rounded-full bg-zinc-50 px-5 py-2.5 font-medium text-zinc-950 transition-colors hover:bg-zinc-200"
-            >
+          <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+            <PillLink href="/r/demo" variant="primary" size="lg">
               See a client recap
-            </Link>
-            <Link
-              href="/c/demo"
-              className="rounded-full border border-zinc-700 px-5 py-2.5 font-medium text-zinc-100 transition-colors hover:border-zinc-500"
-            >
-              See the coach dashboard
-            </Link>
+            </PillLink>
+            <PillLink href="/c/demo" variant="secondary" size="lg">
+              Open the coach dashboard
+            </PillLink>
           </div>
         </section>
 
-        <ol className="mt-16 grid gap-3 sm:mt-24 sm:grid-cols-3">
-          {STEPS.map((s) => (
-            <li key={s.n} className="rounded-2xl border border-zinc-800 bg-zinc-900 p-5">
-              <span className="grid size-7 place-items-center rounded-full bg-zinc-800 text-sm font-semibold text-zinc-300">
-                {s.n}
-              </span>
-              <h2 className="mt-4 font-semibold text-zinc-50">{s.title}</h2>
-              <p className="mt-1 text-sm leading-relaxed text-zinc-400">{s.body}</p>
-            </li>
+        <ol className="grid gap-4 sm:grid-cols-3">
+          {STEPS.map(({ Icon, title, body }) => (
+            <Surface as="li" key={title} className="p-6">
+              <Icon className="size-6 text-ink-2" strokeWidth={1.5} aria-hidden />
+              <h2 className="t-title-2 mt-6">{title}</h2>
+              <p className="t-callout mt-2 text-ink-2">{body}</p>
+            </Surface>
           ))}
         </ol>
+
+        <Stage className="mt-4 overflow-hidden px-6 pb-0 pt-12 text-center sm:px-12 sm:pt-16">
+          <h2 className="t-display mx-auto max-w-[20ch] text-balance">Every set, in one glance.</h2>
+          <p className="t-body mx-auto mt-4 max-w-[32rem] text-on-stage-2">
+            The recap shows reps, form and the muscles worked. Clients open it from a private link.
+          </p>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src="/api/recap-image/demo"
+            alt="A workout recap card with a muscle heat map"
+            className="mx-auto mt-10 block w-full max-w-[520px] rounded-t-[18px]"
+          />
+        </Stage>
+
+        <footer className="mt-16 border-t border-hairline py-6 sm:mt-24">
+          <p className="t-footnote text-ink-3">IvyHacks 2026 · Team Beat Muse</p>
+        </footer>
       </div>
     </main>
   );
