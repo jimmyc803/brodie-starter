@@ -26,7 +26,7 @@ Personal trainers hand clients a PDF and hope they follow it. Brodie for Coaches
 
 ### The muscle heat map
 
-Each exercise maps to main and helper muscles (`shared/muscles.json`, 16 muscles). Each exercise gets a quality score: half for clean reps, 30% for finishing the planned reps, 20% for holding form through the last set. A muscle's score averages the exercises that hit it, so colour means how well it was trained, not how hard: green is solid (0.75 or better), yellow is room to improve (0.5 or better), red needs work, grey wasn't trained. Main muscles glow brighter than helpers. Daily ranks (Chud Chicken up to Godmode Griffin) turn the session into something to beat next time.
+Each exercise maps to main and helper muscles (`shared/muscles.json`, 16 muscles). Each exercise gets a quality score: half for clean reps, 30% for finishing the planned reps, 20% for holding form through the last set. A muscle's score averages the exercises that hit it, so colour means how well it was trained, not how hard: green is solid (0.75 or better), yellow is room to improve (0.5 or better), red needs work, grey wasn't trained. Main muscles glow brighter than helpers. Daily ranks run from Novice through Beginner, Intermediate, Advanced, Expert, Elite, Master and Legendary. Each trained muscle uses exactly its rank's color in the coach view, client recap and shared recap image; coverage changes the halo, never the rank color.
 
 ## Built with
 

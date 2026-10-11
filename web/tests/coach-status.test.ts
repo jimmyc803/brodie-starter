@@ -28,6 +28,24 @@ describe("coach triage status", () => {
   it("calls an all-clean recent session on track", () => {
     expect(summarizeClient({ id: "b", name: "B", sessions: [at(1, true)] }, NOW).status).toBe("on_track");
   });
+  it("flags a recent call with no counted reps for review", () => {
+    const session = at(0, true);
+    session.exercises = session.exercises.map((ex) => ({
+      ...ex, sets: ex.sets.map((s) => ({ ...s, completed_reps: 0, reps: [] })),
+    }));
+    const summary = summarizeClient({ id: "empty", name: "Empty", sessions: [session] }, NOW);
+    expect(summary.status).toBe("review");
+    expect(summary.detail).toMatch(/no reps counted/i);
+  });
+  it("flags unreached sets even when every reached set was clean and complete", () => {
+    const session = at(0, true);
+    session.exercises = session.exercises.map((ex, i) => i === 0 ? ex : ({
+      ...ex, sets: ex.sets.map((s) => ({ ...s, completed_reps: 0, reps: [] })),
+    }));
+    const summary = summarizeClient({ id: "partial", name: "Partial", sessions: [session] }, NOW);
+    expect(summary.status).toBe("review");
+    expect(summary.detail).toMatch(/incomplete/i);
+  });
   it("calls a client inactive after 7 days or with no sessions", () => {
     expect(summarizeClient({ id: "c", name: "C", sessions: [at(9)] }, NOW).detail).toBe("No session in 9 days");
     expect(summarizeClient({ id: "d", name: "D", sessions: [] }, NOW).status).toBe("inactive");

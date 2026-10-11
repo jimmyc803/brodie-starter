@@ -95,14 +95,13 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
 
       {/* Legend: the rank ladder (each tier in the color its muscles are painted) and "not trained" */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 30, fontSize: 26, color: MUTED }}>
-        <div style={{ display: "flex", width: 640, justifyContent: "space-between" }}>
+        <div style={{ display: "flex", width: 840, flexWrap: "wrap", rowGap: 12, fontSize: 23 }}>
           {RANKS.map((r) => (
-            <div key={r.key} style={{ display: "flex", width: 74, height: 14, borderRadius: 7, backgroundColor: r.color }} />
+            <div key={r.key} style={{ display: "flex", width: 210, alignItems: "center" }}>
+              <div style={{ display: "flex", width: 18, height: 18, borderRadius: 3, marginRight: 10, backgroundColor: r.color }} />
+              {r.name}
+            </div>
           ))}
-        </div>
-        <div style={{ display: "flex", width: 640, justifyContent: "space-between", marginTop: 10 }}>
-          <div style={{ display: "flex" }}>{RANKS[0].name}</div>
-          <div style={{ display: "flex" }}>{RANKS[RANKS.length - 1].name}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", marginTop: 14 }}>
           <div style={{ display: "flex", width: 22, height: 22, borderRadius: 11, backgroundColor: UNTRAINED, marginRight: 12 }} />

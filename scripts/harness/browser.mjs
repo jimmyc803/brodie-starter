@@ -20,14 +20,14 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
   const check=async(name,fn)=>{await fn();results.push({name,status:'passed'});console.log(`PASS browser: ${name}`);};
   try {
     await page.goto(`${url}/c/${token}/program`);
-    await expect(page.getByRole('heading',{name:'Upload your program'})).toBeVisible({timeout:90000});
+    await expect(page.getByRole('heading',{name:'Upload a program'})).toBeVisible({timeout:90000});
     await check('responsive styled desktop and mobile forms',async()=>{
       const button=page.getByRole('button',{name:'Upload & parse program'});
       const grid=page.locator('div.grid.gap-6');
       assert.equal(await grid.evaluate(el=>getComputedStyle(el).display),'grid');
       assert.equal((await grid.evaluate(el=>getComputedStyle(el).gridTemplateColumns)).split(' ').length,2);
       assert.notEqual(await button.evaluate(el=>getComputedStyle(el).backgroundColor),'rgba(0, 0, 0, 0)');
-      assert.equal(await button.evaluate(el=>getComputedStyle(el).paddingLeft),'24px');
+      assert.equal(await button.evaluate(el=>getComputedStyle(el).paddingLeft),'20px');
       await page.screenshot({path:path.join(artifacts,'desktop-empty.png'),fullPage:true});
       await page.setViewportSize({width:390,height:844});
       assert.equal((await grid.evaluate(el=>getComputedStyle(el).gridTemplateColumns)).split(' ').length,1);
@@ -86,7 +86,7 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       assert(gateway.requests.slice(requestStart).some(r=>r.method==='POST' && r.path==='/rest/v1/rpc/assign_coach_program_day'));
       assert.deepEqual((await db.query('select * from assignments order by id')).rows,before);
       await page.reload();
-      await expect(page.getByRole('heading',{name:'Upload your program'})).toBeVisible();
+      await expect(page.getByRole('heading',{name:'Upload a program'})).toBeVisible();
     };
     await check('forged cross-coach client and day rejected atomically',async()=>{
       const foreignCoach=(await db.query('insert into coaches(name) values($1) returning id',['Private Other Coach'])).rows[0];
@@ -121,7 +121,7 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
     for (const mode of ['failure','malformed-json','invalid-schema']) {
       await check(`${mode} removes uploaded PDF and preserves all persisted rows`,async()=>{
         await page.reload();
-        await expect(page.getByRole('heading',{name:'Upload your program'})).toBeVisible();
+        await expect(page.getByRole('heading',{name:'Upload a program'})).toBeVisible();
         const beforePrograms=(await db.query('select * from programs order by id')).rows;
         const beforeDays=(await db.query('select * from program_days order by id')).rows;
         const beforeObjects=[...gateway.objects.entries()];

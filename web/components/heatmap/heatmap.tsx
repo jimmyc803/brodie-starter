@@ -74,7 +74,7 @@ export function Heatmap({
 }
 
 // When each muscle lights up (ms after the reveal starts): main muscles first, exercise by exercise in workout order,
-// then the helper muscles fade in, so the bright-vs-pale difference explains itself.
+// then helper muscles fade in with a subtler halo while retaining their rank color.
 const MAIN_START = 150;
 const MAIN_STEP = 450;
 const HELPER_GAP = 350;
@@ -177,7 +177,7 @@ function Body({
             strokeWidth={isSel ? 1.4 : 0.5}
             strokeLinejoin="round"
             style={fade(m)}
-            className="cursor-pointer hover:brightness-125 motion-reduce:!transition-none"
+            className="cursor-pointer hover:stroke-white motion-reduce:!transition-none"
             onClick={() => onSelect(m)}
           >
             <title>{m}</title>

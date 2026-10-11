@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { neonFill } from "@/lib/body/neon";
+import { neonFill, neonFills, neonLayers } from "@/lib/body/neon";
 import { COLORS } from "@/lib/contract";
 import { muscleRank, RANKS, rankForScore, sessionRank } from "@/lib/ranks";
 import { sampleSessionView } from "@/lib/session-view";
@@ -66,10 +66,27 @@ describe("rank ladder", () => {
     expect(rankForScore(0.75).color).toBe(COLORS.green);
   });
 
-  it("paints every trained main muscle exactly its rank's color", () => {
+  it("paints main and helper muscles exactly their rank's color", () => {
     for (const r of RANKS) {
       for (const score of [r.minScore, r.minScore + 0.01]) {
-        expect(neonFill({ muscle: "quads", score, color: "green", coverage: "primary" }).fill).toBe(rankForScore(score).color);
+        for (const coverage of ["primary", "secondary"] as const) {
+          expect(neonFill({ muscle: "quads", score, color: "green", coverage }).fill).toBe(rankForScore(score).color);
+        }
+      }
+    }
+  });
+
+  it("renders each final polygon in its exact tier color with optional halo only", () => {
+    for (const rank of RANKS) {
+      for (const coverage of ["primary", "secondary"] as const) {
+        const fills = neonFills([{ muscle: "quads", score: rank.minScore, color: "green", coverage }]);
+        for (const glow of [true, false]) {
+          const layers = neonLayers("front", fills, "rank-test", glow);
+          const quads = layers.shapes.filter((s) => s.muscle === "quads");
+          expect(quads.length).toBeGreaterThan(0);
+          expect(layers.gradients).toEqual([]);
+          for (const shape of quads) expect(shape.fill).toBe(rank.color);
+        }
       }
     }
   });

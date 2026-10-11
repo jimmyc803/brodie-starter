@@ -46,6 +46,12 @@ export function summarizeClient(c: { id: string; name: string; sessions: Session
   if (flagged > 0)
     return { id: c.id, name: c.name, status: "review", detail: `${when} · ${flagged} ${flagged === 1 ? "set" : "sets"} to review`, thisWeek, lastAt };
   const st = sessionStats(latest);
+  if (st.completed === 0 || st.endedEarly || st.completed < st.planned)
+    return {
+      id: c.id, name: c.name, status: "review",
+      detail: `${when} · ${st.completed === 0 ? "No reps counted" : "Incomplete session"}`,
+      thisWeek, lastAt,
+    };
   const clean = st.cleanRate === null ? "" : ` · ${Math.round(st.cleanRate * 100)}% clean`;
   return { id: c.id, name: c.name, status: "on_track", detail: `${when}${clean}`, thisWeek, lastAt };
 }

@@ -53,7 +53,7 @@ export function SessionDetail({ view, clientName }: { view: SessionView; clientN
       </dl>
 
       <div className="p-5 sm:p-6">
-        <NeedsALook flagged={flagged} />
+        <NeedsALook flagged={flagged} stats={st} />
 
         <div className="mt-6 grid gap-8 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
           <div>
@@ -95,7 +95,13 @@ function Dot({ color, n }: { color: Color; n: number }) {
 }
 
 // The coach's to-do for this session: sets that came up short or were mostly flagged.
-function NeedsALook({ flagged }: { flagged: ReturnType<typeof flaggedSets> }) {
+function NeedsALook({ flagged, stats }: { flagged: ReturnType<typeof flaggedSets>; stats: ReturnType<typeof sessionStats> }) {
+  if (flagged.length === 0 && (stats.completed === 0 || stats.endedEarly || stats.completed < stats.planned))
+    return (
+      <p className="rounded-xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-sm text-zinc-400">
+        {stats.completed === 0 ? "No reps counted this session." : "Session incomplete. Some planned sets were not completed."}
+      </p>
+    );
   if (flagged.length === 0)
     return (
       <p className="rounded-xl border border-green-500/20 bg-green-500/5 px-4 py-3 text-sm text-green-300">
@@ -178,7 +184,7 @@ function ExerciseTable({ exercises }: { exercises: ExerciseView[] }) {
                   <span className="text-zinc-500">/{plannedReps(ex)}</span>
                 </td>
                 <td className="px-3 py-2.5 text-zinc-400">
-                  {cues.length ? cues.map(([cue, n]) => `${cue} ×${n}`).join(", ") : <span className="text-green-400">Clean</span>}
+                  {cues.length ? cues.map(([cue, n]) => `${cue} ×${n}`).join(", ") : ex.sets.some(setReached) ? <span className="text-green-400">Clean</span> : <span className="text-zinc-500">Not reached</span>}
                 </td>
               </tr>
             );

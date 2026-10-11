@@ -1,9 +1,7 @@
-// The heat map look ("neon", chosen in /lab/heatmap): each trained muscle is painted its rank's color (see lib/ranks),
-// so the body and the rank ladder always agree; secondary muscles are a paler version (worked a little); trained
-// muscles are lit from inside and glow, solid ones most, so problem areas stay readable. One description of the drawing feeds the web
-// heat map (React) and the recap PNG (SVG string), so they always match.
+// Every trained muscle uses its exact rank color on the web and recap image. Coverage changes
+// only the surrounding halo, never the fill, so the body always matches the rank legend.
 import { SHAPES, type BodySide } from "@/lib/body/shapes";
-import { mixOklch, ramp } from "@/lib/color";
+import { ramp } from "@/lib/color";
 import { rankForScore } from "@/lib/ranks";
 import { COLORS, MUSCLE_KEYS, THRESHOLDS, type Color, type Coverage, type MuscleKey } from "@/lib/contract";
 
@@ -28,7 +26,7 @@ export const scoreColor = (score: number) => ramp(SCORE_STOPS, score);
 export function neonFill(m: MuscleInput): Fill {
   if (m.color === "gray") return { fill: UNTRAINED, glow: 0 };
   const base = rankForScore(m.score).color;
-  if (m.coverage === "secondary") return { fill: mixOklch(base, UNTRAINED, 0.45), glow: 0.2 * m.score };
+  if (m.coverage === "secondary") return { fill: base, glow: 0.2 * m.score };
   return { fill: base, glow: 0.35 + 0.65 * m.score };
 }
 
@@ -43,25 +41,21 @@ export function neonFills(muscles: MuscleInput[]): Fills {
 export type NeonLayers = {
   gradients: { id: string; inner: string; outer: string }[];
   halo: { points: string; fill: string; opacity: number; muscle: MuscleKey }[];
-  shapes: { points: string; muscle: MuscleKey | null; fill: string; solid: string }[]; // fill may be url(#gradient)
+  shapes: { points: string; muscle: MuscleKey | null; fill: string; solid: string }[]; // solid rank colors
 };
 
-export function neonLayers(side: BodySide, fills: Fills, idPrefix: string, glow = true): NeonLayers {
+export function neonLayers(side: BodySide, fills: Fills, _idPrefix: string, glow = true): NeonLayers {
   const out: NeonLayers = { gradients: [], halo: [], shapes: [] };
-  SHAPES[side].forEach((s, i) => {
+  SHAPES[side].forEach((s) => {
     const f = s.muscle ? fills[s.muscle] : undefined;
     if (!s.muscle || !f) {
       out.shapes.push({ points: s.points, muscle: s.muscle, fill: BODY_BASE, solid: BODY_BASE });
       return;
     }
     if (glow && f.glow > 0) {
-      const id = `${idPrefix}-g${i}`;
-      out.gradients.push({ id, inner: mixOklch(f.fill, "#ffffff", 0.35 * f.glow), outer: mixOklch(f.fill, "#000000", 0.25) });
       out.halo.push({ points: s.points, fill: f.fill, opacity: 0.75 * f.glow, muscle: s.muscle });
-      out.shapes.push({ points: s.points, muscle: s.muscle, fill: `url(#${id})`, solid: f.fill });
-    } else {
-      out.shapes.push({ points: s.points, muscle: s.muscle, fill: f.fill, solid: f.fill });
     }
+    out.shapes.push({ points: s.points, muscle: s.muscle, fill: f.fill, solid: f.fill });
   });
   return out;
 }

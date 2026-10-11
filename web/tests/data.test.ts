@@ -82,15 +82,16 @@ describe("body svg (neon)", () => {
     ]);
     const svg = bodySvg("front", fills);
     expect(svg.startsWith("<svg")).toBe(true);
-    expect(svg).toContain("radialGradient");
+    expect(svg).not.toContain("radialGradient");
+    expect(svg).toContain(`fill="${fills.chest!.fill}"`);
     expect(svg).toContain("feGaussianBlur");
     expect(fills.lats).toEqual({ fill: UNTRAINED, glow: 0 });
     expect(bodySvg("front", fills, { glow: false })).not.toContain("feGaussianBlur");
   });
-  it("makes secondary muscles paler and glow less than primary ones", () => {
+  it("keeps secondary and primary rank colors equal while using less halo for helpers", () => {
     const p = neonFill({ muscle: "quads", score: 0.8, color: "green", coverage: "primary" });
     const s = neonFill({ muscle: "quads", score: 0.8, color: "green", coverage: "secondary" });
-    expect(s.fill).not.toBe(p.fill);
+    expect(s.fill).toBe(p.fill);
     expect(s.glow).toBeLessThan(p.glow);
   });
 });
