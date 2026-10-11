@@ -45,7 +45,7 @@ function roster(): CoachView {
 
 export default function CoachLabPage({ searchParams }: PageProps<"/lab/coach">) {
   return (
-    <main className="flex-1 bg-zinc-950 text-zinc-100">
+    <main className="flex-1 bg-canvas text-ink">
       <Suspense>
         <Lab searchParams={searchParams} />
       </Suspense>
