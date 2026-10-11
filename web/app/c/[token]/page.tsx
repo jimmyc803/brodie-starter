@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 // Unknown tokens get a real 404 from web/proxy.ts before rendering; notFound() here is the streamed fallback.
 export default function CoachDashboardPage({ params, searchParams }: PageProps<"/c/[token]">) {
   return (
-    <main className="flex-1 bg-zinc-950 font-[family-name:var(--font-geist-sans)] text-zinc-100">
+    <main className="flex-1 bg-canvas text-ink">
       <Suspense fallback={<Loading />}>
         <Dashboard params={params} searchParams={searchParams} />
       </Suspense>
@@ -40,12 +40,11 @@ async function Dashboard({
 
 function Loading() {
   return (
-    <div className="mx-auto w-full max-w-7xl animate-pulse px-4 py-10 sm:px-6">
-      <div className="h-6 w-40 rounded-full bg-zinc-900" />
-      <div className="mt-4 h-10 w-64 rounded-lg bg-zinc-900" />
-      <div className="mt-8 grid gap-6 lg:grid-cols-[280px_1fr]">
-        <div className="h-96 rounded-2xl bg-zinc-900" />
-        <div className="h-[32rem] rounded-2xl bg-zinc-900" />
+    <div className="mx-auto w-full max-w-[1120px] animate-pulse px-5 py-10 sm:px-6">
+      <div className="h-10 w-64 rounded-xl bg-fill" />
+      <div className="mt-8 grid gap-6 lg:grid-cols-[300px_1fr]">
+        <div className="h-96 rounded-[18px] bg-fill" />
+        <div className="h-[32rem] rounded-[18px] bg-fill" />
       </div>
     </div>
   );
