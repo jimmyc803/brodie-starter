@@ -56,6 +56,11 @@ export default function Home() {
             </li>
           ))}
         </ol>
+        <footer className="mt-16 border-t border-zinc-800/80 pt-5 text-xs text-zinc-500">
+          <Link href="/privacy" className="hover:text-zinc-300">
+            Privacy
+          </Link>
+        </footer>
       </div>
     </main>
   );

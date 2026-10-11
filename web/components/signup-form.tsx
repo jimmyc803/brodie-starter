@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useActionState, useState } from "react";
 
 import { signupAction, type SignupState } from "@/app/start/actions";
@@ -89,6 +90,13 @@ export function SignupForm() {
       >
         {pending ? "Sending your application…" : "Apply and explore now"}
       </button>
+      <p className="text-xs text-zinc-500">
+        By applying you agree to the{" "}
+        <Link href="/privacy" className="text-zinc-400 underline underline-offset-2">
+          privacy notice
+        </Link>
+        .
+      </p>
       {state.message ? (
         <p role="alert" className="text-sm text-red-300">
           {state.message}

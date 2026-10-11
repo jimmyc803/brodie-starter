@@ -54,7 +54,13 @@ async function ClientHome({ params }: Pick<PageProps<"/go/[token]">, "params">) 
       <ul className="mt-4 space-y-1.5 text-sm text-zinc-400">
         <li>• Use Safari or Chrome and allow the camera when asked.</li>
         <li>• Prop the phone up, step back until your whole body is in view.</li>
-        <li>• Your camera is only used live to count reps. Video is never recorded.</li>
+        <li>
+          • Your camera is only used live to coach you; the call isn&apos;t recorded. Starting a workout means you agree to the{" "}
+          <Link href="/privacy" className="text-zinc-300 underline underline-offset-2">
+            privacy notice
+          </Link>
+          .
+        </li>
       </ul>
 
       <section className="mt-8">
