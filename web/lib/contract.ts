@@ -4,8 +4,8 @@ import muscles from "@/lib/generated/muscles.json";
 import faultCues from "@/lib/generated/fault_cues.json";
 
 export type MuscleKey =
-  | "quads" | "glutes" | "hamstrings" | "calves" | "adductors" | "chest" | "front_delts" | "triceps"
-  | "biceps" | "forearms" | "abs" | "obliques" | "lats" | "upper_back" | "rear_delts";
+  | "quads" | "glutes" | "hamstrings" | "calves" | "adductors" | "abductors" | "chest" | "front_delts" | "triceps"
+  | "biceps" | "forearms" | "abs" | "obliques" | "lats" | "traps" | "rear_delts";
 export type ExerciseKey = "squat" | "pushup" | "lunge" | "jumping_jack" | "bicep_curl";
 export type Color = "green" | "yellow" | "red" | "gray";
 export type Coverage = "primary" | "secondary" | "none";

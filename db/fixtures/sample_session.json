@@ -694,6 +694,12 @@
       "coverage": "secondary"
     },
     {
+      "muscle": "abductors",
+      "score": 0.0,
+      "color": "gray",
+      "coverage": "none"
+    },
+    {
       "muscle": "chest",
       "score": 0.705,
       "color": "yellow",
@@ -742,7 +748,7 @@
       "coverage": "none"
     },
     {
-      "muscle": "upper_back",
+      "muscle": "traps",
       "score": 0.0,
       "color": "gray",
       "coverage": "none"
