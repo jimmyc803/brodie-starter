@@ -12,7 +12,13 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// Absolute base for Open Graph image URLs (iMessage link previews need them). Vercel sets the production host.
+const siteUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
+  ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+  : "http://localhost:3000";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "Brodie for Coaches",
   description: "Your coach writes the program. Brodie runs the workout over FaceTime.",
 };

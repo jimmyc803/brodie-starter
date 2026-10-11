@@ -34,6 +34,7 @@ async function command(label,executable,args,options={}) {
 let db,gateway,server,temp;
 try {
   await command('lifecycle',process.execPath,['--test',path.join(here,'lifecycle.test.mjs')]);
+  await command('sync-contract',process.execPath,[path.join(repoRoot,'web/scripts/sync-contract.mjs')]);
   await command('database',process.execPath,['--test',path.join(here,'database.test.mjs')]);
   const python=process.env.HARNESS_PYTHON || path.join(repoRoot,'.venv/bin/python');
   await command('replay',python,[path.join(here,'replay.py'),'--output',path.join(artifacts,'replay')]);
