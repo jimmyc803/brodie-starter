@@ -454,6 +454,10 @@ class GeminiModel:
             if self.api_key: kw['api_key'] = self.api_key
             if self.temperature is not None: kw['temperature'] = self.temperature
             if self.language: kw['language'] = self.language
+            budget = (os.environ.get('GEMINI_THINKING_BUDGET') or 'off').strip()    # 'off' = the model's default (2026-10-11 trials, Tristan persona:
+            if budget.lower() != 'off':                                          # budget 0 gave text but NO audio 3/3, 128 silent 2/5; default 5/5 at ~0.9 s)
+                from google.genai import types as gtypes
+                kw['thinking_config'] = gtypes.ThinkingConfig(thinking_budget=int(budget), include_thoughts=False)
             base_url = (os.environ.get('GEMINI_BASE_URL') or '').strip().rstrip('/')
             if base_url:                                                   # hackathon: GEMINI_API_KEY is the team token, the relay (modal/gemini_relay.py) holds the real key
                 from google.genai import types                             # the SDK builds the Live websocket URL from base_url (wss) and sends the key as x-goog-api-key
@@ -505,7 +509,9 @@ class GeminiModel:
     def generate(self, prompt):
         if self.session is None: return None
         self.n_generate += 1
-        try: return self.session.generate_reply(instructions='(Private instruction for you, never say it aloud; answer the caller in your own words.) ' + prompt)   # 2026-10-10: he read the prompts verbatim
+        # user_input, not instructions: livekit-plugins-google sends `instructions` as a MODEL turn (and for 3.8 nothing after it), so
+        # Gemini continued its "own" words: drafts, ~8 s late, or the rule read aloud (selftest 2026-10-11). As a user line it answers in ~0.5 s.
+        try: return self.session.generate_reply(user_input='(Private instruction for you, never say it aloud; answer the caller in your own words.) ' + prompt)
         except RuntimeError as e: log.warning('generate_reply: %s', e); return None
 
     def interrupt(self):
