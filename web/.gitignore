@@ -42,3 +42,6 @@ next-env.d.ts
 
 # the env template is safe to commit
 !.env.example
+
+# copied from the repo root by scripts/sync-contract.mjs
+/lib/generated/
