@@ -1,0 +1,27 @@
+import { describe, expect, it } from "vitest";
+
+import { ALL_SOLID, LEGEND, recapCard } from "@/lib/recap-image/model";
+import { sampleSessionView } from "@/lib/session-view";
+
+describe("recap image card", () => {
+  it("summarizes the sample session", () => {
+    const card = recapCard(sampleSessionView());
+    expect(card.title).toBe("Ryan's workout");
+    expect(card.subtitle).toBe("Day 1 - Full body · Coach Tristan");
+    expect(card.stats.map((s) => s.value)).toEqual(["90/110", "10/11", expect.stringMatching(/^\d+%$/)]);
+    expect(card.focus).toEqual(["Biceps", "Forearms", "Front delts"]); // red first, then the lowest yellow
+    expect(card.colors.lats).toBe("gray");
+  });
+
+  it("says everything is solid when nothing is red or yellow", () => {
+    const view = sampleSessionView();
+    view.muscles = view.muscles.map((m) => (m.color === "gray" ? m : { ...m, color: "green" }));
+    expect(recapCard(view).focus).toEqual([]);
+    expect(recapCard(view).focusLine).toBe(ALL_SOLID);
+  });
+
+  it("never uses the word weak", () => {
+    const text = JSON.stringify([recapCard(sampleSessionView()), LEGEND]);
+    expect(text.toLowerCase()).not.toContain("weak");
+  });
+});
