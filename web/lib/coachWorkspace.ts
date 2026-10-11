@@ -9,7 +9,7 @@ export interface CoachWorkspaceStore {
   removeCoach(id: string): Promise<void>;
 }
 export type WorkspaceResult = { ok: true; token: string } | { ok: false; message: string };
-function nameValue(value: unknown): string | null {
+export function workspaceName(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const name = value.trim();
   return name.length >= 1 && name.length <= 80 && !/[\u0000-\u001f\u007f]/.test(name) ? name : null;
@@ -17,8 +17,8 @@ function nameValue(value: unknown): string | null {
 function privateToken(): string { return randomBytes(32).toString('hex'); }
 
 export async function createCoachWorkspace(store: CoachWorkspaceStore, coachName: unknown, clientName: unknown): Promise<WorkspaceResult> {
-  const name = nameValue(coachName);
-  const client = nameValue(clientName);
+  const name = workspaceName(coachName);
+  const client = workspaceName(clientName);
   if (!name || !client) return { ok: false, message: 'Enter a coach name and a first client name, each between 1 and 80 characters.' };
   const id = randomUUID();
   const token = privateToken();
@@ -38,7 +38,7 @@ export async function createCoachWorkspace(store: CoachWorkspaceStore, coachName
 export async function createClientForCoach(store: CoachWorkspaceStore, token: string, clientName: unknown): Promise<ActionState> {
   if (typeof token !== 'string' || !validToken(token)) return { ok: false, message: 'This coach link is invalid.' };
   if (readOnlyCoachToken(token)) return { ok: false, message: READ_ONLY_MESSAGE };
-  const name = nameValue(clientName);
+  const name = workspaceName(clientName);
   if (!name) return { ok: false, message: 'Enter a client name between 1 and 80 characters.' };
   try {
     const coach = await store.coach(token);

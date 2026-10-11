@@ -1,5 +1,6 @@
 'use server';
 import { revalidatePath } from 'next/cache';
+import { consumeProgramBudget } from '@/lib/programBudget';
 import { parseProgram, ProgramParseError } from '@/lib/parseProgram';
 import { parserFailureMessage } from '@/lib/programSupport';
 import { programStore } from '@/lib/programStore';
@@ -8,6 +9,7 @@ import { assignProgramDay, uploadProgram, WorkflowError, type ActionState } from
 export async function uploadAction(token: string, _previous: ActionState, form: FormData): Promise<ActionState> {
   let state: ActionState;
   try { state = await uploadProgram(programStore(), async bytes => {
+    await consumeProgramBudget('parser');
     try { return await parseProgram(bytes); }
     catch (error) {
       if (error instanceof ProgramParseError) throw new WorkflowError(parserFailureMessage(error.code));
