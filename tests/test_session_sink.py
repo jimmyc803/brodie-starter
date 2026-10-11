@@ -1,7 +1,11 @@
 """SessionSink on synthetic events: squat 2x3, pushup 1x2, the call ends during pushup set 1 after 1 rep."""
+import json
 import uuid
+from pathlib import Path
 
 from facetime.session_sink import SessionSink
+
+MUSCLE_COUNT = len(json.loads((Path(__file__).resolve().parents[1] / 'shared' / 'muscles.json').read_text())['muscles'])
 
 ITEMS = [{'exercise_key': 'squat', 'name': 'Squats', 'sets': 2, 'reps': 3, 'supported': True},
          {'exercise_key': 'pushup', 'name': 'Push-ups', 'sets': 1, 'reps': 2, 'supported': True}]
@@ -52,7 +56,7 @@ def test_sets_and_faults():
 def test_muscles():
     _, _, v = run()
     m = {r['muscle']: r for r in v['muscles']}
-    assert len(v['muscles']) == 15
+    assert len(v['muscles']) == MUSCLE_COUNT
     assert m['chest']['color'] != 'gray' and m['triceps']['coverage'] == 'primary'   # the one pushup counts
     assert m['quads']['color'] != 'gray' and m['biceps']['color'] == 'gray'
 

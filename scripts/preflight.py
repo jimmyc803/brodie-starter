@@ -30,7 +30,7 @@ FILES = ['data/cues_audio_gemini/manifest.json',             # the cue bank (fac
          'models/pose_landmarker_full.task',                 # MediaPipe pose, the default variant (src/rtcoach/pose.py)
          'models/pose_landmarker_lite.task',                 # the fallback variant (pipeline.switch_pose)
          'src/rtcoach/thresholds_e3c.json']                  # pipeline THR_DEFAULT
-MUSCLE_COUNT = 15
+MUSCLE_COUNT = len(json.loads((ROOT / 'shared' / 'muscles.json').read_text())['muscles'])
 
 results = []        # (name, status, detail)
 state = {}          # shared between checks: 'assignment', 'png'
