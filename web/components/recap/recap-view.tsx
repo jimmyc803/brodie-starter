@@ -1,7 +1,7 @@
 import { Heatmap } from "@/components/heatmap/heatmap";
 import { ExerciseCard } from "@/components/recap/exercise-card";
 import { RankBadge } from "@/components/recap/rank-badge";
-import type { SessionView } from "@/lib/contract";
+import type { ExerciseClip, SessionView } from "@/lib/contract";
 import { sessionRank } from "@/lib/ranks";
 import { muscleDetails, revealOrder, sessionStats } from "@/lib/recap";
 
@@ -34,7 +34,7 @@ function SectionTitle({ children, sub }: { children: React.ReactNode; sub?: stri
   );
 }
 
-export function RecapView({ view }: { view: SessionView }) {
+export function RecapView({ view, clips }: { view: SessionView; clips?: ExerciseClip[] }) {
   const stats = sessionStats(view);
   const date = formatDate(view.session.started_at);
   const subline = [view.day?.title, `Coach ${view.coach.name}`, date].filter(Boolean).join(" · ");
@@ -84,7 +84,7 @@ export function RecapView({ view }: { view: SessionView }) {
       <section className="mt-12">
         <SectionTitle sub="Estimated coverage from the exercises you did">Muscles worked</SectionTitle>
         <div className="rounded-3xl border border-white/5 bg-zinc-900 p-4 sm:p-6">
-          <Heatmap details={muscleDetails(view)} order={revealOrder(view)} />
+          <Heatmap details={muscleDetails(view)} order={revealOrder(view)} clips={clips} />
         </div>
       </section>
 

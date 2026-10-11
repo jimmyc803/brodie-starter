@@ -26,6 +26,8 @@ export type ExerciseView = {
   planned_reps: number;
   sets: SetView[];
 };
+// A stretch of workout footage for one exercise (signed storage URL, seconds into the video; end null = to the end).
+export type ExerciseClip = { exercise_key: string; url: string; start: number; end: number | null };
 export type MuscleScore = { muscle: MuscleKey; score: number; color: Color; coverage: Coverage };
 
 // GET /api/session/[token]: what the recap page and the recap image read.
