@@ -19,31 +19,31 @@ function setColor(s: SetView): Color {
   return "red";
 }
 
-function SetBar({ set }: { set: SetView }) {
+// One set as a small tile: reps on top, a thin bar for planned vs completed, flagged reps underneath.
+function SetTile({ set }: { set: SetView }) {
   const reached = setReached(set);
   const pct = set.planned_reps ? Math.min(100, (set.completed_reps / set.planned_reps) * 100) : 0;
-  const color = COLORS[setColor(set)];
   const flagged = faultyReps(set);
-
   return (
-    <li className="grid grid-cols-[3.25rem_1fr_5rem] items-center gap-3">
-      <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">Set {set.set_number}</span>
+    <li className="min-w-0" aria-label={`Set ${set.set_number}`}>
+      <div className="flex items-baseline justify-between gap-1 text-[11px] text-zinc-500">
+        <span className="font-semibold uppercase tracking-wider">S{set.set_number}</span>
+        {reached ? (
+          <span className="tabular-nums">
+            <span className="text-sm font-bold text-white">{set.completed_reps}</span>/{set.planned_reps}
+          </span>
+        ) : null}
+      </div>
       {reached ? (
-        <div className="h-3.5 overflow-hidden rounded-full bg-zinc-800" aria-hidden>
-          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: color }} />
+        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800" aria-hidden>
+          <div className="h-full rounded-full" style={{ width: `${pct}%`, background: COLORS[setColor(set)] }} />
         </div>
       ) : (
-        <div className="h-3.5 rounded-full border border-dashed border-zinc-700" aria-hidden />
+        <div className="mt-1 h-1.5 rounded-full border border-dashed border-zinc-700" aria-hidden />
       )}
-      {reached ? (
-        <span className="text-right text-sm leading-tight tabular-nums">
-          <span className="font-bold text-white">{set.completed_reps}</span>
-          <span className="text-zinc-500">/{set.planned_reps}</span>
-          {flagged ? <span className="block text-[11px] text-zinc-500">{flagged} flagged</span> : null}
-        </span>
-      ) : (
-        <span className="text-right text-xs font-medium text-zinc-500">not reached</span>
-      )}
+      <div className="mt-1 truncate text-[10px] text-zinc-500">
+        {!reached ? "not reached" : flagged ? `${flagged} flagged` : "clean"}
+      </div>
     </li>
   );
 }
@@ -54,41 +54,39 @@ export function ExerciseCard({ exercise }: { exercise: ExerciseView }) {
   const faults = topFaults(exercise.sets.flatMap((s) => s.reps));
 
   return (
-    <article className="rounded-3xl border border-white/5 bg-zinc-900 p-5">
+    <article className="rounded-2xl border border-white/5 bg-zinc-900 px-4 py-3">
       <header className="flex items-baseline justify-between gap-3">
-        <h3 className="text-xl font-bold tracking-tight">{exercise.name}</h3>
+        <h3 className="text-base font-bold tracking-tight">{exercise.name}</h3>
         <p className="shrink-0 tabular-nums">
-          <span className="text-2xl font-black">{done}</span>
-          <span className="text-base font-semibold text-zinc-500">/{planned}</span>
-          <span className="ml-1 text-xs text-zinc-500">reps</span>
+          <span className="text-lg font-black">{done}</span>
+          <span className="text-sm font-semibold text-zinc-500">/{planned}</span>
+          <span className="ml-1 text-[11px] text-zinc-500">reps</span>
         </p>
       </header>
 
-      <ul className="mt-4 space-y-3">
+      <ul
+        className="mt-2 grid gap-3"
+        style={{ gridTemplateColumns: `repeat(${Math.max(1, exercise.sets.length)}, minmax(0, 1fr))` }}
+      >
         {exercise.sets.map((s) => (
-          <SetBar key={s.set_number} set={s} />
+          <SetTile key={s.set_number} set={s} />
         ))}
       </ul>
 
-      <div className="mt-4 border-t border-white/5 pt-4">
+      <ul className="mt-2.5 flex flex-wrap gap-1.5" aria-label="Brodie's cues">
         {faults.length ? (
-          <>
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-zinc-500">Brodie&apos;s cues</p>
-            <ul className="flex flex-wrap gap-2" aria-label="Form flags">
-              {faults.map(([cue, n]) => (
-                <li
-                  key={cue}
-                  className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-3 py-1 text-sm font-medium text-yellow-100"
-                >
-                  {cue} <span className="tabular-nums text-yellow-200/60">×{n}</span>
-                </li>
-              ))}
-            </ul>
-          </>
+          faults.map(([cue, n]) => (
+            <li
+              key={cue}
+              className="rounded-full border border-yellow-400/20 bg-yellow-400/10 px-2 py-0.5 text-xs font-medium text-yellow-100"
+            >
+              {cue} <span className="tabular-nums text-yellow-200/60">×{n}</span>
+            </li>
+          ))
         ) : (
-          <p className="text-sm font-medium text-green-400">No form flags</p>
+          <li className="text-xs font-medium text-green-400">No form flags</li>
         )}
-      </div>
+      </ul>
     </article>
   );
 }
