@@ -1,9 +1,10 @@
 // The 1080 x 1920 recap card as Satori JSX (flexbox only; every multi-child div sets display: flex).
 // Shown as video on the FaceTime call, sent as the iMessage image and used as the recap link's preview.
-import { SCORE_GRADIENT_CSS, UNTRAINED } from "@/lib/body/neon";
+import { UNTRAINED } from "@/lib/body/neon";
 import { VIEWBOX } from "@/lib/body/shapes";
 import { bodySvgDataUri } from "@/lib/body/svg";
 import { COLORS } from "@/lib/contract";
+import { RANKS } from "@/lib/ranks";
 import type { RecapCard } from "@/lib/recap-image/model";
 
 export const CARD_WIDTH = 1080;
@@ -76,7 +77,6 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
           padding: "14px 34px",
           borderRadius: 999,
           border: `3px solid ${card.rank.color}`,
-          boxShadow: `0 0 ${card.rank.tier === 8 ? 60 : 30}px ${card.rank.color}66`,
           fontSize: 40,
           letterSpacing: 4,
           color: card.rank.color,
@@ -93,13 +93,16 @@ export function RecapCardImage({ card }: { card: RecapCard }) {
         <Body side="back" card={card} />
       </div>
 
-      {/* Legend: the score bar (team colors, blended) and "not trained" */}
+      {/* Legend: the rank ladder (each tier in the color its muscles are painted) and "not trained" */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 30, fontSize: 26, color: MUTED }}>
-        <div style={{ display: "flex", width: 640, height: 18, borderRadius: 9, backgroundImage: SCORE_GRADIENT_CSS }} />
+        <div style={{ display: "flex", width: 640, justifyContent: "space-between" }}>
+          {RANKS.map((r) => (
+            <div key={r.key} style={{ display: "flex", width: 74, height: 14, borderRadius: 7, backgroundColor: r.color }} />
+          ))}
+        </div>
         <div style={{ display: "flex", width: 640, justifyContent: "space-between", marginTop: 10 }}>
-          <div style={{ display: "flex" }}>Needs work</div>
-          <div style={{ display: "flex" }}>Room to improve</div>
-          <div style={{ display: "flex" }}>Solid</div>
+          <div style={{ display: "flex" }}>{RANKS[0].name}</div>
+          <div style={{ display: "flex" }}>{RANKS[RANKS.length - 1].name}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", marginTop: 14 }}>
           <div style={{ display: "flex", width: 22, height: 22, borderRadius: 11, backgroundColor: UNTRAINED, marginRight: 12 }} />

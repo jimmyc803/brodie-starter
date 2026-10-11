@@ -1,6 +1,6 @@
 import { RANKS, type SessionRank } from "@/lib/ranks";
 
-// Today's rank on the recap: one compact card, name in the tier colour, the ladder underneath. Tier art slots in later.
+// Today's rank and ladder use the same discrete colors as the muscle map.
 export function RankBadge({ r }: { r: SessionRank }) {
   const { rank, next, skipped } = r;
   const pts = r.score === null ? null : Math.floor(r.score * 100); // floor, so points never reach the next tier before the rank does
@@ -16,13 +16,13 @@ export function RankBadge({ r }: { r: SessionRank }) {
         {skipped ? "Every Brodie starts somewhere" : rank.name}
       </p>
 
-      {/* the ladder: every tier as a pip, earned ones lit */}
+      {/* Keep every swatch in its exact rank color; outline the current tier. */}
       <ol className="mt-3 flex items-center gap-1" aria-label="Rank ladder">
         {RANKS.map((x) => {
-          const earned = !skipped && x.tier <= rank.tier;
+          const current = !skipped && x.tier === rank.tier;
           return (
             <li key={x.key} className="flex-1" title={x.name}>
-              <span className="block h-1.5 w-full rounded-full" style={{ background: earned ? x.color : "#27272a" }} />
+              <span className={`block h-1.5 w-full rounded-full ${current ? "outline-2 outline-offset-2 outline-white" : ""}`} style={{ background: x.color }} />
             </li>
           );
         })}
