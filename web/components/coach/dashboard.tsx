@@ -3,9 +3,9 @@ import Link from "next/link";
 import { ClientList } from "@/components/coach/client-list";
 import { SessionDetail } from "@/components/coach/session-detail";
 import { shortDate } from "@/components/coach/format";
-import { SiteHeader } from "@/components/site-header";
 import type { CoachClient, CoachView } from "@/lib/coach-view";
 import { completedReps, type ExerciseClip } from "@/lib/contract";
+import { coachOverview } from "@/lib/coach-overview";
 import { sortSummaries, summarizeClient, type ClientSummary } from "@/lib/coach-status";
 import { sessionStats } from "@/lib/recap";
 import { SAMPLE_COACH_TOKEN } from "@/lib/session-view";
@@ -37,7 +37,7 @@ export function CoachDashboard({
   selectedClient,
   selectedSession,
   clips,
-  base = `/c/${encodeURIComponent(token)}`,
+  base = `/c/${encodeURIComponent(token)}/clients`,
 }: {
   view: CoachView;
   token: string;
@@ -49,27 +49,18 @@ export function CoachDashboard({
   const { summaries, client, session } = pickSelection(view, selectedClient, selectedSession);
   const summary = summaries.find((s) => s.id === client?.id);
 
-  const sessionsThisWeek = summaries.reduce((n, s) => n + s.thisWeek, 0);
+  // Workouts with reps in the last 7 days: the same count as the Overview (empty test calls don't count).
+  const sessionsThisWeek = coachOverview(view).sessionsThisWeek;
   const toReview = summaries.filter((s) => s.status === "review").length;
   const programsHref = `/c/${encodeURIComponent(token === "demo" ? SAMPLE_COACH_TOKEN : token)}/program`;
 
   return (
-    <div className="mx-auto w-full max-w-7xl px-4 pb-10 pt-5 sm:px-6 sm:pt-8">
-      <SiteHeader
-        context={
-          <Link
-            className="rounded-full bg-zinc-50 px-4 py-2 text-sm font-medium text-zinc-950 transition-colors hover:bg-zinc-200"
-            href={programsHref}
-          >
-            Programs
-          </Link>
-        }
-      />
-      <header className="mt-8">
-        <h1 className="text-3xl font-bold tracking-tight text-zinc-50">Coach {view.coach.name}</h1>
+    <div>
+      <header>
+        <h1 className="text-3xl font-bold tracking-tight text-zinc-50">Clients</h1>
         <p className="mt-1 text-sm text-zinc-400">
           {view.clients.length} {view.clients.length === 1 ? "client" : "clients"} · {sessionsThisWeek}{" "}
-          {sessionsThisWeek === 1 ? "session" : "sessions"} this week
+          {sessionsThisWeek === 1 ? "workout" : "workouts"} this week
           {toReview ? (
             <>
               {" · "}
