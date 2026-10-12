@@ -85,3 +85,25 @@ export function pickPowerHour(rows: PowerHour[], nowMs: number): PowerHour | nul
     .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
   return upcoming[0] ?? null;
 }
+
+/** "Sun Oct 18 · 11:59 PM ET" for an ISO instant, in America/New_York. Null when unparseable. */
+export function formatEtDeadline(iso: string | null): string | null {
+  if (!iso) return null;
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return null;
+  const d = new Date(ms);
+  const day = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  })
+    .format(d)
+    .replace(",", "");
+  const time = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(d);
+  return `${day} · ${time} ET`;
+}

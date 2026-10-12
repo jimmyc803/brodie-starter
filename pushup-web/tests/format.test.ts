@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatCountdown,
   formatEta,
+  formatEtDeadline,
   formatLineStatus,
   isFinal,
   powerHourStatus,
@@ -71,5 +72,15 @@ describe("smsLink", () => {
   it("builds the sms link", () => {
     expect(smsLink("+15551234567")).toBe("sms:+15551234567&body=JOIN%20");
     expect(smsLink(null)).toBeNull();
+  });
+});
+
+describe("formatEtDeadline", () => {
+  it("formats the freeze instant in Eastern Time", () => {
+    expect(formatEtDeadline("2026-10-19T03:59:59.000Z")).toBe("Sun Oct 18 · 11:59 PM ET");
+  });
+  it("returns null for missing or bad input", () => {
+    expect(formatEtDeadline(null)).toBeNull();
+    expect(formatEtDeadline("nope")).toBeNull();
   });
 });

@@ -1,30 +1,43 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Avatar } from "@/components/brodie-avatar";
+import { LeaderRow } from "@/components/leader-row";
+import { SearchIcon, XIcon } from "@/components/ui/icons";
 import { filterByName, ilikePattern, mapLeaderboardRow } from "@/lib/mappers";
-import { getBrowserClient } from "@/lib/supabase-browser";
 import type { LeaderboardRow } from "@/lib/types";
 
-export function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
+/**
+ * Sticky "find me" + results. When the box is empty it renders `children`
+ * (the server-rendered podium and list), so the default board costs no client render work.
+ */
+export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; children: React.ReactNode }) {
   const [q, setQ] = useState("");
   const [found, setFound] = useState<LeaderboardRow[] | null>(null);
   const needle = q.trim();
 
   // "Find me" queries the full public leaderboard, independent of the top-100 shown.
   useEffect(() => {
-    const sb = getBrowserClient();
-    if (!needle || !sb) return;
+    if (!needle) return;
     let cancelled = false;
     const id = setTimeout(async () => {
-      const { data, error } = await sb
-        .from("leaderboard_public")
-        .select("*")
-        .ilike("display_name", ilikePattern(needle))
-        .order("rank", { ascending: true })
-        .limit(20);
-      if (cancelled) return;
-      setFound(error || !data ? null : data.map(mapLeaderboardRow));
+      // Loaded on first search only, keeping supabase-js out of the initial bundle.
+      try {
+        const { getBrowserClient } = await import("@/lib/supabase-browser");
+        const sb = getBrowserClient();
+        if (!sb || cancelled) return;
+        const { data, error } = await sb
+          .from("leaderboard_public")
+          .select("*")
+          .ilike("display_name", ilikePattern(needle))
+          .order("rank", { ascending: true })
+          .limit(20);
+        if (cancelled) return;
+        setFound(error || !data ? null : data.map(mapLeaderboardRow));
+      } catch (err) {
+        // Network or chunk failure: fall back to filtering the rows already on the page.
+        console.error("find me search failed", err);
+        if (!cancelled) setFound(null);
+      }
     }, 300);
     return () => {
       cancelled = true;
@@ -35,49 +48,62 @@ export function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
   const shown = needle ? (found ?? filterByName(rows, needle)) : rows;
 
   return (
-    <section aria-label="Leaderboard">
-      <label className="block">
-        <span className="text-xs font-bold uppercase tracking-widest text-ink-2">Find me</span>
-        <input
-          type="search"
-          value={q}
-          onChange={(e) => {
-            setQ(e.target.value);
-            setFound(null);
-          }}
-          placeholder="Search your name"
-          className="mt-1 w-full rounded-lg border border-hairline bg-surface px-3 py-3 text-base text-ink placeholder:text-ink-2 focus:border-accent focus:outline-none"
-        />
-      </label>
-      {rows.length === 0 && !needle ? (
-        <p className="mt-6 text-ink-2">No one on the board yet. Be the first.</p>
-      ) : shown.length === 0 ? (
-        <p className="mt-6 text-ink-2">No one found with that name.</p>
-      ) : (
-        <ol className="mt-4 divide-y divide-hairline rounded-xl border border-hairline bg-surface">
-          {shown.map((r) => (
-            <li key={r.publicId} className="flex items-center gap-3 px-3 py-3">
-              <span
-                className={`w-10 text-right font-display text-2xl tabular-nums ${r.rank <= 3 ? "text-accent" : "text-ink-2"}`}
+    <section aria-labelledby="board-title" className="space-y-4">
+      <div className="sticky top-[3.6rem] z-20 -mx-4 bg-canvas/80 px-4 py-2 backdrop-blur-xl sm:static sm:mx-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
+        <div className="flex items-center gap-3">
+          <h2 id="board-title" className="hidden font-display text-3xl font-extrabold uppercase sm:block">
+            Leaderboard
+          </h2>
+          <label className="relative flex-1 sm:ml-auto sm:max-w-sm">
+            <span className="sr-only">Find me by display name</span>
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-ink-3" />
+            <input
+              type="search"
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setFound(null);
+              }}
+              placeholder="Find me: search your name"
+              autoComplete="off"
+              enterKeyHint="search"
+              className="h-12 w-full rounded-full border border-hairline-strong bg-surface pr-12 pl-11 text-base text-ink placeholder:text-ink-3 focus:border-accent focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+            />
+            {q ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setQ("");
+                  setFound(null);
+                }}
+                aria-label="Clear search"
+                className="absolute top-1/2 right-1 grid size-11 -translate-y-1/2 place-items-center rounded-full text-ink-2 hover:text-ink"
               >
-                {r.rank}
-              </span>
-              <Avatar level={r.avatarLevel} size={36} />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate font-semibold">{r.displayName}</span>
-                <span className="text-xs text-ink-2">
-                  {r.validReps} valid reps
-                  {r.streak > 0 ? ` · ${r.streak}-day streak` : ""}
-                  {r.badges.length > 0 ? ` · ${r.badges.join(", ")}` : ""}
-                </span>
-              </span>
-              <span className="text-right">
-                <span className="block font-display text-3xl tabular-nums leading-none">{r.points}</span>
-                <span className="text-xs uppercase tracking-widest text-ink-2">pts</span>
-              </span>
-            </li>
-          ))}
-        </ol>
+                <XIcon className="size-4" />
+              </button>
+            ) : null}
+          </label>
+        </div>
+      </div>
+
+      {!needle ? (
+        children
+      ) : shown.length === 0 ? (
+        <div className="card p-8 text-center" role="status">
+          <p className="font-display text-2xl font-extrabold uppercase">No one named &ldquo;{needle}&rdquo;</p>
+          <p className="mt-1 text-sm text-ink-2">Check the spelling, or text JOIN to get on the board.</p>
+        </div>
+      ) : (
+        <>
+          <p className="sr-only" role="status">
+            {shown.length} {shown.length === 1 ? "match" : "matches"}
+          </p>
+          <ol className="card divide-y divide-hairline overflow-hidden">
+            {shown.map((r) => (
+              <LeaderRow key={r.publicId} row={r} />
+            ))}
+          </ol>
+        </>
       )}
     </section>
   );

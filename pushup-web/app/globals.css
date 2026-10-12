@@ -1,23 +1,164 @@
 @import "tailwindcss";
 
+/*
+ * Brodie design system.
+ * Surfaces: near-black, layered (canvas < surface < surface-2 < surface-3).
+ * One loud accent (volt). Status colors only for semantic state.
+ * Type: display = condensed athletic grotesk, body = clean sans, mono = scoreboard digits.
+ */
 @theme {
-  --color-canvas: #0a0a0b;
-  --color-surface: #151517;
-  --color-surface-2: #1f1f22;
-  --color-ink: #f5f5f4;
-  --color-ink-2: #b4b4b0;
-  --color-hairline: rgba(255, 255, 255, 0.12);
+  /* color */
+  --color-canvas: #08080a;
+  --color-surface: #111114;
+  --color-surface-2: #18181c;
+  --color-surface-3: #222228;
+  --color-ink: #f6f6f3;
+  --color-ink-2: #b9b9b3;
+  --color-ink-3: #8e8e88;
+  --color-hairline: rgb(255 255 255 / 0.09);
+  --color-hairline-strong: rgb(255 255 255 / 0.16);
   --color-accent: #d4ff3a;
-  --color-on-accent: #0a0a0b;
-  --color-bad: #ff5c4d;
-  --font-display: "Impact", "Haettenschweiler", "Arial Narrow Bold", system-ui, sans-serif;
+  --color-accent-dim: rgb(212 255 58 / 0.14);
+  --color-on-accent: #0a0b05;
+  --color-good: #d4ff3a;
+  --color-bad: #ff6b5e;
+  --color-live: #ff4d3d;
+  --color-gold: #ffd75e;
+  --color-silver: #d6dbe4;
+  --color-bronze: #e3a172;
+
+  /* type */
+  --font-display: var(--font-barlow), "Arial Narrow", system-ui, sans-serif;
+  --font-sans: var(--font-inter), system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-mono: var(--font-jbmono), ui-monospace, "SF Mono", Menlo, monospace;
+  --text-mega: clamp(3.5rem, 15.5vw, 8rem);
+  --text-mega--line-height: 0.86;
+  --text-hero: clamp(2.75rem, 9vw, 5rem);
+  --text-hero--line-height: 0.9;
+
+  /* radii */
+  --radius-card: 1.25rem;
+  --radius-chip: 999px;
+
+  /* motion */
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.1, 1);
+  --animate-pulse-dot: pulse-dot 1.6s var(--ease-snap) infinite;
+  --animate-stripes: stripes 1.2s linear infinite;
+  --animate-rise: rise 0.5s var(--ease-snap) both;
+  --animate-delta: delta 0.6s var(--ease-snap) both;
+  --animate-shimmer: shimmer 1.4s linear infinite;
+  --animate-throb: throb 1.2s ease-in-out infinite;
+
+  @keyframes pulse-dot {
+    0% { box-shadow: 0 0 0 0 currentColor; }
+    70% { box-shadow: 0 0 0 0.5rem transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  @keyframes stripes {
+    to { background-position: 2.5rem 0; }
+  }
+  @keyframes rise {
+    from { transform: translateY(0.75rem); }
+    to { transform: none; }
+  }
+  @keyframes delta {
+    0% { opacity: 0; transform: translateY(var(--delta-from, 0.5rem)) scale(0.6); }
+    60% { opacity: 1; transform: translateY(0) scale(1.15); }
+    100% { opacity: 1; transform: none; }
+  }
+  @keyframes shimmer {
+    to { background-position: -200% 0; }
+  }
+  @keyframes throb {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.06); }
+  }
 }
 
-html {
-  color-scheme: dark;
+@layer base {
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+    scroll-padding-top: 5rem;
+  }
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+  }
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 3px;
+    border-radius: 0.5rem;
+  }
 }
-body {
-  background: var(--color-canvas);
-  color: var(--color-ink);
-  font-family: system-ui, -apple-system, "Helvetica Neue", sans-serif;
+
+@layer components {
+  /* Ambient backdrop: soft volt glow + film grain. Pure CSS, no network. */
+  .stage {
+    background:
+      radial-gradient(60rem 30rem at 85% -10%, rgb(212 255 58 / 0.10), transparent 60%),
+      radial-gradient(40rem 26rem at -10% 10%, rgb(120 140 255 / 0.06), transparent 60%),
+      var(--color-canvas);
+  }
+  .grain::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 60;
+    opacity: 0.06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .card {
+    border-radius: var(--radius-card);
+    border: 1px solid var(--color-hairline);
+    background: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 40%), var(--color-surface);
+  }
+  .eyebrow {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-ink-2);
+  }
+  .stripes-live {
+    background-image: repeating-linear-gradient(
+      -45deg,
+      rgb(0 0 0 / 0.09) 0 0.625rem,
+      transparent 0.625rem 1.25rem
+    );
+    background-size: 2.5rem 100%;
+  }
+  .skeleton {
+    background: linear-gradient(90deg, var(--color-surface-2) 0%, var(--color-surface-3) 50%, var(--color-surface-2) 100%);
+    background-size: 200% 100%;
+    border-radius: 0.75rem;
+  }
+  .prose-brodie p,
+  .prose-brodie li {
+    color: var(--color-ink-2);
+    line-height: 1.65;
+  }
+  .prose-brodie strong {
+    color: var(--color-ink);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

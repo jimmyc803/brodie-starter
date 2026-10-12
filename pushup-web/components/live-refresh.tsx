@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { createMaxWaitDebounce } from "@/lib/throttle";
-import { getBrowserClient } from "@/lib/supabase-browser";
+import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
 
 const RECONCILE_MS = 30_000;
 
@@ -17,14 +17,24 @@ export function LiveRefresh() {
   useEffect(() => {
     const refresher = createMaxWaitDebounce(() => router.refresh(), 500, 1000);
     const interval = setInterval(() => router.refresh(), RECONCILE_MS);
-    const sb = getBrowserClient();
-    const channel = sb
-      ?.channel("site_pulse")
-      .on("postgres_changes", { event: "*", schema: "public", table: "site_pulse" }, refresher.trigger)
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") refresher.trigger();
-      });
+    let disposed = false;
+    let sb: SupabaseClient | null = null;
+    let channel: RealtimeChannel | undefined;
+    // Load the realtime client after first paint so it stays out of the critical bundle.
+    void import("@/lib/supabase-browser")
+      .then(({ getBrowserClient }) => {
+        if (disposed) return;
+        sb = getBrowserClient();
+        channel = sb
+          ?.channel("site_pulse")
+          .on("postgres_changes", { event: "*", schema: "public", table: "site_pulse" }, refresher.trigger)
+          .subscribe((status) => {
+            if (status === "SUBSCRIBED") refresher.trigger();
+          });
+      })
+      .catch((err: unknown) => console.error("live refresh unavailable", err));
     return () => {
+      disposed = true;
       refresher.cancel();
       clearInterval(interval);
       if (sb && channel) void sb.removeChannel(channel);
