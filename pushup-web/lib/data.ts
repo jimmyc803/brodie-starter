@@ -43,7 +43,7 @@ function fixtureView(path: string): Record<string, unknown>[] {
   return (fixtures[view] ?? []).filter((row) => {
     for (const key of ["display_name", "call_id"]) {
       const filter = params.get(key);
-      if (filter?.startsWith("eq.") && JSON.stringify(row[key]) !== filter.slice(3)) return false;
+      if (filter?.startsWith("eq.") && String(row[key]) !== filter.slice(3)) return false;
     }
     return true;
   });
@@ -102,8 +102,8 @@ export async function getCompetition(): Promise<(CompetitionPublic & { avatarLev
 }
 
 function filteredView(view: string, column: string, value: string, extra: Record<string, string> = {}) {
-  const query = new URLSearchParams({ select: "*", [column]: `eq.${JSON.stringify(value)}`, ...extra });
-  return fetchView(`${view}?${query}`);
+  const query = new URLSearchParams(extra);
+  return fetchView(`${view}?select=*&${column}=eq.${encodeURIComponent(String(value))}&${query}`);
 }
 
 export async function getProfile(name: string) {
@@ -130,8 +130,10 @@ export async function getNextPowerHour(): Promise<PowerHour | null> {
 export async function getResultCardModel(callId: string) {
   const result = await getCallResult(callId);
   if (!result) return null;
-  const [profile, powerHour, competition] = await Promise.all([
-    getProfile(result.displayName), getNextPowerHour(), getCompetition(),
+  const [powerHour, competition] = await Promise.all([
+    getNextPowerHour(), getCompetition(),
   ]);
-  return makeCardModel(result, profile, powerHour, competition?.siteUrl);
+  // call_result_public exposes no stable user key; display names may be shared.
+  // Use the call's snapshots and leave profile-only streak data unavailable.
+  return makeCardModel(result, null, powerHour, competition?.siteUrl);
 }

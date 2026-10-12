@@ -125,23 +125,51 @@ describe("public data loaders", () => {
     expect(await getProfile("missing")).toBeNull();
   });
 
-  it("quotes user filters, uses public views and selects the next future power hour", async () => {
+  it("encodes raw equality filters, uses public views and selects the next future power hour", async () => {
     vi.stubEnv("PUSHUP_FIXTURES", "0");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://db.example");
     vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "test-anon-key");
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => [] });
     vi.stubGlobal("fetch", fetchMock);
-    const { getProfile, getNextPowerHour } = await import("@/lib/data");
-    const name = 'A&B,"name"';
+    const { getProfile, getCallResult, getNextPowerHour } = await import("@/lib/data");
+    const name = 'A&B, "name" + %';
     await getProfile(name);
     const [url, options] = fetchMock.mock.calls[0];
     expect(new URL(url).pathname).toBe("/rest/v1/user_public");
-    expect(new URL(url).searchParams.get("display_name")).toBe(`eq.${JSON.stringify(name)}`);
+    expect(new URL(url).search).toBe("?select=*&display_name=eq.A%26B%2C%20%22name%22%20%2B%20%25&limit=1");
+    expect(new URL(url).searchParams.get("display_name")).toBe(`eq.${name}`);
     expect(options.cache).toBe("no-store");
+    await getCallResult("00000000-0000-4000-8000-000000000042");
+    expect(new URL(fetchMock.mock.calls[1][0]).search).toBe("?select=*&call_id=eq.00000000-0000-4000-8000-000000000042&limit=1");
     await getNextPowerHour();
-    const query = new URL(fetchMock.mock.calls[1][0]).searchParams;
+    const query = new URL(fetchMock.mock.calls[2][0]).searchParams;
     expect(query.get("starts_at")).toMatch(/^gt\.\d{4}-/);
     expect(query.get("order")).toBe("starts_at.asc");
     expect(query.get("limit")).toBe("1");
+  });
+
+  it("does not attach another athlete's profile when display names are shared", async () => {
+    vi.stubEnv("PUSHUP_FIXTURES", "0");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "https://db.example");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "test-anon-key");
+    const fetchMock = vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => {
+        const view = new URL(url).pathname.split("/").pop();
+        if (view === "call_result_public") return [call];
+        if (view === "user_public") return [
+          { public_id: "another-athlete", display_name: call.display_name, streak: 99 },
+          { public_id: "call-athlete", display_name: call.display_name, streak: 3 },
+        ];
+        return [];
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { getResultCardModel } = await import("@/lib/data");
+    expect(await getResultCardModel(call.call_id)).toMatchObject({
+      displayName: "Ana", pointsBefore: 100, totalPoints: 130,
+      levelBefore: 3, levelAfter: 4, rankLabel: "#9 → #6", streak: null,
+    });
+    expect(fetchMock.mock.calls.some(([url]) => new URL(url).pathname.endsWith("/user_public"))).toBe(false);
   });
 });
