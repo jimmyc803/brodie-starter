@@ -9,7 +9,8 @@ const cookieJar = new Map<string, string>();
 vi.mock("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) => (cookieJar.has(name) ? { name, value: cookieJar.get(name) } : undefined),
-    set: (name: string, value: string) => void cookieJar.set(name, value),
+    set: (name: string, value: string, opts?: { maxAge?: number }) =>
+      void (opts?.maxAge === 0 ? cookieJar.delete(name) : cookieJar.set(name, value)),
   }),
 }));
 vi.mock("next/navigation", () => ({
@@ -19,8 +20,13 @@ vi.mock("next/navigation", () => ({
 }));
 vi.mock("next/cache", () => ({ refresh: vi.fn() }));
 
+import { NextRequest } from "next/server";
 import {
   ACCESS_COOKIE,
+  LOGIN_NONCE_COOKIE,
+  REFRESH_COOKIE,
+  issueLoginNonce,
+  loginNonceMatches,
   AdminInputError,
   checkAdmin,
   etYesterday,
@@ -36,13 +42,20 @@ import {
   sendLoginCode,
   setBan,
   setConfigValue,
+  verifyLoginCode,
 } from "@/app/admin/actions";
+import { GET as confirmGet, POST as confirmPost } from "@/app/admin/auth/confirm/route";
+import { proxy } from "@/proxy";
 
 // ---- fake Supabase + dispatcher
 const SUPA = "https://proj.supabase.test";
 const DISP = "https://dispatcher.test";
 const ALLOW = ["Boss@Example.com"];
 const TOKENS: Record<string, string> = { "tok-boss": "boss@example.com", "tok-rando": "rando@example.com" };
+
+const HASHES: Record<string, string> = { "hash-boss-0001": "boss@example.com", "hash-rando-001": "rando@example.com" };
+let verifyOmitsEmail = false;
+let refreshReply: { status: number; body: unknown } = { status: 200, body: {} };
 
 type Call = { url: string; method: string; headers: Record<string, string>; body: unknown };
 let calls: Call[] = [];
@@ -69,6 +82,15 @@ function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
   }
   if (url === `${SUPA}/rest/v1/audit_log`) return Promise.resolve(new Response(null, { status: 201 }));
   if (url === `${SUPA}/auth/v1/otp`) return json(200, {});
+  if (url === `${SUPA}/auth/v1/verify`) {
+    const b = body as Record<string, string>;
+    const email = b.token_hash ? HASHES[b.token_hash] : b.token === "123456" ? b.email : undefined;
+    if (!email) return json(403, { error_code: "otp_expired", msg: "Token has expired or is invalid" });
+    const user = verifyOmitsEmail ? { id: "u1" } : { id: "u1", email };
+    return json(200, { access_token: "tok-new", refresh_token: "rt-new", expires_in: 3600, user });
+  }
+  if (url.startsWith(`${SUPA}/auth/v1/logout`)) return Promise.resolve(new Response(null, { status: 204 }));
+  if (url === `${SUPA}/auth/v1/token?grant_type=refresh_token`) return json(refreshReply.status, refreshReply.body);
   if (url.startsWith(DISP)) {
     if (headers["X-Brodie-Token"] !== "disp-token") return json(401, { detail: "bad token" });
     return json(200, { eligible_count: 12, winner: { display_name: "Ana" }, recipients: 3, preview: "hi" });
@@ -91,6 +113,8 @@ const USER = "11111111-2222-3333-4444-555555555555";
 beforeEach(() => {
   calls = [];
   cookieJar.clear();
+  verifyOmitsEmail = false;
+  refreshReply = { status: 200, body: {} };
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", SUPA);
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY", "anon-key-test");
   vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "service-key-test");
@@ -156,6 +180,146 @@ describe("allowlist guard", () => {
     const otp = calls.filter((c) => c.url.endsWith("/auth/v1/otp"));
     expect(otp).toHaveLength(1);
     expect(otp[0].body).toMatchObject({ email: "boss@example.com" });
+  });
+});
+
+const verifyCalls = () => calls.filter((c) => c.url.endsWith("/auth/v1/verify"));
+const logoutCalls = () => calls.filter((c) => c.url.includes("/auth/v1/logout"));
+
+describe("login binding (login CSRF)", () => {
+  it("nonce cookie is HMAC-bound to the email and tamper-evident", () => {
+    const v = issueLoginNonce("Boss@Example.com").value;
+    expect(loginNonceMatches(v, "boss@example.com")).toBe(true);
+    expect(loginNonceMatches(v, "rando@example.com")).toBe(false);
+    expect(loginNonceMatches(undefined, "boss@example.com")).toBe(false);
+    const [payload, sig] = v.split(".");
+    const forged = Buffer.from(JSON.stringify({ e: "boss@example.com", n: "x", x: 9e9 })).toString("base64url");
+    expect(loginNonceMatches(`${forged}.${sig}`, "boss@example.com")).toBe(false);
+    expect(loginNonceMatches(`${payload}.${sig}x`, "boss@example.com")).toBe(false);
+    expect(loginNonceMatches(v, "boss@example.com", Math.floor(Date.now() / 1000) + 16 * 60)).toBe(false);
+  });
+
+  it("code sign-in without a nonce cookie (or for another email) sets no session and does not spend the code", async () => {
+    const fd = () => form({ email: "boss@example.com", code: "123456" });
+    expect(await verifyLoginCode(PREV, fd())).toMatchObject({ ok: false, status: 403 });
+    cookieJar.set(LOGIN_NONCE_COOKIE, issueLoginNonce("rando@example.com").value);
+    expect(await verifyLoginCode(PREV, fd())).toMatchObject({ ok: false, status: 403 });
+    cookieJar.set(LOGIN_NONCE_COOKIE, "garbage.value");
+    expect(await verifyLoginCode(PREV, fd())).toMatchObject({ ok: false, status: 403 });
+    expect(verifyCalls()).toHaveLength(0);
+    expect(cookieJar.has(ACCESS_COOKIE)).toBe(false);
+  });
+
+  it("code sign-in from the requesting browser succeeds and consumes the nonce", async () => {
+    await sendLoginCode(PREV, form({ email: "boss@example.com" }));
+    expect(cookieJar.has(LOGIN_NONCE_COOKIE)).toBe(true);
+    await expect(verifyLoginCode(PREV, form({ email: "boss@example.com", code: "123456" }))).rejects.toThrow(
+      "REDIRECT:/admin",
+    );
+    expect(cookieJar.get(ACCESS_COOKIE)).toBe("tok-new");
+    expect(cookieJar.has(LOGIN_NONCE_COOKIE)).toBe(false);
+  });
+
+  it("fails closed when the verified session has no email", async () => {
+    verifyOmitsEmail = true;
+    await sendLoginCode(PREV, form({ email: "boss@example.com" }));
+    const r = await verifyLoginCode(PREV, form({ email: "boss@example.com", code: "123456" }));
+    expect(r).toMatchObject({ ok: false, status: 403 });
+    expect(cookieJar.has(ACCESS_COOKIE)).toBe(false);
+    expect(logoutCalls()).toHaveLength(1);
+  });
+
+  const ORIGIN = "https://admin.test";
+  const confirmReq = (opts: { nonce?: string; origin?: string | null; hash?: string }) => {
+    const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
+    if (opts.origin !== null) headers.origin = opts.origin ?? ORIGIN;
+    if (opts.nonce) headers.cookie = `${LOGIN_NONCE_COOKIE}=${opts.nonce}`;
+    return new NextRequest(`${ORIGIN}/admin/auth/confirm`, {
+      method: "POST",
+      headers,
+      body: `token_hash=${opts.hash ?? "hash-boss-0001"}&type=email`,
+    });
+  };
+
+  it("magic-link GET renders a confirm button and never spends the token", async () => {
+    const res = await confirmGet(new NextRequest(`${ORIGIN}/admin/auth/confirm?token_hash=hash-boss-0001&type=email`));
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('method="post"');
+    expect(html).toContain('value="hash-boss-0001"');
+    expect(verifyCalls()).toHaveLength(0);
+    const bad = await confirmGet(new NextRequest(`${ORIGIN}/admin/auth/confirm?token_hash=%22%3E%3Cscript%3E`));
+    expect(bad.headers.get("location")).toBe(`${ORIGIN}/admin/login?error=link`);
+  });
+
+  it("magic-link POST without/mismatched nonce or cross-origin sets no session", async () => {
+    const cases = [
+      confirmReq({}),
+      confirmReq({ nonce: "tampered.sig" }),
+      confirmReq({ nonce: issueLoginNonce("boss@example.com").value, origin: "https://evil.test" }),
+      confirmReq({ nonce: issueLoginNonce("boss@example.com").value, origin: null }),
+    ];
+    for (const req of cases) {
+      const res = await confirmPost(req);
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`${ORIGIN}/admin/login?error=link`);
+      expect(res.cookies.get(ACCESS_COOKIE)).toBeUndefined();
+    }
+    expect(verifyCalls()).toHaveLength(0);
+    // Nonce for one email, link for another (attacker's link in a victim's browser): rejected and logged out.
+    const res = await confirmPost(confirmReq({ nonce: issueLoginNonce("rando@example.com").value }));
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/admin/login?error=link`);
+    expect(res.cookies.get(ACCESS_COOKIE)).toBeUndefined();
+    expect(logoutCalls()).toHaveLength(1);
+  });
+
+  it("magic-link POST from the requesting browser signs in", async () => {
+    const res = await confirmPost(confirmReq({ nonce: issueLoginNonce("boss@example.com").value }));
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe(`${ORIGIN}/admin`);
+    expect(res.cookies.get(ACCESS_COOKIE)?.value).toBe("tok-new");
+    expect(res.cookies.get(LOGIN_NONCE_COOKIE)?.value).toBe("");
+  });
+});
+
+describe("proxy session refresh", () => {
+  const req = () =>
+    new NextRequest("https://admin.test/admin", {
+      headers: { cookie: `${ACCESS_COOKIE}=expired; ${REFRESH_COOKIE}=rt-old` },
+    });
+  const cleared = (res: Response & { cookies: { get(n: string): { value: string } | undefined } }) =>
+    res.cookies.get(ACCESS_COOKIE)?.value === "" && res.cookies.get(REFRESH_COOKIE)?.value === "";
+
+  it("keeps cookies on 429, 5xx and refresh races", async () => {
+    for (const reply of [
+      { status: 429, body: { error_code: "over_request_rate_limit", msg: "rate limited" } },
+      { status: 500, body: { msg: "boom" } },
+      { status: 400, body: { error_code: "refresh_token_already_used", msg: "Invalid Refresh Token: Already Used" } },
+      { status: 400, body: { error: "invalid_grant", error_description: "Invalid Refresh Token: Already Used" } },
+    ]) {
+      refreshReply = reply;
+      const res = await proxy(req());
+      expect(cleared(res), JSON.stringify(reply)).toBe(false);
+      expect(res.cookies.get(ACCESS_COOKIE)).toBeUndefined();
+      expect(res.headers.get("x-middleware-next")).toBe("1");
+    }
+  });
+
+  it("clears cookies only for definitively dead refresh tokens", async () => {
+    for (const body of [
+      { code: 400, error_code: "refresh_token_not_found", msg: "Invalid Refresh Token: Refresh Token Not Found" },
+      { error: "invalid_grant", error_description: "Invalid Refresh Token: Refresh Token Not Found" },
+    ]) {
+      refreshReply = { status: 400, body };
+      expect(cleared(await proxy(req()))).toBe(true);
+    }
+  });
+
+  it("rotates cookies on a successful refresh", async () => {
+    refreshReply = { status: 200, body: { access_token: "tok-2", refresh_token: "rt-2", expires_in: 3600 } };
+    const res = await proxy(req());
+    expect(res.cookies.get(ACCESS_COOKIE)?.value).toBe("tok-2");
+    expect(res.cookies.get(REFRESH_COOKIE)?.value).toBe("rt-2");
   });
 });
 

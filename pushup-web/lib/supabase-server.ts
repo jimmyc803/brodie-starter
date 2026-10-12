@@ -64,7 +64,8 @@ function errorFrom(status: number, body: unknown): SupabaseError {
     const msg = [b.message, b.msg, b.error_description, b.error].find((v) => typeof v === "string") as
       | string
       | undefined;
-    const code = [b.code, b.error_code].find((v) => typeof v === "string") as string | undefined;
+    // GoTrue: {code: <http int>, error_code: "refresh_token_not_found", msg} or legacy {error: "invalid_grant", ...}.
+    const code = [b.error_code, b.code, b.error].find((v) => typeof v === "string") as string | undefined;
     return new SupabaseError(msg ?? `HTTP ${status}`, status, code);
   }
   return new SupabaseError(typeof body === "string" && body ? body.slice(0, 300) : `HTTP ${status}`, status);
@@ -223,4 +224,18 @@ export async function authLogout(accessToken: string, fetchImpl: FetchLike = fet
   });
   // 401/403/404: token already invalid, which is the desired end state.
   if (!res.ok && ![401, 403, 404].includes(res.status)) throw errorFrom(res.status, await readJson(res));
+}
+
+/** GoTrue error codes that mean the refresh token / session is definitively gone (not a race, limit or outage). */
+const DEAD_SESSION_CODES = new Set(["refresh_token_not_found", "session_not_found", "session_expired", "invalid_grant"]);
+
+/**
+ * Whether a refresh failure means the stored session can never work again, so its cookies should be dropped.
+ * 429, 5xx, network errors and "already used" (a concurrent refresh won the race) are NOT definitive.
+ */
+export function isDeadSessionError(e: unknown): boolean {
+  if (!(e instanceof SupabaseError)) return false;
+  if (e.status !== 400 && e.status !== 401) return false;
+  if (!e.code || !DEAD_SESSION_CODES.has(e.code)) return false;
+  return !/already used/i.test(e.message);
 }

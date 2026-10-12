@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { ACCESS_COOKIE, REFRESH_COOKIE, cookieOptions, sessionCookies } from "@/lib/admin";
-import { SupabaseError, authRefresh } from "@/lib/supabase-server";
+import { authRefresh, isDeadSessionError } from "@/lib/supabase-server";
 
 /**
  * Admin session refresh only (not authorization): when the access-token cookie is missing or about to expire and a
@@ -38,8 +38,8 @@ export async function proxy(req: NextRequest) {
     for (const c of cookies) res.cookies.set(c.name, c.value, c.options);
     return res;
   } catch (e) {
-    if (e instanceof SupabaseError && e.status >= 400 && e.status < 500) {
-      // Refresh token revoked/expired/reused: drop the session so the page redirects to login.
+    if (isDeadSessionError(e)) {
+      // Refresh token definitively invalid/revoked: drop the session so the page redirects to login.
       req.cookies.delete(ACCESS_COOKIE);
       req.cookies.delete(REFRESH_COOKIE);
       const res = NextResponse.next({ request: { headers: req.headers } });
@@ -47,7 +47,7 @@ export async function proxy(req: NextRequest) {
       res.cookies.set(REFRESH_COOKIE, "", cookieOptions(0));
       return res;
     }
-    // Transient (network/5xx): keep cookies; the page's own check decides access.
+    // Rate limit, concurrent-refresh race, 5xx or network: keep cookies; the page's own check decides access.
     console.error("[admin] session refresh failed", e instanceof Error ? e.message : e);
     return NextResponse.next();
   }

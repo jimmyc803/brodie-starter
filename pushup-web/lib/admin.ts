@@ -1,4 +1,5 @@
 import "server-only";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -32,6 +33,60 @@ export function sessionCookies(s: AuthSession, nowS = Math.floor(Date.now() / 10
     { name: ACCESS_COOKIE, value: s.accessToken, options: cookieOptions(Math.max(60, s.expiresAt - nowS)) },
     { name: REFRESH_COOKIE, value: s.refreshToken, options: cookieOptions(REFRESH_MAX_AGE_S) },
   ];
+}
+
+// ------------------------------------------------------------------ login nonce (binds a login to the browser that asked)
+
+export const LOGIN_NONCE_COOKIE = "brodie_admin_login";
+export const LOGIN_NONCE_TTL_S = 15 * 60;
+
+/** HMAC key derived from a server-only secret; rotating the service key invalidates pending logins (fine). */
+function nonceKey(): Buffer {
+  const k = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!k) throw new SupabaseError("SUPABASE_SERVICE_ROLE_KEY is not set", 500, "config");
+  return createHmac("sha256", k).update("brodie-admin-login-nonce-v1").digest();
+}
+
+function signNonce(payload: string): string {
+  return createHmac("sha256", nonceKey()).update(payload).digest("base64url");
+}
+
+/**
+ * Cookie set when a sign-in code is requested: base64url({e: email, n: random nonce, x: expiry}).HMAC.
+ * Only a browser that requested the code for that email can complete the sign-in (blocks login CSRF).
+ */
+export function issueLoginNonce(email: string, nowS = Math.floor(Date.now() / 1000)) {
+  const payload = Buffer.from(
+    JSON.stringify({ e: email.trim().toLowerCase(), n: randomBytes(32).toString("base64url"), x: nowS + LOGIN_NONCE_TTL_S }),
+  ).toString("base64url");
+  return {
+    name: LOGIN_NONCE_COOKIE,
+    value: `${payload}.${signNonce(payload)}`,
+    options: cookieOptions(LOGIN_NONCE_TTL_S),
+  };
+}
+
+/** Email bound by a valid, unexpired login-nonce cookie, or null (missing, tampered, expired). */
+export function loginNonceEmail(value: string | undefined, nowS = Math.floor(Date.now() / 1000)): string | null {
+  if (!value) return null;
+  const [payload, sig, extra] = value.split(".");
+  if (!payload || !sig || extra !== undefined) return null;
+  const want = Buffer.from(signNonce(payload));
+  const got = Buffer.from(sig);
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
+  try {
+    const p = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { e?: unknown; n?: unknown; x?: unknown };
+    if (typeof p.e !== "string" || typeof p.n !== "string" || typeof p.x !== "number" || p.x <= nowS) return null;
+    return p.e;
+  } catch {
+    return null;
+  }
+}
+
+/** True iff the nonce cookie is valid and bound to `email` (case-insensitive). */
+export function loginNonceMatches(value: string | undefined, email: string, nowS?: number): boolean {
+  const bound = loginNonceEmail(value, nowS);
+  return bound !== null && bound === email.trim().toLowerCase();
 }
 
 // ------------------------------------------------------------------ input validation

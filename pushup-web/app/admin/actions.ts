@@ -7,9 +7,12 @@ import {
   ACCESS_COOKIE,
   REFRESH_COOKIE,
   AdminInputError,
+  LOGIN_NONCE_COOKIE,
   cookieOptions,
   dispatcherRequest,
   isAllowlisted,
+  issueLoginNonce,
+  loginNonceMatches,
   parseCallId,
   parseConfigKey,
   parseEmail,
@@ -49,6 +52,9 @@ export async function sendLoginCode(_prev: Prev, fd: FormData): Promise<ActionRe
   } catch (e) {
     return { ok: false, status: 400, error: e instanceof AdminInputError ? e.message : "Invalid email." };
   }
+  // Bind the pending sign-in to this browser + email (set for every address so responses stay indistinguishable).
+  const nonce = issueLoginNonce(email);
+  (await cookies()).set(nonce.name, nonce.value, nonce.options);
   try {
     // Only allowlisted addresses get an email (and an auth user); the response never reveals membership.
     if (await isAllowlisted(email)) await authSendOtp(email);
@@ -68,6 +74,16 @@ export async function verifyLoginCode(_prev: Prev, fd: FormData): Promise<Action
   } catch (e) {
     return { ok: false, status: 400, error: e instanceof AdminInputError ? e.message : "Invalid input." };
   }
+  const store = await cookies();
+  // Login-CSRF guard: only the browser that requested this email's code may complete it. Checked before the code is
+  // spent, so a rejected attempt does not burn it.
+  if (!loginNonceMatches(store.get(LOGIN_NONCE_COOKIE)?.value, email)) {
+    return {
+      ok: false,
+      status: 403,
+      error: "Sign-in must be completed in the browser that requested the code (within 15 min). Request a new code.",
+    };
+  }
   let session;
   try {
     session = await authVerifyOtp({ email, token: code });
@@ -75,10 +91,14 @@ export async function verifyLoginCode(_prev: Prev, fd: FormData): Promise<Action
     console.error("[admin] verify failed", e instanceof SupabaseError ? `${e.status} ${e.message}` : e);
     return { ok: false, status: 401, error: "Code is invalid or expired.", data: { email } };
   }
-  const sessionEmail = session.email ?? email;
+  // Fail closed: the verified session must carry the same email the nonce was bound to.
+  if (!session.email || session.email !== email) {
+    await authLogout(session.accessToken).catch((e) => console.error("[admin] logout failed", e));
+    return { ok: false, status: 403, error: "Forbidden: sign-in email could not be verified." };
+  }
   let allowed: boolean;
   try {
-    allowed = await isAllowlisted(sessionEmail);
+    allowed = await isAllowlisted(session.email);
   } catch (e) {
     console.error("[admin] allowlist check failed", e);
     return { ok: false, status: 503, error: "Could not verify allowlist; try again.", data: { email } };
@@ -87,8 +107,8 @@ export async function verifyLoginCode(_prev: Prev, fd: FormData): Promise<Action
     await authLogout(session.accessToken).catch((e) => console.error("[admin] logout failed", e));
     return { ok: false, status: 403, error: "Forbidden: not on the admin allowlist." };
   }
-  const store = await cookies();
   for (const c of sessionCookies(session)) store.set(c.name, c.value, c.options);
+  store.set(LOGIN_NONCE_COOKIE, "", cookieOptions(0));
   redirect("/admin");
 }
 
