@@ -6,6 +6,8 @@ also idempotent per call_id). Post-call intents are written atomically by ch_pos
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hmac
 import logging
 import os
@@ -17,9 +19,13 @@ from typing import Any, Callable, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from challenge.config import Config
 from challenge.dispatcher import postcall
 from challenge.dispatcher.flags import Flags
 from challenge.dispatcher.postcall import Outbox, StoreOutbox
+from challenge.dispatcher.jobs import Jobs, run_loop
+from challenge.messaging.outbox import Outbox as SendOutbox
+from challenge.messaging.providers import provider_from_env
 from challenge.store import Json, Store, StoreError, store_from_env
 
 logger = logging.getLogger("challenge.dispatcher")
@@ -55,7 +61,8 @@ class _RateLimiter:
 
 def create_app(store: Store | None = None, outbox: Outbox | None = None,
                clock: Callable[[], datetime] | None = None, flags: Flags | None = None,
-               token: str | None = None, rate_per_min: int | None = None) -> FastAPI:
+               token: str | None = None, rate_per_min: int | None = None,
+               jobs: Jobs | None = None) -> FastAPI:
     clock = clock or (lambda: datetime.now(timezone.utc))
     flags = flags or Flags.from_env()
     flags.log_startup()
@@ -63,7 +70,30 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
     if not token:
         logger.warning("DISPATCHER_TOKEN unset: all worker endpoints will reject requests")
     limiter = _RateLimiter(rate_per_min or int(os.environ.get("DISPATCHER_RATE_PER_MIN", "600")))
-    app = FastAPI(title="brodie-dispatcher")
+    jobs_enabled = os.environ.get("JOBS_ENABLED", "1") != "0"
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_: FastAPI):
+        task = None
+        if jobs_enabled:  # JOBS_ENABLED=0 disables the background loop (tests)
+            runner = jobs
+            if runner is None:
+                st = get_store()
+                runner = Jobs(st, Config(st), SendOutbox(st, Config(st), provider_from_env(), clock), clock)
+            app.state.jobs = runner
+            task = asyncio.create_task(run_loop(runner))
+            logger.info("jobs loop started")
+        else:
+            logger.warning("JOBS_ENABLED=0: jobs loop disabled")
+        try:
+            yield
+        finally:
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
+    app = FastAPI(title="brodie-dispatcher", lifespan=lifespan)
     app.state.flags = flags
     app.state.store = store
     app.state.outbox = outbox

@@ -36,6 +36,7 @@ TEMPLATES: dict[str, str] = {
     "daily_recap": "Yesterday: +{yesterday_points} points. Total: {points}, rank #{rank}, streak {streak} days. Today's power hour: {power_hour} ET. Keep building!",
     "ending_soon": "The challenge ends {ends_at}! Time for one more strong finish. Text QUEUE and make those clean reps count!",
     "final_results": "That's a wrap! {points} points, rank #{rank}. You showed up and put in the work. Check the final board:",
+    "alert": "BRODIE ALERT [{condition}] {detail}",
     "not_registered": "Let's get you on the board! Text JOIN your_name to sign up. Use 3–20 letters, numbers, or underscores.",
 }
 

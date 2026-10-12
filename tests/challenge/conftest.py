@@ -44,3 +44,9 @@ def conn(db):
         yield c
     finally:
         c.close()
+
+
+@pytest.fixture(autouse=True)
+def _jobs_off(monkeypatch):
+    """The dispatcher's background jobs loop must not run under TestClient; jobs tests drive run_due directly."""
+    monkeypatch.setenv("JOBS_ENABLED", "0")

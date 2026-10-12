@@ -111,6 +111,10 @@ class Outbox:
                 return 0
             if row["template"] not in ("youre_up", "post_call"):
                 release = next_quiet_end(claim_at, self.cfg.get("quiet_hours"))
+                if release > claim_at and row["template"] == "rank_drop":
+                    # Stale by morning: drop rather than defer (SPEC §2).
+                    self._mark(row, "suppressed", error="quiet_hours")
+                    return 0
                 if release > claim_at:
                     self._mark(row, "queued", retry_at=release)
                     return 0
