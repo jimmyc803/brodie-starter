@@ -1,0 +1,14 @@
+{
+    auto_https disable_redirects
+}
+
+CHALLENGE_DOMAIN {
+    tls {
+        issuer acme {
+            disable_http_challenge
+        }
+    }
+    @private path /internal/*
+    respond @private 404
+    reverse_proxy 127.0.0.1:8080
+}

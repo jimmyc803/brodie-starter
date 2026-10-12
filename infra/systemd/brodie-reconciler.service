@@ -1,0 +1,27 @@
+[Unit]
+Description=brodie-reconciler
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+OnFailure=brodie-alert@%n.service
+
+[Service]
+Type=oneshot
+User=brodie
+WorkingDirectory=/opt/brodie
+Environment=AWS_DEFAULT_REGION=us-east-1
+EnvironmentFile=/etc/brodie/env
+Environment=PYTHONPATH=src:.
+Environment=PATH=/opt/brodie/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/brodie
+ExecStart=/opt/brodie/.venv/bin/python -m scripts.reconcile_sessions --once
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+UMask=0077
+TimeoutStartSec=1800
+TimeoutStopSec=45
+
+[Install]
+WantedBy=multi-user.target

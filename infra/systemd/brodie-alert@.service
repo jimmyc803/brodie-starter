@@ -1,0 +1,15 @@
+[Unit]
+Description=Alert for failed unit %i
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/brodie
+Environment=AWS_DEFAULT_REGION=us-east-1
+EnvironmentFile=/etc/brodie/env
+ExecStart=/bin/bash /opt/brodie/infra/alert.sh "Systemd failure: %i"
+StandardOutput=journal
+StandardError=journal
+UMask=0077
