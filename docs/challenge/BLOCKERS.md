@@ -1,0 +1,15 @@
+# Blockers (current as of the branch this file was committed on)
+
+Each blocker has an owner and the exact step that clears it. Detailed steps are in `HUMAN_TASKS.md` (section numbers in brackets).
+
+| # | Blocker | Owner | What is stuck | Unblock step |
+|---|---|---|---|---|
+| B1 | AWS credentials / account | You + friend with the AWS Organization | No EC2, SSM, S3 backups, CloudWatch or SES; infra scripts are written and linted only | Create the member account, enable IAM Identity Center, run `aws configure sso`, then `bash infra/provision.sh` [HUMAN_TASKS 1]. Also confirm credit sharing covers the account |
+| B2 | Chert answers + EC2 login | You + James (Chert) | Flags stay on safe fallbacks: `CALLER_ID_SOURCE=claim_window`, `MESSAGING_PROVIDER=mock`, `HANGUP_MODE=unverified`, `REVEAL_MODE=audio_only`, `CARD_DELIVERY=link` (D-07). No real iMessage; texts are not delivered | Send James the 10 questions, run the discovery test, set the flags in SSM, redeploy [HUMAN_TASKS 2, 13] |
+| B3 | Judge ship gate INCOMPLETE (D-19) | Volunteers who record clips | Ghost second-person false rejects (9% of reps on front stock clips; 0/14 on side-view) cannot be tuned without real side-view footage. Scoring must not launch unless the gate passes or you explicitly accept the risk | Record the clip set, then `PYTHONPATH=src:. .venv/bin/python -m judge_eval.run --bench` must exit 0 [HUMAN_TASKS 10] |
+| B4 | Live Supabase apply pending final migrations | You (Supabase owner) | Migrations in `db/migrations/` have been tested only on a local Postgres 17 with Supabase shims (D-08); the `beat-muse` project has not been migrated with the final set | Back up first, then apply the files in name order [HUMAN_TASKS 3a]; run `psql "$SUPABASE_DB_URL" -c "select count(*) from competition_config"` to confirm seeded config |
+| B5 | Vercel deploy of `pushup-web/` | You | Site not public; admin login untested against real Supabase Auth | Create the Vercel project with Root Directory `pushup-web`, set env vars, deploy [HUMAN_TASKS 4]; set the Supabase email template and URLs [HUMAN_TASKS 3b-3c] |
+| B6 | Domain or sslip.io approval | You | Caddy cannot get a certificate until DNS or sslip.io is approved | [HUMAN_TASKS 5] |
+| B7 | Admin emails, alert handles, Brodie's number, prizes | You | `admin_allowlist` empty (nobody can use /admin), `team_alert_handles` empty, `brodie_number` null, `raffle_prize` "TBD" | [HUMAN_TASKS 6-9] |
+| B8 | Work not yet merged into this branch | Orchestrator | Tasks 12 (liveness), 22-25 (outbox/commands wiring, jobs, simulation, dispatcher admin endpoints), 30 (worker controller), 32 (reconciler), 33, 44, 46 had no commits when this file was written. RUNBOOK mentions `/admin/rejudge` and `/admin/raffle` dispatcher endpoints and the `brodie-reconciler` timer, which depend on them | Check `PROGRESS.md` for the latest status; do not go live until those are merged and the launch checklist passes |
+| B9 | Cue audio for new challenge phrases | You | `data/` is gitignored; challenge cue audio must be rendered and copied to EC2 | [HUMAN_TASKS 11] |

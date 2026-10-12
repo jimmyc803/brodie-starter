@@ -286,3 +286,28 @@ window. Validate health and a test call before revoking the old upstream key.
 Chert credentials live in brodie's home from device login; renew there, never as
 root. Confirm `/etc/brodie/env` remains root:root 0600 with `sudo stat
 /etc/brodie/env`. Do not display the file or journal secrets.
+
+## Admin access and first-week quick reference
+
+Add or confirm admins (writes `admin_allowlist` plus an audit row; safe to rerun; `--dry-run` previews):
+
+```bash
+export SUPABASE_DB_URL='postgresql://...'
+PYTHONPATH=src:. .venv/bin/python scripts/seed_admins.py --emails alice@example.com,bob@example.com \
+  --actor you@example.com --reason "launch admins"
+```
+
+Quick health view during the week:
+
+```bash
+curl -s https://YOUR-DOMAIN/health
+sudo systemctl list-timers 'brodie-*'
+sudo journalctl -u brodie-worker -u chert-agent -u brodie-dispatcher --since '-1 hour' --no-pager
+```
+
+## Launch and freeze references
+
+Human setup steps: `docs/challenge/HUMAN_TASKS.md`. Ordered go-live list: `docs/challenge/LAUNCH_CHECKLIST.md`.
+Open problems: `docs/challenge/BLOCKERS.md`. Judge ship gate: `PYTHONPATH=src:. .venv/bin/python -m judge_eval.run --bench`
+(exit 0 only when it passes). Freeze early only with an approved reason:
+`SELECT ch_config_set('competition_frozen', 'true'::jsonb, 'admin@example.com', 'reason');` (see "Live configuration and moderation").

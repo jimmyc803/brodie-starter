@@ -1,0 +1,313 @@
+# Human tasks (things only a person can do)
+
+Every item has: who, exact steps, where the value goes, and what it unblocks. Run commands from the repo root
+(`cd /Users/stanley/brodie-rt-coach`) unless told otherwise. Never paste secrets into chat, tickets or git; secrets go to
+AWS SSM Parameter Store (EC2) or Vercel/Supabase dashboards. Numbered items map to SPEC section 13.
+
+Quick index: 1 AWS, 2 Chert login + James, 3 Supabase, 4 Vercel, 5 domain, 6 admins, 7 alert handles, 8 Brodie's number,
+9 prizes, 10 judge clips, 11 cue audio, 12 testers, 13 Phase-2 test results.
+
+---
+
+## 1. AWS account (SPEC 13: AWS creds/profile+region+perms)
+
+Who: the friend who owns the AWS Organization (steps A-B) and you (steps C-F).
+Unblocks: EC2 provisioning (`infra/provision.sh`), SSM secrets, S3 backups, CloudWatch, SES alert email.
+
+Plan: you get your OWN member account inside your friend's AWS Organization, and sign in through IAM Identity Center (SSO).
+No long-lived access keys are ever created.
+
+A. Friend (management account, AWS Console):
+1. Organizations > Add an AWS account > Create an AWS account. Name it `brodie-challenge`, give it an email you control.
+2. IAM Identity Center > Enable (region us-east-1). Users > Add user (your email). Permission sets > Create
+   `BrodieAdmin`. Pick the AWS managed policy `AdministratorAccess` for launch week (tighten afterwards), session 8 hours.
+3. AWS accounts > select `brodie-challenge` > Assign users or groups > your user + `BrodieAdmin`.
+4. Send you the SSO start URL (looks like `https://d-xxxxxxxxxx.awsapps.com/start`). You accept the invitation email and set an MFA device.
+5. Credit sharing check: Billing and Cost Management > Billing preferences > "Credit sharing preferences". Confirm the
+   `brodie-challenge` account is allowed to use the organization's credits (and that credits cover EC2/S3/SES). Write
+   the answer in `docs/challenge/BLOCKERS.md` if credits do not apply.
+
+B. Friend (optional but recommended): add a Service Control Policy denying regions other than us-east-1.
+
+C. You (operator machine, needs AWS CLI v2: `aws --version`):
+```
+aws configure sso
+```
+Answer the prompts: SSO session name `brodie`; SSO start URL = the URL from step A4; SSO region `us-east-1`;
+registration scopes `sso:account:access`; browser opens, approve; pick account `brodie-challenge` and role `BrodieAdmin`;
+default client region `us-east-1`; output `json`; profile name `brodie`.
+```
+aws sso login --profile brodie
+aws sts get-caller-identity --profile brodie
+export AWS_PROFILE=brodie AWS_DEFAULT_REGION=us-east-1
+```
+The last `get-caller-identity` must print the `brodie-challenge` account id. Repeat `aws sso login --profile brodie` when the session expires.
+
+D. You: set a budget alert (console is simplest): Billing and Cost Management > Budgets > Create budget > Cost budget,
+monthly, amount e.g. USD 100, alert at 50% and 80% of actual spend to your email.
+
+E. You: provision (see `docs/challenge/RUNBOOK.md`, "Provision" and "Secrets and bootstrap" for the full text):
+```
+export TEAM_SSH_CIDRS='YOUR.IP.ADDR/32'      # find yours: curl -s https://checkip.amazonaws.com
+export SSH_PUBLIC_KEY_FILE="$HOME/.ssh/id_ed25519.pub"
+export BACKUP_BUCKET='pick-a-globally-unique-name'
+export ALERT_EMAIL='you@example.com'
+export INSTANCE_TYPE=c7i.xlarge
+bash infra/provision.sh --dry-run
+bash infra/provision.sh
+```
+Values go to: environment variables for `provision.sh` (same names as in `.env.example`). Confirm the SNS subscription email.
+
+F. You: SES sender: SES console (us-east-1) > Verified identities > verify `SES_FROM_EMAIL` and, while in the SES sandbox, `ALERT_EMAIL`.
+
+Done when: `aws sts get-caller-identity --profile brodie` works and `bash infra/provision.sh` finishes.
+
+---
+
+## 2. Chert login on EC2 + James's questions (SPEC 13: Chert login + answers + iMessage creds)
+
+Who: you (login), James at Chert (answers). Unblocks: the real FaceTime line on EC2, the CALLER_ID_SOURCE / MESSAGING_PROVIDER /
+HANGUP_MODE / REVEAL_MODE / CARD_DELIVERY flags, live iMessage.
+
+Login (after bootstrap, see RUNBOOK "Secrets and bootstrap"):
+```
+ssh -i "$HOME/.ssh/id_ed25519" ubuntu@"$PUBLIC_IP"
+sudo -u brodie -H bash -c 'cd /opt/brodie && chert login --device'
+```
+Follow the device-login URL on your laptop. Credentials stay in brodie's home directory. Then set `CHERT_TOKEN_EXPIRES_AT`
+(ISO-8601 with timezone, e.g. `2026-10-20T00:00:00-04:00`) in SSM (command in RUNBOOK "Secrets and bootstrap") so the
+token-expiry alert works.
+
+Send James these questions (answers decide the flags; until answered the safe defaults apply: D-07 in `DECISIONS.md`):
+1. Does `chert_call` (the metadata at call start) include the caller's handle/phone/email? -> `CALLER_ID_SOURCE=chert_meta` if yes, else `claim_window`.
+2. Is there an iMessage API (send text, inbound webhook) on Brodie's number? Does an existing agent already handle inbound texts?
+   If yes: need `CHERT_MSG_URL`, `CHERT_MSG_TOKEN`, `CHERT_WEBHOOK_SECRET` -> `MESSAGING_PROVIDER=chert`; otherwise `web_only` or `mock`.
+3. Does FaceTime hang up when the agent leaves the room? Is there an API to end a call? -> `HANGUP_MODE=leave_room|chert_api|unverified`.
+4. How long is the line offline after a call? -> `LINE_OFFLINE_GAP_S` (default 180).
+5. Can `chert dev --agent` run 24/7 on EC2? Token expiry? Is there a production mode?
+6. Can we get more than one line? (Design already supports N lines via `LINE_ID`.)
+7. What sent the earlier unprompted text from Brodie's number? Could it collide with ours?
+8. Outbound iMessage rate limits? -> `OUTBOUND_RATE_PER_MIN`.
+9. Can the agent publish video into the call (for the 15 s reveal)? -> `REVEAL_MODE=video|audio_only`.
+10. Can we send image attachments over iMessage? -> `CARD_DELIVERY=attachment|link`.
+
+Where the answers go: SSM parameters under `/brodie/challenge/` (names above; command in RUNBOOK), then redeploy (RUNBOOK
+"Deploy and rollback"). `/health` echoes the active modes so you can confirm: `curl --fail https://YOUR-DOMAIN/health`.
+Test items 1, 3, 4 yourself with `docs/challenge/HUMAN_TASKS_discover.md` (see section 13 below).
+
+---
+
+## 3. Supabase (SPEC 13: Supabase confirm)
+
+Who: the Supabase project owner. Project: `beat-muse`. Unblocks: website login, realtime, all data.
+
+### 3a. Apply migrations (needs `SUPABASE_DB_URL`)
+Migrations in `db/migrations/*.sql` run in name order. Deploys do this automatically (`scripts/deploy.sh`); for the very
+first apply from your laptop use the Supabase SQL editor (paste each file in order) or psql:
+```
+export SUPABASE_DB_URL='postgresql://...'   # Supabase > Project Settings > Database > Connection string (Session pooler or direct)
+for f in db/migrations/*.sql; do psql -X -v ON_ERROR_STOP=1 "$SUPABASE_DB_URL" -f "$f" || break; done
+```
+Do not use the transaction-mode pooler. Do not edit migration files that were already applied.
+
+### 3b. Auth email template (exact)
+Supabase Dashboard > Authentication > Emails > Templates. The admin login (`pushup-web/app/admin/auth/confirm/route.ts`)
+needs the email to contain BOTH a confirm link built from the token hash and the 6-digit code. Edit the "Magic Link" template
+(and the "Confirm signup" template if you see one) so the body is:
+```html
+<h2>Brodie admin sign-in</h2>
+<p>Your 6-digit code: <strong>{{ .Token }}</strong></p>
+<p>Or <a href="{{ .SiteURL }}/admin/auth/confirm?token_hash={{ .TokenHash }}&type=email">confirm sign-in</a>
+   (open it in the same browser where you asked for the code).</p>
+<p>If you did not request this, ignore this email.</p>
+```
+Subject: `Your Brodie admin sign-in code`. The link must use `{{ .TokenHash }}` (not `{{ .ConfirmationURL }}`).
+The link only works in the browser that requested the code (login-nonce cookie); the 6-digit code works anywhere.
+
+### 3c. Site URL and redirect allowlist
+Authentication > URL Configuration:
+- Site URL = your public site, e.g. `https://brodie-pushups.vercel.app` (or your domain). It fills `{{ .SiteURL }}` above.
+- Redirect URLs: add `https://brodie-pushups.vercel.app/**` (and your custom domain with `/**`; add `http://localhost:3000/**` only for local testing).
+
+### 3d. SMTP note
+The built-in Supabase mailer is rate limited (a few emails per hour) and only suitable for testing. For launch, configure
+custom SMTP: Authentication > Emails > SMTP Settings (e.g. an SES SMTP user from section 1F, or Resend/Postmark), set a
+verified sender address. Test by requesting an admin code and confirming it arrives within a minute.
+
+### 3e. Keys
+Project Settings > API: copy Project URL -> `SUPABASE_URL` (and Vercel `NEXT_PUBLIC_SUPABASE_URL`), anon key -> Vercel
+`NEXT_PUBLIC_SUPABASE_ANON_KEY`, service_role key -> `SUPABASE_SERVICE_ROLE_KEY` (SSM and Vercel; never in the browser).
+
+---
+
+## 4. Vercel (SPEC 13: Vercel token/project)
+
+Who: you. Unblocks: the public website (`pushup-web/`), including /admin.
+1. Vercel > Add New Project > import this repo > Root Directory `pushup-web` > Framework Next.js. (This is a separate project from `web/` and `docs/`; decision D-03.)
+2. Environment variables (Production): `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
+   `NEXT_PUBLIC_SITE_URL` (public site URL), `DISPATCHER_URL` (`https://<DOMAIN>`, see section 5) and `DISPATCHER_TOKEN` (same value as in SSM).
+   Never set `PUSHUP_FIXTURES` in production.
+3. Deploy, then open `/`, `/rules`, `/setup`, `/admin/login`.
+
+---
+
+## 5. Domain or sslip.io (SPEC 13: domain or sslip.io approval)
+
+Who: you. Unblocks: HTTPS for the dispatcher (Caddy). Two options:
+- Own domain: create an A record `api.yourdomain.com` -> the Elastic IP from provisioning; bootstrap with `DOMAIN=api.yourdomain.com`.
+- No domain: approve using `<ELASTIC-IP>.sslip.io` (the default when `DOMAIN` is unset). Record the approval in `BLOCKERS.md`.
+Verify: `curl --fail https://<DOMAIN-or-IP.sslip.io>/health`. Port 80 is closed; Caddy uses TLS-ALPN on 443 (RUNBOOK).
+
+---
+
+## 6. Admin emails (SPEC 13: admin emails)
+
+Who: you, after migrations are applied (3a). Unblocks: signing in at `/admin`.
+```
+export SUPABASE_DB_URL='postgresql://...'
+PYTHONPATH=src:. .venv/bin/python scripts/seed_admins.py --emails alice@example.com,bob@example.com \
+  --actor you@example.com --reason "launch admins" --dry-run
+PYTHONPATH=src:. .venv/bin/python scripts/seed_admins.py --emails alice@example.com,bob@example.com \
+  --actor you@example.com --reason "launch admins"
+```
+Goes to: table `admin_allowlist` (lower-cased) plus an `audit_log` row per new admin. Safe to rerun. Then each admin opens
+`/admin/login`, requests a code and signs in.
+
+---
+
+## 7. Team alert handles (SPEC 13: team alert handles)
+
+Who: you. Unblocks: alerts to team phones through the messaging adapter (email via SES is the fallback and already works).
+The setting is the live config key `team_alert_handles` (a JSON list of phone numbers/iMessage handles). The repo has no
+`ADMIN_ALERT_HANDLES` variable; `team_alert_handles` is the real key. Set it with the audited RPC, from the psql session in RUNBOOK
+"Live configuration and moderation":
+```sql
+SELECT ch_config_set('team_alert_handles', '["+15551234567","+15557654321"]'::jsonb, 'you@example.com', 'launch alert handles');
+```
+Also set the SSM params `ALERT_EMAIL` and `SES_FROM_EMAIL` (section 1).
+
+---
+
+## 8. Brodie's number (SPEC 13: Brodie's line number)
+
+Who: you (ask James for the exact number). Unblocks: the "text JOIN to ..." links on /join and the result cards.
+```sql
+SELECT ch_config_set('brodie_number', '"+15551234567"'::jsonb, 'you@example.com', 'set Brodie line number');
+```
+Goes to: `competition_config.brodie_number` (shown by the site view). Also set `site_url` the same way if your site URL differs
+from the default `https://brodie-pushups.vercel.app`: `SELECT ch_config_set('site_url', '"https://your-site"'::jsonb, 'you@example.com', 'site url');`
+
+---
+
+## 9. Prizes: raffle prize, UFC fighter, first prize (SPEC 13)
+
+Who: you. Unblocks: accurate prize display on the site and texts.
+- Raffle prize (config key `raffle_prize`, currently `"TBD"`):
+  `SELECT ch_config_set('raffle_prize', '"A signed glove"'::jsonb, 'you@example.com', 'raffle prize decided');`
+- First prize ($100) and the UFC fighter name are NOT config keys; they are written in page text:
+  `pushup-web/app/(board)/page.tsx` (search `Group call with a UFC fighter`) and `pushup-web/app/rules/page.tsx` (same text and the
+  `$100` line). Edit those strings to add the fighter's name or change the amount, commit, and redeploy Vercel. If you want these
+  editable live, that is a follow-up code change; it is not built.
+- Raffle eligibility threshold is `raffle_min_valid_reps` (default 100): change with `ch_config_set` if needed.
+
+---
+
+## 10. Judge clip set (SPEC 13: judge clip set; SPEC 6 ship gate; D-19)
+
+Who: 2+ volunteers with consent (clips are testing-only, never uploaded, gitignored). Unblocks: the SHIP GATE; without it the
+gate stays INCOMPLETE and the launch decision is yours (see BLOCKERS.md).
+
+Recording setup for every clip: phone on the floor or low surface about 6-8 ft to the side, landscape, head to feet in frame,
+good light. Save as .mp4 in `judge_eval/clips/`.
+
+Categories (from SPEC 6). The ship gate needs at least one clip in every cheat category; the counts below are the recommended minimum
+(about 10 reps per clip unless noted):
+
+| Category | Clips | What to record | Camera |
+|---|---|---|---|
+| clean | 4+ (different people/body types) | proper push-ups, full range, chest down, lockout at top | side-left or side-right (at least one of each) |
+| knees | 1+ | push-ups from the knees | side |
+| half | 1+ | half-depth reps | side |
+| sag | 1+ | hips dropping toward the floor | side |
+| pike | 1+ | hips raised high | side |
+| no_lockout | 1+ | never fully straightening arms at top | side |
+| replay | 1+ | phone filming a laptop playing a push-up video | laptop-replay |
+| two_people | 1+ | a second person visible in frame while one does push-ups | side |
+| fast_sloppy | 1 | very fast, short reps | side |
+| partial_frame | 1 | body partly out of frame | side |
+| bad_light | 1 | dim lighting | side |
+| off_angle | 1 | slightly off-angle (about 30 degrees from true side) | free text |
+
+Labels file: copy and edit (the format is documented at the top of the example):
+```
+cp judge_eval/labels.example.yaml judge_eval/labels.yaml
+```
+Per clip: `clip` (file name), `category`, `camera` (free text), `expected_valid` (reps a human would accept; 0 for every cheat clip),
+and optional `expected_rejected` as `{reason: n}`. Example:
+```yaml
+clips:
+  - clip: clean_alex_side.mp4
+    category: clean
+    camera: side-left
+    expected_valid: 10
+  - clip: knees_sam_side.mp4
+    category: knees
+    camera: side-right
+    expected_valid: 0
+    expected_rejected: {knees_down: 8}
+  - clip: laptop_replay.mp4
+    category: replay
+    camera: laptop-replay
+    expected_valid: 0
+```
+Run the gate (prints per-clip table, aggregate and verdict; exit 0 = passed, 1 = failed/incomplete):
+```
+PYTHONPATH=src:. .venv/bin/python -m judge_eval.run --bench
+```
+Pass criteria: 0 accepted reps across cheat clips, at least 90% of clean reps accepted, per-clip clean count error at most 1.
+Without video, `--synthetic` runs the built-in synthetic categories. Specific known problem (D-19): ghost second-person false
+rejects on front-view clips; side-view footage with two people is needed to tune. Send the results JSON from
+`judge_eval/results/` to the team; threshold changes go through `scripts/rejudge.py` (dry run first).
+
+---
+
+## 11. Re-render cue audio (needed once, after the cue set exists)
+
+Who: anyone with the team Gemini token. Unblocks: spoken live feedback ("Knees up", "Time!" etc.).
+```
+export GEMINI_API_KEY='...team token...'
+export GEMINI_BASE_URL='https://james-72765--rtcoach-gemini.modal.run'
+PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini --dry-run   # list strings to render, no API call
+PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini             # render missing clips into data/cues_audio_gemini
+```
+`data/` is gitignored, so the rendered audio is NOT deployed by git. Copy it to the EC2 host and point the worker at it with
+`CUE_AUDIO_DIR` (an SSM parameter; the worker falls back to its bundled banks and reports missing strings if the folder is wrong):
+```
+scp -i "$HOME/.ssh/id_ed25519" -r data/cues_audio_gemini ubuntu@"$PUBLIC_IP":/tmp/cues_audio_gemini
+```
+then on the host move it to `/opt/brodie/data/cues_audio_gemini` (owner `brodie`), set `CUE_AUDIO_DIR=/opt/brodie/data/cues_audio_gemini`
+in SSM, and restart the worker (RUNBOOK "Restart, logs and line recovery").
+
+---
+
+## 12. Live testers
+
+Who: 3-5 friends with iPhones (FaceTime), 2 of them not on the team. Unblocks: the final end-to-end rehearsal.
+Each tester: FaceTime Brodie's number, do 10 push-ups side-view, text `JOIN <name>`, `YES`, `QUEUE`, `STATUS`, `TOP`, `STOP`,
+`START`. Record failures in `BLOCKERS.md`. Do this before opening registration (LAUNCH_CHECKLIST T-24h).
+
+---
+
+## 13. Phase-2 Chert discovery test (needs one tester with FaceTime)
+
+Follow `docs/challenge/HUMAN_TASKS_discover.md` exactly (it starts `scripts/discover_chert.py` and `chert dev`). Paste the
+results table into the section below, then set `HANGUP_MODE`, `LINE_OFFLINE_GAP_S` and `CALLER_ID_SOURCE` in SSM and redeploy.
+
+### Phase 2 results (fill in)
+| Test | Observation | Seconds | Notes |
+|---|---|---|---|
+| A: hung up after agent left? | | | |
+| B: first successful call-back | | | |
+| C: chert_call has caller handle? | | | |
+| C: participant identity format | | | |
+| dispatch lag (job -> connected) | | | |
