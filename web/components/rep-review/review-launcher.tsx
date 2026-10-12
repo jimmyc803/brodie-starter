@@ -25,15 +25,15 @@ export function ReviewLauncher({ muscles, ...ctx }: ReviewContext & { muscles: M
     <>
       <button
         onClick={() => setOpen(true)}
-        className="group flex w-full items-center justify-between gap-3 rounded-2xl border border-[#D4FF00]/25 bg-[#D4FF00]/[0.06] px-4 py-3 text-left transition hover:bg-[#D4FF00]/[0.1]"
+        className="group flex w-full items-center justify-between gap-3 rounded-[14px] border border-line bg-surface px-4 py-3 text-left transition hover:bg-sunken"
       >
         <span>
-          <span className="block text-sm font-semibold text-zinc-50">Review your reps</span>
-          <span className="block text-xs text-zinc-400">
+          <span className="block text-sm font-semibold text-ink">Review your reps</span>
+          <span className="block text-xs text-ink-3">
             {list[0].exercise} · {list[0].setLabel} — every rep scored against your coach&apos;s standard
           </span>
         </span>
-        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[#D4FF00] text-sm text-zinc-950 transition group-hover:scale-105">▶</span>
+        <span className="grid size-9 shrink-0 place-items-center rounded-full bg-brand text-sm text-on-brand transition group-hover:scale-105">▶</span>
       </button>
       {open ? <RepReviewPlayer clips={list} {...ctx} onClose={() => setOpen(false)} /> : null}
     </>
