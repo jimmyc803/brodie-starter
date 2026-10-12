@@ -49,8 +49,23 @@ word next to it; grey = "not measured" (never green for unchecked form).
 4. Heat map, rep-review player, clip player, recap PNG (`/api/recap-image`): drawing/overlay logic unchanged; only the
    surrounding chrome uses tokens. The PNG keeps its own dark look (it's a share image).
 
-## Out of scope
-Dark theme (tokens make it a later swap), new features, data/contract changes, backend.
+## Phase 1 addition: trainer landing page + early access (approved 2026-10-11)
+The product is now real (post-hackathon) and the first customers are **online coaches**, plus in-person trainers with
+many clients. The home page `/` becomes a landing page that sells to them and collects leads.
+- Sections: hero ("Eyes on every rep, even when you're not there." + sub-line + **Get early access** brand button and
+  "See a client recap" link) → how it works (3 steps: upload your program → client FaceTimes Brodie → you get a recap and a
+  triage inbox) → product shots (real recap + coach dashboard, as live links/screens, not fake images) → "Built for coaches
+  with lots of clients" (triage inbox, form flags, rep clips) → early-access form → short FAQ (privacy, what the client
+  needs: an iPhone + FaceTime, pricing "free during early access").
+- **Early-access form**: name, email, coaching type (online / in person / both), roughly how many clients, optional
+  note. Server action → Supabase table `early_access` (new migration: id, created_at, name, email, coach_type,
+  client_count, note, source) via service role; RLS on with no policies like every other table. Validation server-side,
+  honeypot field against bots, email de-duplicated (upsert on lower(email)). Success state in place; no emails sent yet.
+- Nothing else on the backend changes in Phase 1.
+
+## Out of scope (Phase 1)
+Dark theme (tokens make it a later swap), coach accounts/auth, add-client, client onboarding/consent, mark-reviewed,
+coach notes (Phase 2, separate spec), new data/contract changes beyond `early_access`.
 
 ## Risks
 - Stanley/Ryan are merging into `web/` in parallel; work on branch `jimmy-ui-revamp`, rebase often, keep their logic.
