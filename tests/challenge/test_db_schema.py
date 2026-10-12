@@ -16,7 +16,7 @@ PUBLIC_VIEWS = ["leaderboard_public", "user_public", "user_daily_public", "call_
                 "line_status_public", "power_hour_public", "competition_public"]
 ANON_DENIED = ["clients", "client_handles", "calls", "reps", "messages", "queue", "line_state",
                "competition_config", "sessions", "audit_log", "score_adjustments", "admin_allowlist",
-               "ch_call_stats", "ch_user_stats"]
+               "ch_call_stats", "ch_score_events", "ch_user_stats"]
 NEW_TABLES = ["client_handles", "join_pending", "lines", "line_state", "queue", "calls", "competition_config",
               "power_hours", "messages", "audit_log", "score_adjustments", "rank_state", "admin_allowlist",
               "heartbeats", "site_pulse"]
@@ -195,15 +195,20 @@ def test_points_with_multiplier_void_and_adjustments(tx):
     make_call(tx, b, et(2026, 10, 13, 14, 0), [(True, 1, [])] * 4)
     tx.execute("insert into score_adjustments (user_id, points, reason, actor, at) values (%s, -1, 'test', 'admin', %s)",
                (b, et(2026, 10, 13, 14, 30)))
-    # charlie: rep after the count window (connected+180s) and rep before window_start never score
-    make_call(tx, c, et(2026, 10, 13, 10, 0), [(True, 1, [])], rep_offset_s=181)
-    make_call(tx, c, et(2026, 10, 12, 19, 58), [(True, 1, [])], rep_offset_s=5)
+    # charlie: out-of-window reps were zeroed at commit (points 0 + reason) -> no points, no valid reps
+    make_call(tx, c, et(2026, 10, 13, 10, 0), [(True, 0, ["after_count"])], rep_offset_s=181)
+    make_call(tx, c, et(2026, 10, 12, 19, 58), [(True, 0, ["before_start"])], rep_offset_s=5)
 
     assert tx.execute("select ch_user_points(%s), ch_valid_reps(%s)", (a, a)).fetchone() == (5, 3)
     assert tx.execute("select ch_user_points(%s), ch_valid_reps(%s)", (b, b)).fetchone() == (3, 4)
     assert tx.execute("select ch_user_points(%s), ch_valid_reps(%s)", (c, c)).fetchone() == (0, 0)
     rows = tx.execute("select rank, display_name, points, valid_reps from leaderboard_public order by rank").fetchall()
     assert rows == [(1, "alpha", 5, 3), (2, "bravo", 3, 4), (3, "charlie", 0, 0)]
+    # config edits never retroactively change persisted points
+    tx.execute("update competition_config set value = to_jsonb('2026-10-13T15:00:30-04:00'::text) where key='window_start'")
+    tx.execute("update competition_config set value = '1' where key='call_count_s'")
+    assert tx.execute("select ch_user_points(%s), ch_valid_reps(%s)", (a, a)).fetchone() == (5, 3)
+    assert tx.execute("select points, valid_reps from leaderboard_public where display_name='alpha'").fetchone() == (5, 3)
     # tie on points -> earlier reached_at ranks first
     tx.execute("insert into score_adjustments (user_id, points, reason, actor, at) values (%s, 2, 'tie', 'admin', %s)",
                (b, et(2026, 10, 13, 18, 0)))
@@ -222,6 +227,46 @@ def test_call_result_public_reasons_and_standing(tx):
     row = tx.execute("select valid_reps, rejected_reps, points, reasons, rank_after, total_points_after"
                      " from call_result_public where call_id=%s", (cid,)).fetchone()
     assert row == (1, 2, 1, {"too_shallow": 2, "hips_sag": 1}, 2, 1)
+
+
+CR_COLS = ("points_before, avatar_level_before, total_points_after, avatar_level_after, rank_before, rank_after")
+
+
+def test_call_result_before_after_ties_and_zero_point_users(tx):
+    j = et(2026, 10, 12, 20, 0)
+    a = make_user(tx, "hotel", j)                          # earliest joiner
+    b = make_user(tx, "india", j + timedelta(minutes=1))
+    z = make_user(tx, "juliet", j + timedelta(minutes=2))  # never scores, still ranked
+    make_call(tx, a, et(2026, 10, 13, 9, 0), [(True, 1, [])] * 20)   # hotel 20 by 09:00:29
+    make_call(tx, b, et(2026, 10, 13, 10, 0), [(True, 1, [])] * 20)  # india 20 by 10:00:29 (tie, reached later)
+    cid = make_call(tx, b, et(2026, 10, 13, 12, 0), [(True, 1, [])] * 6)
+    q = f"select {CR_COLS} from call_result_public where call_id=%s"
+    # before: india 20 vs hotel 20, hotel reached first -> india #2; after: india 26 -> #1; levels 1 (<25) -> 2
+    assert tx.execute(q, (cid,)).fetchone() == (20, 1, 26, 2, 2, 1)
+    # hotel's first call: before = 0 points; tied at 0 with india/juliet -> earliest joiner (hotel) is #1
+    first = tx.execute("select id from calls where user_id=%s", (a,)).fetchone()[0]
+    assert tx.execute(q, (first,)).fetchone() == (0, 1, 20, 1, 1, 1)
+    # a zero-point user ranks after everyone with points; joined_at breaks the 0-point tie
+    zc = make_call(tx, z, et(2026, 10, 13, 13, 0), [(False, 0, ["too_fast"])])
+    assert tx.execute(q, (zc,)).fetchone() == (0, 1, 0, 1, 3, 3)
+    # events are filtered by their own time, not by call connect time: an adjustment after this call's end
+    # does not change its historical standing; one before it does
+    tx.execute("insert into score_adjustments (user_id, points, reason, actor, at) values (%s, 50, 'late', 'admin', %s)",
+               (a, et(2026, 10, 13, 18, 0)))
+    assert tx.execute(q, (cid,)).fetchone() == (20, 1, 26, 2, 2, 1)
+    tx.execute("insert into score_adjustments (user_id, points, reason, actor, at) values (%s, 10, 'early', 'admin', %s)",
+               (a, et(2026, 10, 13, 11, 0)))
+    # hotel 30 before -> india #2 before; after 26 < 30 -> india #2 after (was #1 without the early adjustment)
+    assert tx.execute(q, (cid,)).fetchone() == (20, 1, 26, 2, 2, 2)
+    # leaderboard agrees with the full ordering now (hotel 80, india 26, juliet 0)
+    assert tx.execute("select display_name from leaderboard_public order by rank").fetchall() == [
+        ("hotel",), ("india",), ("juliet",)]
+
+
+def test_competition_public_exposes_thresholds(tx):
+    tx.execute("set local role anon")
+    assert tx.execute("select avatar_level_thresholds from competition_public").fetchone()[0] == [
+        0, 25, 60, 120, 200, 300, 450, 650, 900, 1200]
 
 
 def test_streak_across_et_midnight(tx):

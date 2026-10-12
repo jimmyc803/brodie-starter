@@ -19,13 +19,18 @@
 --   Internal views (no anon/authenticated grants; service_role may select):
 --     ch_call_stats  one row per call: call_id, user_id, line_id, decision, void, counted_toward_cap, liveness_result,
 --                    connected_at, ended_at, committed_at, date_et, valid_reps, rejected_reps, points, last_point_at, reasons.
+--     ch_score_events  scoring events (user_id, at, points, call_id) — see below.
 --     ch_user_stats  one row per competitor (clients.joined_at not null): user_id, display_name, joined_at, banned_at,
 --                    opted_out_at, points, valid_reps, reached_at, streak_days date[], best_call_id, best_call_points,
 --                    avatar_level, listed bool, rank (null when not listed). Streak at time T =
 --                    ch_streak_days(streak_days, ch_et_day(T)).
--- Rep validity in aggregates ("valid_final"): reps.valid AND reps.points > 0 AND window_start <= reps.at
---   AND reps.at < calls.connected_at + call_count_s. Points are summed from reps.points (set at commit by ch_commit_reps)
---   over the same filtered reps; reps outside [window_start, connected_at + call_count_s) never score.
+-- Rep validity in aggregates ("valid_final"): reps.valid AND reps.points > 0, i.e. exactly what was persisted at commit.
+--   Points are the persisted reps.points. Windows (window_start, window_end/freeze, connected_at + call_count_s,
+--   liveness) are enforced when reps are committed/rejudged (ch_commit_reps sets points 0 + a reason), never at read
+--   time, so editing config cannot retroactively change committed points.
+-- ch_score_events (internal view): one row per scoring event: valid_final rep of a non-void accepted call
+--   (at = reps.at, fallback calls.connected_at) or a score_adjustment (at = score_adjustments.at). Historical standings
+--   in call_result_public filter these events by time.
 -- Badges (leaderboard_public.badges): 'streak' when streak >= 2, 'raffle' when valid_reps >= raffle_min_valid_reps.
 -- competition_public.frozen = competition_frozen OR now() >= window_end.
 -- site_pulse is bumped once per transaction, at commit (deferred constraint triggers), by writes to calls, reps,
@@ -329,23 +334,28 @@ from calls c
 left join lateral (
   with rr as (
     select rp.at, rp.points, rp.reject_reasons,
-           coalesce(rp.valid is true and coalesce(rp.points, 0) > 0
-                    and rp.at >= (select (value #>> '{}')::timestamptz from competition_config where key = 'window_start')
-                    and rp.at < c.connected_at + make_interval(secs => coalesce(
-                          (select (value #>> '{}')::numeric from competition_config where key = 'call_count_s'), 180)::double precision),
-                    false) as ok
+           coalesce(rp.valid is true and coalesce(rp.points, 0) > 0, false) as ok
     from sets s join reps rp on rp.set_id = s.id
     where s.session_id = c.session_id
   )
   select count(*) filter (where ok) as valid_reps,
          count(*) filter (where not ok) as rejected_reps,
          sum(points) filter (where ok) as points,
-         max(at) filter (where ok) as last_point_at,
+         max(coalesce(at, c.connected_at)) filter (where ok) as last_point_at,
          (select jsonb_object_agg(reason, n)
             from (select reason, count(*) as n from rr, unnest(rr.reject_reasons) as reason
                   where not rr.ok group by reason) x) as reasons
   from rr
 ) r on true;
+
+create or replace view ch_score_events as
+select c.user_id, coalesce(rp.at, c.connected_at) as at, rp.points, c.id as call_id
+from calls c
+join sets s on s.session_id = c.session_id
+join reps rp on rp.set_id = s.id
+where c.decision = 'accept' and not c.void and c.user_id is not null and rp.valid is true and coalesce(rp.points, 0) > 0
+union all
+select a.user_id, a.at, a.points, null::text from score_adjustments a;
 
 create or replace view ch_user_stats as
 with cs as (
@@ -488,37 +498,59 @@ join clients cl on cl.id = cs.user_id
 where cs.decision = 'accept' and cl.joined_at is not null and cl.banned_at is null and cl.display_name is not null
 group by cl.id, cl.display_name, cs.date_et;
 
--- rank_after / total_points_after: standings as of the call's end (or connect time while live), counting non-void
--- accepted calls connected by then and adjustments made by then. Query by call_id (per-row laterals).
+-- Standings per call (query by call_id; per-row laterals). Scoring events (ch_score_events) are filtered by their own
+-- time (reps.at / score_adjustments.at):
+--   after  = events at or before the call's end (ended_at, or its last scoring rep / connected_at while live);
+--   before = events strictly before this call's connected_at.
+-- Rank uses the full leaderboard ordering (points desc, reached_at asc nulls last, joined_at asc, user_id) over every
+-- eligible competitor (joined, not banned, has display_name) who had joined by the cutoff, zero-point users included.
+-- rank_before is null when the user had not joined before connected_at (unranked).
+-- New columns are appended at the end so create or replace view stays valid over the earlier column list.
 create or replace view call_result_public with (security_barrier = true) as
 select cs.call_id, cl.display_name, cs.connected_at, cs.valid_reps, cs.rejected_reps, cs.points, cs.reasons,
-       cs.liveness_result, cs.void, st.rank_after, st.total_points_after
+       cs.liveness_result, cs.void, st.rank_after, st.total_points_after,
+       st.points_before,
+       ch_level_for_points(st.points_before, (select value from competition_config where key = 'avatar_level_thresholds'))
+         as avatar_level_before,
+       ch_level_for_points(st.total_points_after, (select value from competition_config where key = 'avatar_level_thresholds'))
+         as avatar_level_after,
+       st.rank_before
 from ch_call_stats cs
 join clients cl on cl.id = cs.user_id
 cross join lateral (
-  with t as (select coalesce(cs.ended_at, cs.connected_at) as at),
+  with t as (
+    select greatest(cs.connected_at, coalesce(cs.ended_at, cs.connected_at), coalesce(cs.last_point_at, cs.connected_at)) as ta,
+           cs.connected_at as tb
+  ),
+  comp as (
+    select c2.id as user_id, c2.joined_at from clients c2, t
+    where c2.joined_at is not null and c2.banned_at is null and c2.display_name is not null and c2.joined_at <= t.ta
+  ),
+  ev as (select e.user_id, e.at, e.points from ch_score_events e, t where e.at <= t.ta),
   pts as (
-    select u.user_id, sum(u.points)::int as points, max(u.reached) as reached_at
-    from (
-      select o.user_id, o.points, o.last_point_at as reached
-        from ch_call_stats o, t
-        where o.decision = 'accept' and not o.void and o.user_id is not null and o.connected_at <= t.at
-      union all
-      select a.user_id, a.points, a.at from score_adjustments a, t where a.at <= t.at
-    ) u
-    join clients c2 on c2.id = u.user_id
-    where c2.banned_at is null and c2.display_name is not null and c2.joined_at is not null
-    group by u.user_id
-  ), me as (
-    select coalesce((select points from pts where user_id = cs.user_id), 0) as points,
-           (select reached_at from pts where user_id = cs.user_id) as reached_at
+    select comp.user_id, comp.joined_at, (comp.joined_at < t.tb) as in_b,
+           coalesce(sum(ev.points), 0)::int as pa,
+           coalesce(max(ev.at), 'infinity'::timestamptz) as ra,
+           coalesce(sum(ev.points) filter (where ev.at < t.tb), 0)::int as pb,
+           coalesce(max(ev.at) filter (where ev.at < t.tb), 'infinity'::timestamptz) as rb
+    from comp cross join t
+    left join ev on ev.user_id = comp.user_id
+    group by comp.user_id, comp.joined_at, t.tb
   )
-  select (1 + (select count(*) from pts, me
-               where pts.user_id <> cs.user_id
-                 and (pts.points > me.points
-                      or (pts.points = me.points and pts.reached_at < me.reached_at))))::int as rank_after,
-         me.points as total_points_after
-  from me
+  select case when me.user_id is not null then
+           (1 + (select count(*) from pts o
+                 where o.user_id <> me.user_id
+                   and (-o.pa, o.ra, o.joined_at, o.user_id) < (-me.pa, me.ra, me.joined_at, me.user_id)))::int
+         end as rank_after,
+         coalesce(me.pa, 0) as total_points_after,
+         coalesce(me.pb, 0) as points_before,
+         case when me.in_b then
+           (1 + (select count(*) from pts o
+                 where o.in_b and o.user_id <> me.user_id
+                   and (-o.pb, o.rb, o.joined_at, o.user_id) < (-me.pb, me.rb, me.joined_at, me.user_id)))::int
+         end as rank_before
+  from (select 1) one
+  left join pts me on me.user_id = cs.user_id
 ) st
 where cs.decision = 'accept' and cl.banned_at is null and cl.display_name is not null;
 
@@ -563,7 +595,8 @@ select (select (value #>> '{}')::timestamptz from k where key = 'window_start') 
        (select value #>> '{}' from k where key = 'raffle_prize') as raffle_prize,
        (select (value #>> '{}')::int from k where key = 'raffle_min_valid_reps') as raffle_min_valid_reps,
        (select value #>> '{}' from k where key = 'brodie_number') as brodie_number,
-       (select value #>> '{}' from k where key = 'site_url') as site_url;
+       (select value #>> '{}' from k where key = 'site_url') as site_url,
+       (select value from k where key = 'avatar_level_thresholds') as avatar_level_thresholds;
 
 -- ---------------------------------------------------------------- RLS + grants
 do $$
@@ -596,8 +629,8 @@ drop policy if exists site_pulse_public_read on site_pulse;
 create policy site_pulse_public_read on site_pulse for select to anon, authenticated using (true);
 grant select on table site_pulse to anon, authenticated;
 
-revoke all on table ch_call_stats, ch_user_stats from public, anon, authenticated;
-grant select on table ch_call_stats, ch_user_stats to service_role;
+revoke all on table ch_call_stats, ch_score_events, ch_user_stats from public, anon, authenticated;
+grant select on table ch_call_stats, ch_score_events, ch_user_stats to service_role;
 
 revoke all on table leaderboard_public, user_public, user_daily_public, call_result_public, line_status_public,
   power_hour_public, competition_public from public, anon, authenticated;
