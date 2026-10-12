@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test, afterEach } from 'node:test';
 // @ts-expect-error Node's native TypeScript runner requires the .ts extension.
-import { parseProgram, normalizeProgram, MAX_PDF_BYTES } from '../lib/parseProgram.ts';
+import { parseProgram, normalizeProgram, MAX_PDF_BYTES, ProgramParseError } from '../lib/parseProgram.ts';
 
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.GEMINI_PARSER_API_KEY;
@@ -60,5 +60,26 @@ test('does not leak provider error bodies and rejects blocked, truncated or malf
   ]) {
     globalThis.fetch = async () => Response.json(response);
     await assert.rejects(parseProgram(pdf));
+  }
+});
+
+test('classifies provider HTTP failures without reading or exposing provider bodies', async () => {
+  process.env.GEMINI_PARSER_API_KEY = 'offline-test-key';
+  for (const [status, code] of [[401, 'PROVIDER_AUTH'], [403, 'PROVIDER_AUTH'], [429, 'PROVIDER_QUOTA'], [404, 'PROVIDER_MODEL'], [400, 'PROVIDER_REQUEST'], [503, 'PROVIDER_ERROR']] as const) {
+    globalThis.fetch = async () => {
+      const response = new Response('private-document-and-key', { status });
+      response.text = async () => { throw Error('must not read provider body'); };
+      response.json = async () => { throw Error('must not read provider body'); };
+      return response;
+    };
+    await assert.rejects(parseProgram(pdf), (error: unknown) => error instanceof ProgramParseError && error.code === code && !error.message.includes('private-document-and-key'));
+  }
+});
+
+test('distinguishes connection failures from timeouts without exposing thrown messages', async () => {
+  process.env.GEMINI_PARSER_API_KEY = 'offline-test-key';
+  for (const [name, code] of [['TimeoutError', 'PROVIDER_TIMEOUT'], ['AbortError', 'PROVIDER_TIMEOUT'], ['TypeError', 'PROVIDER_NETWORK']] as const) {
+    globalThis.fetch = async () => { const error = new Error('private-network-detail'); error.name = name; throw error; };
+    await assert.rejects(parseProgram(pdf), (error: unknown) => error instanceof ProgramParseError && error.code === code && !error.message.includes('private-network-detail'));
   }
 });
