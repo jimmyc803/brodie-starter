@@ -12,6 +12,13 @@ Projection: a phone on the floor to the side (landscape). P_height_units = (cx +
 normalised x = P_x / aspect. side='left' shows the left body side (head toward image left); far-side landmarks sit
 just behind the near side with low visibility. noise = Gaussian sigma as a fraction of frame HEIGHT applied
 isotropically in pixels (x sigma = noise / aspect in normalised units).
+
+Challenge motions (liveness tests): hand_motions = [(kind, hand, t0, dur)], kind 'tap' (the wrist travels from its
+floor position to just above-behind the shoulder, i.e. the hand on the shoulder) or 'lift' (the wrist rises 0.25 m and
+reaches 0.30 m toward the head), hand 'left'|'right' (anatomical). Profile: raised-cosine ramp up over min(0.4, dur/3) s,
+hold, ramp down; the elbow follows by two-circle IK (the lower solution). A moving far-side hand becomes visible as it
+rises (visibility far_vis -> 0.95 with the motion amount), as a hand lifted above the body does. challenge_motion()
+maps a liveness cue key to the motion that answers it.
 """
 from __future__ import annotations
 
@@ -33,6 +40,36 @@ ANKLE_Z = 0.10        # ankle joint height on the toes
 KNEE_FLOOR_Z = 0.05   # knee joint height when kneeling
 HIP_MIN_Z = 0.11      # hip joint height when the pelvis rests on the floor (sag is limited by it)
 FLOOR_Y = 0.88        # floor line in normalised image y
+TAP_OFFSET = np.array([-0.04, 0.07])    # wrist relative to the shoulder when the hand rests on it (m)
+LIFT_OFFSET = np.array([0.30, 0.25])    # wrist relative to its floor position at the top of a lift (m)
+CUE_MOTIONS = {"challenge_tap_left": ("tap", "right"), "challenge_tap_right": ("tap", "left"),
+               "challenge_lift_right": ("lift", "right")}
+
+
+def challenge_motion(cue_key: str, t0: float, dur: float = 1.5) -> tuple[str, str, float, float]:
+    """The hand motion that answers a liveness cue (tap your LEFT shoulder = with the RIGHT hand)."""
+    kind, hand = CUE_MOTIONS[cue_key]
+    return (kind, hand, float(t0), float(dur))
+
+
+def _motion_amount(t: float, t0: float, dur: float) -> float:
+    if dur <= 0 or not t0 <= t <= t0 + dur:
+        return 0.0
+    ramp = min(0.4, dur / 3)
+    v = t - t0
+    if v < ramp:
+        return (1 - math.cos(math.pi * v / ramp)) / 2
+    if v > dur - ramp:
+        return (1 - math.cos(math.pi * (dur - v) / ramp)) / 2
+    return 1.0
+
+
+def _moved_hand(B: dict, p: dict, kind: str, k: float) -> tuple[np.ndarray, np.ndarray]:
+    """(wrist, elbow) of a hand `k` of the way through a challenge motion (k=0: on the floor as in pose p)."""
+    target = p["S"] + TAP_OFFSET if kind == "tap" else p["W"] + LIFT_OFFSET
+    w = p["W"] + k * (target - p["W"])
+    e1, e2 = _circle_x(p["S"], B["upper_arm"], w, B["forearm"])
+    return w, (e1 if e1[1] <= e2[1] else e2)
 
 
 @dataclass
@@ -102,13 +139,17 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
                   n_reps: int = 5, rep_s: float = 2.0, noise: float = 0.0, extra_person: bool = False,
                   occlude_lower_body: bool = False, side: str = "left", body: str = "average", fps: float = 10.0,
                   lead_in_s: float = 1.0, tail_s: float = 0.5, aspect: float = 16 / 9, seed: int = 0,
-                  bottom_hold_s: float = 0.0) -> SynthClip:
+                  bottom_hold_s: float = 0.0, hand_motions: list | tuple = (), far_vis: float = 0.45) -> SynthClip:
     """Side-view plank push-up clip at `fps`. depth / lockout = elbow angle (deg) at the bottom / top of every rep.
-    fire_times = the end of each rep cycle (back at the top), when a rep counter would fire."""
+    fire_times = the end of each rep cycle (back at the top), when a rep counter would fire. n_reps=0 = a plank hold.
+    hand_motions / far_vis: see the module docstring."""
     if not 0.0 <= bottom_hold_s < rep_s:
         raise ValueError("bottom_hold_s must be in [0, rep_s)")
     if side not in ("left", "right"):
         raise ValueError(f"side must be 'left' or 'right', got {side!r}")
+    for m in hand_motions:
+        if len(m) != 4 or m[0] not in ("tap", "lift") or m[1] not in ("left", "right") or float(m[3]) <= 0:
+            raise ValueError(f"hand motion must be (tap|lift, left|right, t0, dur>0), got {m!r}")
     B = BODIES[body]
     rng = np.random.default_rng(seed)
     wrist = _wrist_for(B, knees_down, depth)
@@ -136,7 +177,7 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
                 k = (1 + math.cos(math.pi * (v - half - bottom_hold_s) / half)) / 2
             theta = lockout - (lockout - depth) * k
         poses.append((t, _pose(B, theta, knees_down, hip_offset, wrist)))
-    xs = [p[k][0] for _, p in poses for k in p]
+    xs = [p[k][0] for _, p in poses for k in p]     # framing from the body alone (hand motions do not re-centre)
     xmid = (min(xs) + max(xs)) / 2
     frames: list[FrameObs] = []
     for t, p in poses:
@@ -145,6 +186,17 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
         img[:, 4] = 0.9
         world = np.zeros((33, 3))
         order = ("S", "E", "W", "H", "K", "A")
+        hands: dict[str, tuple[dict, float]] = {}
+        for hand in ("left", "right"):
+            ph, kmax = p, 0.0
+            for kind, mh, t0, dur in hand_motions:
+                k = _motion_amount(t, float(t0), float(dur))
+                if mh == hand and k > kmax:
+                    w, e = _moved_hand(B, p, kind, k)
+                    ph, kmax = {**p, "W": w, "E": e}, k
+            hands[hand] = (ph, kmax)
+        near_p, near_k = hands[side]
+        far_p, far_k = hands["right" if side == "left" else "left"]
 
         def put(idx: int, X: np.ndarray, vis: float, lateral: float) -> None:
             img[idx, 0] = (aspect / 2 + dirn * (X[0] - xmid) * s) / aspect
@@ -154,15 +206,19 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
             world[idx] = (dirn * X[0], -X[1], lateral)
 
         for k, idx in zip(order, near_i):
-            put(idx, p[k], float(np.clip(0.95 + rng.normal(0, 0.02), 0, 1)), -0.18)
+            put(idx, near_p[k], float(np.clip(0.95 + rng.normal(0, 0.02), 0, 1)), -0.18)
         for k, idx in zip(order, far_i):
-            put(idx, p[k] + np.array([0.02, 0.02]), float(np.clip(0.45 + rng.normal(0, 0.05), 0, 1)), 0.18)
+            vis = float(np.clip(far_vis + rng.normal(0, 0.05), 0, 1))
+            if k in ("E", "W") and far_k > 0:
+                vis = max(vis, far_vis + far_k * (0.95 - far_vis))
+            put(idx, far_p[k] + np.array([0.02, 0.02]), vis, 0.18)
         head = p["S"] + np.array([0.20, 0.02])
         for idx in range(0, 11):
             put(idx, head, 0.9, 0.0)
         for idx, k in ((17, "W"), (18, "W"), (19, "W"), (20, "W"), (21, "W"), (22, "W"),
                        (29, "A"), (30, "A"), (31, "A"), (32, "A")):
-            put(idx, p[k] + np.array([0.05 if k == "W" else -0.05, -0.03]), 0.8, 0.0)
+            src = (hands["left"] if idx % 2 else hands["right"])[0] if k == "W" else p   # odd = left (MediaPipe)
+            put(idx, src[k] + np.array([0.05 if k == "W" else -0.05, -0.03]), 0.8, 0.0)
         world -= (world[23] + world[24]) / 2
         if noise > 0:
             img[:, 0] += rng.normal(0, noise / aspect, 33)
@@ -175,7 +231,7 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
     meta = dict(depth=depth, lockout=lockout, knees_down=knees_down, hip_offset=hip_offset, n_reps=n_reps, rep_s=rep_s,
                 noise=noise, bottom_hold_s=bottom_hold_s, extra_person=extra_person,
                 occlude_lower_body=occlude_lower_body, side=side, body=body,
-                fps=fps, seed=seed)
+                fps=fps, seed=seed, hand_motions=[tuple(m) for m in hand_motions], far_vis=far_vis)
     return SynthClip(frames=frames, fire_times=fires, meta=meta)
 
 

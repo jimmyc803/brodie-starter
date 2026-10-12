@@ -38,6 +38,8 @@ DEFAULT_THRESHOLDS: dict[str, Any] = {
     "classifier_veto": ["pushups - shallow", "pushups - insufficient", "pushups - elevated hips"],
     "classifier_veto_substrings": ["knee", "sag"], "liveness_window_s": [45, 150], "liveness_timeout_s": 4,
     "cue_min_gap_s": 4,
+    # liveness challenge (challenge/judge/liveness.py), in torso lengths
+    "liveness_tap_dist": 0.4, "liveness_lift_h": 0.4, "liveness_floor_leave": 0.25,
 }
 REASON_ORDER = ("multiple_people", "not_in_frame", "knees_down", "hips_sag", "hips_pike", "too_shallow",
                 "no_lockout", "too_fast", "not_horizontal")
