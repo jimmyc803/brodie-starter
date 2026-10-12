@@ -55,13 +55,13 @@ calls(id text primary key /* chert call_id */, line_id text, user_id uuid, handl
       void bool not null default false, void_reason text, session_id uuid references sessions, committed_at timestamptz, rep_count int)
 alter table reps add column if not exists valid bool, reject_reasons text[], multiplier int, points int, at timestamptz /* absolute rep time */,
       min_elbow_deg_l real, min_elbow_deg_r real, top_elbow_deg real, max_hip_line_dev_deg real /* signed: + sag, - pike */,
-      min_knee_deg real, knee_floor_contact bool, shoulder_wrist_drop real, min_keypoint_conf real, frame_conf_frac real,
+      min_knee_deg real, knee_floor_contact bool, shoulder_wrist_drop real, shoulder_elbow_gap real /* min over bottom of (elbow_y - shoulder_y)/torso_len; depth needs ≤ depth_margin */, min_keypoint_conf real, frame_conf_frac real,
       persons_in_frame int, rep_duration_s real, torso_ok bool, side text, classifier_labels text[], in_challenge bool, judge_version text
 competition_config(key text primary key, value jsonb not null, updated_by text, updated_at timestamptz not null default now())
 power_hours(date_et date primary key, starts_at timestamptz not null, ends_at timestamptz not null, announced_at timestamptz,
             warned_at timestamptz, started_announced_at timestamptz)
 messages(id bigserial primary key, direction text check (direction in ('in','out')), handle text not null, user_id uuid, body text,
-         media_url text, template text, dedupe_key text unique, provider_message_id text unique, status text not null
+         media_url text, template text, ctx jsonb /* template context; body may be null and rendered by the sender */, lease_until timestamptz, dedupe_key text unique, provider_message_id text unique, status text not null
          /* in: received|handled ; out: queued|sending|sent|failed|suppressed */, attempts int default 0, last_error text,
          not_before timestamptz, created_at timestamptz not null default now(), sent_at timestamptz)
 audit_log(id bigserial primary key, actor text not null, action text not null, target text, before jsonb, after jsonb, reason text, at timestamptz not null default now())
@@ -83,7 +83,8 @@ Config keys + seed values (`competition_config`): `window_start` "2026-10-12T20:
 ### Derived rules (implemented in SQL functions, mirrored in challenge/scoring.py for tests)
 - `calls_today(user, p_now)` = count of calls with user_id, counted_toward_cap, `et_day(connected_at) = et_day(p_now)`. Void calls still count.
 - counted_toward_cap = decision='accept' AND (ended_at−connected_at ≥ min_counted_call_s OR rep_count ≥ 1).
-- Rep scoring at commit: `valid_final = valid AND at < window_end AND NOT in_challenge AND call.liveness_result <> 'fail'`;
+- Rep scoring at commit: `valid_final = valid AND window_start ≤ at < window_end AND NOT frozen-at-commit AND at < calls.connected_at + call_count_s AND NOT in_challenge AND call.liveness_result <> 'fail'`
+  (extra reasons: before_start, after_freeze, after_count, liveness_fail);
   `multiplier = power_multiplier if at ∈ [power_hour.starts_at, ends_at) of et_day(at) else 1`; `points = valid_final ? multiplier : 0`.
   Reps after freeze get reason `after_freeze`; liveness void gets `liveness_fail`.
 - User points = Σ reps.points over non-void calls + Σ score_adjustments.points. valid_reps = count valid_final reps (non-void).
@@ -176,11 +177,18 @@ class RepMetricsAccumulator: add_frame(f: FrameObs); close_rep(t_fire: float, la
 class JudgeRuntime(thr: dict): on_frame(f: FrameObs); on_rep(rep_event: dict) -> RepVerdict(valid, reasons, metrics, cue_key|None)
 ```
 Rep window = frames from previous rep fire (or counting start) to this fire. `top_elbow_deg` = max visible-side elbow angle in window (lockout that started the rep);
-`min_elbow_deg_*` = min per side; depth requires visible-side min elbow ≤ depth_elbow_max_deg AND shoulder_wrist_drop ≤ depth_margin
-(shoulder_wrist_drop = min over window of (wrist_y − shoulder_y)/torso_len in image coords … defined precisely in judge/metrics.py docstring).
+`min_elbow_deg_*` = min per side; depth requires visible-side min elbow ≤ depth_elbow_max_deg AND shoulder_elbow_gap ≤ depth_margin
+(shoulder_elbow_gap = min over window of (elbow_y − shoulder_y)/torso_len in image coords, i.e. shoulder drops to within depth_margin of elbow height; shoulder_wrist_drop kept as an informational metric; both defined precisely in judge/metrics.py docstring).
 
 ## C6. Worker ↔ judge ↔ dispatcher
 `challenge/worker/controller.py: CompetitionCall(call_id, line_id, handle, dispatcher, judge_cfg, clock, say)` with
 `async start() -> bool` (gatekeeper; on reject plays cue then returns False within 5s), `on_frame(FrameObs)`, `on_rep(event)`,
 `tick(now)` (30s-left cue at count_s−30, "Time!" at count_s, reveal until count_s+reveal_s, then `end()`), `async end(reason)` (commit via `/calls/event reps_committed` then `call_ended`; local JSON first at `data/tmp/sessions/<call_id>.challenge.json` with `committed:false|true`).
 Cue keys (say_now phrases; exact text in SPEC §6) are the dict `challenge.judge.cues.CUES: dict[str,str]`.
+
+## C7. Review amendments (v1.1, plan review)
+- Per-user serialization: every RPC that can put a user in a call or queue takes `pg_advisory_xact_lock(hashtextextended(user_id::text,0))` after line locks (lock order: line_state rows by line_id → user advisory lock → queue rows). A user can be in at most one of {active queue entry, claim holder, in_call} across ALL lines.
+- ch_tick in_call timeout FINALIZES the call: ended_at = in_call_since + call_count_s + call_reveal_s (capped by p_now), counted_toward_cap per rule; a later ch_call_end/ch_commit_reps reconciles (idempotent; never double-counts).
+- Notification intents are written in the SAME transaction as the state change: ch_tick inserts outbox rows (template 'youre_up' / 'missed_slot', ctx jsonb, dedupe_key e.g. 'youre_up:<queue_id>') and ch_call_end does not text. Python sender renders body from template+ctx when body is null. Outbox leases: ch_outbox_claim sets status 'sending', lease_until = now+60s; rows whose lease expired are reclaimable; provider send is idempotent per message id where supported (otherwise at-most-once after lease: mark 'failed' after 5 attempts).
+- Worker writes a local checkpoint JSON (call meta + reps so far) after every rep, not only at end(); reconciler commits checkpoints of calls that never ended (stale > max length + 120 s) with ended_at = last rep time.
+- Website reads are uncached (dynamic, no-store); realtime pulse → router.refresh().
