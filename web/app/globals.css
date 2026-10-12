@@ -46,6 +46,26 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  /* Clean · Light (web/STYLE.md). Components use these names, never raw zinc-* or hex. */
+  --color-canvas: #f3f1ec;
+  --color-surface: #ffffff;
+  --color-sunken: #ece9e3;
+  --color-stage: #0b0b0b;
+  --color-ink: #141414;
+  --color-ink-2: #55524c;
+  --color-ink-3: #8a867f;
+  --color-line: #14141414;
+  --color-line-strong: #14141426;
+  --color-brand: #ff5a1f;
+  --color-on-brand: #ffffff;
+  --color-good: #15803d;
+  --color-warn: #a16207;
+  --color-bad: #dc2626;
+  --color-idle: #8a867f;
+  --color-good-soft: #15803d14;
+  --color-warn-soft: #ca8a041a;
+  --color-bad-soft: #dc262612;
+  --color-idle-soft: #14141410;
 }
 
 :root {
@@ -126,5 +146,13 @@
   }
   html {
     @apply font-sans;
+  }
+}
+@layer base {
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-geist-sans), system-ui, sans-serif;
+    letter-spacing: -0.005em;
   }
 }

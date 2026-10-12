@@ -137,7 +137,7 @@ export function CallLauncher({ token, firstName }: { token: string; firstName: s
         />
         <div className="absolute inset-x-0 top-0 flex items-center justify-between gap-3 bg-gradient-to-b from-black/70 to-transparent p-4 pt-[max(1rem,env(safe-area-inset-top))]">
           <span className="flex items-center gap-2 text-sm font-medium text-white">
-            <span className={`size-2 rounded-full ${coachHere ? "bg-green-500" : "animate-pulse bg-yellow-400"}`} />
+            <span className={`size-2 rounded-full ${coachHere ? "bg-good" : "animate-pulse bg-warn"}`} />
             {phase === "connecting" ? "Connecting…" : coachHere ? "Brodie is here" : "Brodie is joining…"}
           </span>
           <button type="button" onClick={flip} className="rounded-full bg-white/15 px-3 py-1.5 text-sm text-white backdrop-blur">
@@ -148,24 +148,24 @@ export function CallLauncher({ token, firstName }: { token: string; firstName: s
           <button
             type="button"
             onClick={unlockAudio}
-            className="absolute inset-x-6 top-1/2 -translate-y-1/2 rounded-2xl bg-white px-5 py-4 text-base font-semibold text-zinc-950 shadow-xl"
+            className="absolute inset-x-6 top-1/2 -translate-y-1/2 rounded-[14px] bg-white px-5 py-4 text-base font-semibold text-ink shadow-xl"
           >
             Tap to hear Brodie
           </button>
         ) : null}
         <div className="absolute inset-x-0 bottom-0 flex flex-col items-center gap-2 bg-gradient-to-t from-black/80 to-transparent p-5 pb-[max(1.25rem,env(safe-area-inset-bottom))]">
           <p className="text-center text-xs text-white/70">Prop your phone up and step back so Brodie can see you head to toe.</p>
-          <button type="button" onClick={end} className="rounded-full bg-red-500 px-8 py-3 text-base font-semibold text-white">
+          <button type="button" onClick={end} className="rounded-full bg-bad px-8 py-3 text-base font-semibold text-white">
             End workout
           </button>
         </div>
       </div>
 
       {phase === "ended" ? (
-        <div className="rounded-2xl border border-green-500/20 bg-green-500/5 p-5">
-          <p className="font-semibold text-green-300">Nice work, {firstName}!</p>
-          <p className="mt-1 text-sm text-zinc-400">Saving your workout. Your recap appears below in a few seconds.</p>
-          <button type="button" onClick={() => setPhase("idle")} className="mt-4 text-sm text-zinc-400 underline-offset-4 hover:underline">
+        <div className="rounded-[14px] bg-good-soft p-5">
+          <p className="font-semibold text-good">Nice work, {firstName}!</p>
+          <p className="mt-1 text-sm text-ink-2">Saving your workout. Your recap appears below in a few seconds.</p>
+          <button type="button" onClick={() => setPhase("idle")} className="mt-4 text-sm text-ink-2 underline-offset-4 hover:underline">
             Start another workout
           </button>
         </div>
@@ -175,12 +175,12 @@ export function CallLauncher({ token, firstName }: { token: string; firstName: s
             type="button"
             onClick={start}
             disabled={inCall}
-            className="w-full rounded-full bg-green-500 px-6 py-4 text-lg font-semibold text-zinc-950 transition-colors hover:bg-green-400 disabled:opacity-60"
+            className="w-full rounded-[14px] bg-brand px-6 py-4 text-lg font-semibold text-on-brand transition hover:brightness-95 disabled:opacity-60"
           >
             {phase === "connecting" ? "Starting…" : "Start workout"}
           </button>
           {error ? (
-            <p role="alert" className="mt-3 text-sm text-red-300">
+            <p role="alert" className="mt-3 text-sm text-bad">
               {error}
             </p>
           ) : null}

@@ -38,31 +38,31 @@ export function ManageClient({ token, clientId, name, base }: { token: string; c
           autoFocus
           autoComplete="off"
           aria-label="Client name"
-          className="min-w-0 flex-1 rounded-md border border-zinc-700 bg-zinc-950 px-3 py-1.5 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+          className="min-w-0 flex-1 rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-sm text-ink focus:border-ink/40 focus:outline-none"
         />
-        <button disabled={saving} className="rounded-full bg-zinc-50 px-3.5 py-1.5 text-sm font-medium text-zinc-950 disabled:opacity-50">
+        <button disabled={saving} className="rounded-full bg-ink px-3.5 py-1.5 text-sm font-medium text-canvas disabled:opacity-50">
           {saving ? "Saving…" : "Save"}
         </button>
-        <button type="button" onClick={() => setEditing(false)} className="px-1 text-sm text-zinc-400 hover:text-zinc-200">
+        <button type="button" onClick={() => setEditing(false)} className="px-1 text-sm text-ink-2 hover:text-ink">
           Cancel
         </button>
         {state.message && !state.ok ? (
-          <p role="alert" className="w-full text-xs text-red-300">
+          <p role="alert" className="w-full text-xs text-bad">
             {state.message}
           </p>
         ) : null}
       </form>
     );
   return (
-    <div className="ml-auto flex items-center gap-3 text-xs text-zinc-500">
-      <button type="button" onClick={() => setEditing(true)} className="hover:text-zinc-200">
+    <div className="ml-auto flex items-center gap-3 text-xs text-ink-3">
+      <button type="button" onClick={() => setEditing(true)} className="hover:text-ink">
         Rename
       </button>
-      <button type="button" onClick={remove} disabled={removing} className="hover:text-red-300 disabled:opacity-50">
+      <button type="button" onClick={remove} disabled={removing} className="hover:text-bad disabled:opacity-50">
         {removing ? "Removing…" : "Remove"}
       </button>
       {error ? (
-        <span role="alert" className="text-red-300">
+        <span role="alert" className="text-bad">
           {error}
         </span>
       ) : null}

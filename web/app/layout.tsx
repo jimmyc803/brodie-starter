@@ -20,7 +20,7 @@ const siteUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: "Brodie for Coaches",
-  description: "Your coach writes the program. Brodie runs the workout over FaceTime.",
+  description: "AI form coaching over FaceTime for online coaches: your client works out with Brodie, you get a recap of every rep.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

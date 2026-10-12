@@ -17,7 +17,7 @@ export const metadata: Metadata = {
 // Client inbox, /c/<coaches.share_token>/clients. ?c=<client id> picks the client and ?s=<session share_token> the session.
 export default function CoachClientsPage({ params, searchParams }: PageProps<"/c/[token]/clients">) {
   return (
-    <main className="flex flex-1 flex-col bg-zinc-950 font-[family-name:var(--font-geist-sans)] text-zinc-100">
+    <main className="flex flex-1 flex-col bg-canvas text-ink">
       <Suspense fallback={<div className="min-h-dvh" />}>
         <Clients params={params} searchParams={searchParams} />
       </Suspense>

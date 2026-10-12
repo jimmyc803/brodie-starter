@@ -16,7 +16,7 @@ const SECTIONS: { title: string; body: React.ReactNode }[] = [
       <>
         Your camera and microphone are used live so Brodie can count reps, check form and talk to you. The call runs through
         LiveKit (and Chert, for FaceTime calls), and Brodie&apos;s voice and coaching run on Google Gemini, which receives your audio and occasional video frames
-        while the call is on. <b className="text-zinc-200">We don&apos;t record or store the video or audio of your call.</b>
+        while the call is on. <b className="text-ink">We don&apos;t record or store the video or audio of your call.</b>
       </>
     ),
   },
@@ -61,20 +61,20 @@ const SECTIONS: { title: string; body: React.ReactNode }[] = [
 
 export default function PrivacyPage() {
   return (
-    <main className="flex flex-1 flex-col bg-zinc-950 text-zinc-100">
+    <main className="flex flex-1 flex-col bg-canvas text-ink">
       <div className="mx-auto w-full max-w-2xl px-4 pb-16 pt-5">
         <SiteHeader context="Privacy" />
-        <h1 className="mt-8 text-3xl font-bold tracking-tight text-zinc-50">Privacy</h1>
-        <p className="mt-2 text-zinc-400">The short version: Brodie watches live to coach you, and keeps the numbers, not the video.</p>
+        <h1 className="mt-8 text-[28px] font-semibold tracking-[-0.025em] text-ink">Privacy</h1>
+        <p className="mt-2 text-ink-2">The short version: Brodie watches live to coach you, and keeps the numbers, not the video.</p>
         <div className="mt-8 space-y-6">
           {SECTIONS.map((s) => (
             <section key={s.title}>
-              <h2 className="text-base font-semibold text-zinc-100">{s.title}</h2>
-              <p className="mt-1 text-sm leading-relaxed text-zinc-400">{s.body}</p>
+              <h2 className="text-base font-semibold text-ink">{s.title}</h2>
+              <p className="mt-1 text-sm leading-relaxed text-ink-2">{s.body}</p>
             </section>
           ))}
         </div>
-        <p className="mt-10 text-xs text-zinc-600">Last updated October 11, 2026.</p>
+        <p className="mt-10 text-xs text-ink-3">Last updated October 11, 2026.</p>
       </div>
     </main>
   );
