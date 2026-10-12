@@ -9,7 +9,7 @@ import { Podium } from "@/components/podium";
 import { ArrowRightIcon, CrownIcon } from "@/components/ui/icons";
 import { LiveDot, Widgets } from "@/components/widgets";
 import { getCompetition, getLeaderboard, getLineStatus, getPowerHour } from "@/lib/data";
-import { smsLink } from "@/lib/format";
+import { competitionPhase, smsLink } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -27,7 +27,9 @@ export default async function Home() {
     getCompetition(),
   ]);
   const joinHref = smsLink(comp?.brodieNumber ?? null);
-  const frozen = comp?.frozen ?? false;
+  // Final if frozen OR the window has closed (the freeze job may lag); same rule the widgets use.
+  const phase = competitionPhase(comp, serverNow);
+  const final = phase === "final";
   const totalReps = rows.reduce((n, r) => n + r.validReps, 0);
   const rest = rows.filter((r) => r.rank > 3);
   const leader = rows.find((r) => r.rank === 1) ?? null;
@@ -40,8 +42,12 @@ export default async function Home() {
       <section className="relative grid items-center gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-12">
         <div className="animate-rise">
           <p className="inline-flex items-center gap-2 rounded-full border border-hairline bg-surface/70 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.16em] text-ink-2">
-            {frozen ? (
+            {final ? (
               <>Final standings</>
+            ) : phase === "pre" ? (
+              <>
+                Starting soon<span className="hidden sm:inline"> · One week · Strict reps only</span>
+              </>
             ) : (
               <>
                 <LiveDot />
@@ -52,9 +58,9 @@ export default async function Home() {
             )}
           </p>
           <h1 className="mt-4 font-display text-mega font-extrabold uppercase italic tracking-tight">
-            {frozen ? "It's over." : "Strict reps."}
+            {final ? "It's over." : "Strict reps."}
             <br />
-            <span className="text-accent">{frozen ? "Final board." : "Live board."}</span>
+            <span className="text-accent">{final ? "Final board." : "Live board."}</span>
           </h1>
           <p className="mt-4 max-w-xl text-lg text-ink-2">
             FaceTime the line, crank out push-ups, get judged on every rep. Climb the board and watch your
@@ -82,14 +88,14 @@ export default async function Home() {
             ))}
           </dl>
         </div>
-        {leader ? <LeaderSpotlight row={leader} frozen={frozen} /> : null}
+        {leader ? <LeaderSpotlight row={leader} final={final} /> : null}
       </section>
 
-      <Widgets serverNow={serverNow} line={line} windowEnd={comp?.windowEnd ?? null} frozen={frozen} powerHour={ph} />
+      <Widgets serverNow={serverNow} line={line} windowStart={comp?.windowStart ?? null} windowEnd={comp?.windowEnd ?? null} frozen={comp?.frozen ?? false} powerHour={ph} />
 
       <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="min-w-0">
-          {frozen ? (
+          {final ? (
             <div role="status" className="mb-4 flex items-center gap-3 rounded-2xl border border-accent/50 bg-accent-dim px-4 py-3">
               <CrownIcon className="size-5 shrink-0 text-accent" />
               <p className="font-semibold">

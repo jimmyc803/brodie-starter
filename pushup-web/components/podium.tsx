@@ -34,7 +34,7 @@ function Step({ row }: { row: LeaderboardRow }) {
           <span className="whitespace-nowrap tabular-nums">{row.validReps.toLocaleString("en-US")} reps</span>
           <StreakChip days={row.streak} />
         </span>
-        <RankDelta rank={row.rank} />
+        <RankDelta publicId={row.publicId} />
       </Link>
       <div
         aria-hidden

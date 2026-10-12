@@ -29,7 +29,7 @@ export function LeaderRow({ row }: { row: LeaderboardRow }) {
           <span className={`font-display text-2xl font-bold tabular-nums leading-none ${row.rank <= 10 ? "text-ink" : "text-ink-3"}`}>
             {row.rank}
           </span>
-          <RankDelta rank={row.rank} />
+          <RankDelta publicId={row.publicId} />
         </span>
         <span className="grid size-11 place-items-center overflow-hidden rounded-xl bg-surface-2 ring-1 ring-hairline sm:size-12">
           <Avatar level={row.avatarLevel} size={44} pose="idle" />

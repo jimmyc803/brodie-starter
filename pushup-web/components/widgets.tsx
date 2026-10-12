@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { BoltIcon } from "@/components/ui/icons";
-import { formatCountdown, formatEta, formatEtDeadline, formatLineStatus, isFinal, powerHourStatus } from "@/lib/format";
+import {
+  competitionPhase,
+  formatCountdown,
+  formatEta,
+  formatEtDeadline,
+  formatLineStatus,
+  powerHourStatus,
+  type CompetitionPhase,
+} from "@/lib/format";
 import type { LineStatus, LineSummary, PowerHour } from "@/lib/types";
 
 /** Ticks every second. Starts from the server render time so SSR and hydration match with no layout shift. */
@@ -35,14 +43,26 @@ export function LiveDot({ className = "bg-live text-live", pulse = true }: { cla
 }
 
 /** Live scoreboard strip for the single FaceTime line. */
-function LineTicker({ line }: { line: LineStatus | null }) {
-  const look = line ? LINE_LOOK[line.stateSummary] : null;
+function LineTicker({ line: rawLine, phase }: { line: LineStatus | null; phase: CompetitionPhase }) {
+  // Once the challenge is over the queue is meaningless: show the line as closed regardless of its last state.
+  const line = phase === "final" ? null : rawLine;
+  const look = phase === "final" ? LINE_LOOK.closed : line ? LINE_LOOK[line.stateSummary] : null;
   const eta = line ? formatEta(line.queueLength, line.etaCycleS) : null;
-  const walkIn = line?.stateSummary === "idle" && line.queueLength === 0;
+  const walkIn = phase === "live" && line?.stateSummary === "idle" && line.queueLength === 0;
+  const copy =
+    phase === "final"
+      ? "Challenge over. Final board below."
+      : phase === "pre"
+        ? "The line opens when the challenge starts. Text JOIN now to be ready."
+        : walkIn
+          ? "Nobody waiting. FaceTime in now."
+          : line && line.stateSummary !== "closed"
+            ? "Text QUEUE to grab a spot. We text you when you're up."
+            : "The line reopens soon. Watch this space.";
   return (
     <div className="card relative overflow-hidden p-4 sm:p-5 lg:col-span-4">
       <p className="sr-only" aria-live="polite">
-        {formatLineStatus(line)}
+        {phase === "final" ? `Line closed. ${copy}` : `${formatLineStatus(line)}. ${copy}`}
       </p>
       <div aria-hidden className="flex items-center justify-between gap-3">
         <span className="eyebrow">The line</span>
@@ -75,11 +95,7 @@ function LineTicker({ line }: { line: LineStatus | null }) {
         </div>
       </dl>
       <p aria-hidden className="mt-4 text-sm text-ink-2">
-        {walkIn
-          ? "Nobody waiting. FaceTime in now."
-          : line && line.stateSummary !== "closed"
-            ? "Text QUEUE to grab a spot. We text you when you're up."
-            : "The line reopens soon. Watch this space."}
+        {copy}
       </p>
     </div>
   );
@@ -122,6 +138,7 @@ function Countdown({ ms }: { ms: number | null }) {
 
 export function Widgets({
   line,
+  windowStart,
   windowEnd,
   frozen,
   powerHour,
@@ -129,19 +146,22 @@ export function Widgets({
 }: {
   serverNow: number;
   line: LineStatus | null;
+  windowStart: string | null;
   windowEnd: string | null;
   frozen: boolean;
   powerHour: PowerHour | null;
 }) {
   const now = useNow(serverNow);
-  const final = windowEnd ? isFinal(frozen, windowEnd, now) : frozen;
+  const phase = competitionPhase({ frozen, windowStart, windowEnd }, now);
+  const final = phase === "final";
+  const pre = phase === "pre";
   const ph = powerHourStatus(powerHour, now);
-  const endMs = windowEnd ? Date.parse(windowEnd) : NaN;
-  const live = ph.kind === "live" && !final;
+  const target = pre && windowStart ? Date.parse(windowStart) : windowEnd ? Date.parse(windowEnd) : NaN;
+  const live = ph.kind === "live" && phase === "live";
 
   return (
     <section aria-label="Challenge status" className="grid gap-3 lg:grid-cols-12">
-      <LineTicker line={line} />
+      <LineTicker line={line} phase={phase} />
 
       {final ? (
         <div className="card relative overflow-hidden border-accent/60 p-4 sm:p-5 lg:col-span-5">
@@ -153,11 +173,13 @@ export function Widgets({
         </div>
       ) : (
         <div className="card p-4 sm:p-5 lg:col-span-5">
-          <p className="eyebrow">Challenge ends in</p>
+          <p className="eyebrow">{pre ? "Challenge starts in" : "Challenge ends in"}</p>
           <div className="mt-3">
-            <Countdown ms={!Number.isNaN(endMs) ? endMs - now : null} />
+            <Countdown ms={!Number.isNaN(target) ? target - now : null} />
           </div>
-          {formatEtDeadline(windowEnd) ? (
+          {pre && formatEtDeadline(windowStart) ? (
+            <p className="mt-3 text-sm text-ink-2">{formatEtDeadline(windowStart)}. First rep scores then.</p>
+          ) : !pre && formatEtDeadline(windowEnd) ? (
             <p className="mt-3 text-sm text-ink-2">{formatEtDeadline(windowEnd)}. Scores freeze at zero.</p>
           ) : null}
         </div>

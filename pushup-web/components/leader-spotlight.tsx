@@ -5,7 +5,7 @@ import { CrownIcon } from "@/components/ui/icons";
 import type { LeaderboardRow } from "@/lib/types";
 
 /** Desktop-only hero art: the current #1 in a trophy-case card. Phones get the podium instead. */
-export function LeaderSpotlight({ row, frozen }: { row: LeaderboardRow; frozen: boolean }) {
+export function LeaderSpotlight({ row, final }: { row: LeaderboardRow; final: boolean }) {
   return (
     <Link
       href={profileHref(row.displayName)}
@@ -15,7 +15,7 @@ export function LeaderSpotlight({ row, frozen }: { row: LeaderboardRow; frozen: 
         #1
       </span>
       <p className="eyebrow relative inline-flex items-center gap-1.5 text-gold">
-        <CrownIcon className="size-4" /> {frozen ? "Champion" : "Current #1"}
+        <CrownIcon className="size-4" /> {final ? "Champion" : "Current #1"}
       </p>
       <span className="relative mx-auto mt-2 block w-fit">
         <Avatar level={row.avatarLevel} size={208} />

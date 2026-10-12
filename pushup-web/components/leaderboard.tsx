@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { LeaderRow } from "@/components/leader-row";
+import { RankDeltaProvider } from "@/components/rank-delta";
 import { SearchIcon, XIcon } from "@/components/ui/icons";
 import { filterByName, ilikePattern, mapLeaderboardRow } from "@/lib/mappers";
 import type { LeaderboardRow } from "@/lib/types";
@@ -86,6 +87,7 @@ export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; childr
         </div>
       </div>
 
+      <RankDeltaProvider rows={rows}>
       {!needle ? (
         children
       ) : shown.length === 0 ? (
@@ -105,6 +107,7 @@ export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; childr
           </ol>
         </>
       )}
+      </RankDeltaProvider>
     </section>
   );
 }

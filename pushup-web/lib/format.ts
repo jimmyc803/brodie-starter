@@ -107,3 +107,21 @@ export function formatEtDeadline(iso: string | null): string | null {
   }).format(d);
   return `${day} · ${time} ET`;
 }
+
+export type CompetitionPhase = "pre" | "live" | "final";
+
+/**
+ * Single source of truth for whether the challenge is upcoming, running or over.
+ * Final when frozen OR the window has ended, even if the freeze job hasn't run yet.
+ * Unknown competition (null) is treated as live so the board still renders.
+ */
+export function competitionPhase(
+  comp: { frozen: boolean; windowStart: string | null; windowEnd: string | null } | null,
+  nowMs: number,
+): CompetitionPhase {
+  if (!comp) return "live";
+  if (comp.frozen || (comp.windowEnd != null && isFinal(false, comp.windowEnd, nowMs))) return "final";
+  const start = comp.windowStart ? Date.parse(comp.windowStart) : NaN;
+  if (!Number.isNaN(start) && nowMs < start) return "pre";
+  return "live";
+}
