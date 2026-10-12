@@ -15,6 +15,8 @@ import {
 import type { CompetitionPublic, LeaderboardRow, LineStatus, PowerHour } from "./types";
 import { makeCardModel, mapCallResult, mapDaily, mapProfile, mapThresholds } from "./card";
 
+const FIXTURE_THRESHOLDS = [0, 25, 60, 120, 200, 300, 450, 650, 900, 1200];
+
 const fixtureCallId = "00000000-0000-4000-8000-000000000042";
 
 function fixtureView(path: string): Record<string, unknown>[] {
@@ -35,7 +37,7 @@ function fixtureView(path: string): Record<string, unknown>[] {
       avatar_level_before: 3, avatar_level_after: 4 }],
     competition_public: [{ window_start: "2026-10-13T00:00:00Z", window_end: "2026-10-19T03:59:59Z",
       frozen: false, site_url: "https://brodie-pushups.vercel.app",
-      avatar_level_thresholds: [0, 25, 60, 120, 200, 300, 450, 650, 900, 1200] }],
+      avatar_level_thresholds: FIXTURE_THRESHOLDS }],
     power_hour_public: [{ date_et: nextStart.toISOString().slice(0, 10), starts_at: nextStart.toISOString(),
       ends_at: new Date(nextStart.getTime() + 3_600_000).toISOString() }],
   };
@@ -96,7 +98,7 @@ export async function getPowerHour(): Promise<PowerHour | null> {
 }
 
 export async function getCompetition(): Promise<(CompetitionPublic & { avatarLevelThresholds: number[] }) | null> {
-  if (FIXTURES) return { ...fixtureCompetition(FIXTURE_FROZEN), avatarLevelThresholds: mapThresholds(null) };
+  if (FIXTURES) return { ...fixtureCompetition(FIXTURE_FROZEN), avatarLevelThresholds: FIXTURE_THRESHOLDS };
   const rows = await fetchView("competition_public?select=*&limit=1");
   return rows[0] ? { ...mapCompetition(rows[0]), avatarLevelThresholds: mapThresholds(rows[0].avatar_level_thresholds) } : null;
 }
