@@ -1,6 +1,8 @@
+import Image from "next/image";
 import Link from "next/link";
 
 import { SiteHeader } from "@/components/site-header";
+import { BrodieCallFace } from "@/components/ui-kit/brodie";
 
 // Landing page for coaches: what Brodie does, proof (the live demos), and every call to action goes to /start.
 const STEPS = [
@@ -36,7 +38,8 @@ export default function Home() {
           }
         />
 
-        <section className="mt-16 max-w-2xl sm:mt-24">
+        <div className="mt-16 grid items-center gap-12 sm:mt-24 md:grid-cols-[minmax(0,1fr)_260px]">
+        <section className="max-w-2xl">
           <p className="text-[12.5px] font-medium text-ink-3">For online coaches and busy trainers</p>
           <h1 className="mt-2 text-[40px] font-semibold leading-[1.03] tracking-[-0.03em] text-balance sm:text-[56px]">
             Eyes on every rep, even when you&apos;re not there.
@@ -55,6 +58,11 @@ export default function Home() {
           </div>
           <p className="mt-3 text-xs text-ink-3">Free during the pilot. Takes a minute.</p>
         </section>
+        <figure className="mx-auto w-full max-w-[260px]">
+          <BrodieCallFace />
+          <figcaption className="mt-3 text-center text-sm text-ink-2">This is who your client FaceTimes.</figcaption>
+        </figure>
+        </div>
 
         <ol className="mt-20 grid gap-3 sm:grid-cols-3">
           {STEPS.map((s, i) => (
@@ -106,6 +114,7 @@ export default function Home() {
         </section>
 
         <section className="mt-20 rounded-[18px] border border-line bg-surface p-6 text-center sm:p-10">
+          <Image src="/brodie/flex.png" alt="" width={110} height={112} className="mx-auto mb-4" />
           <h2 className="text-[26px] font-semibold tracking-[-0.025em] text-balance">Coach more clients without losing the details</h2>
           <Link href="/start" className="mt-5 inline-block rounded-[10px] bg-ink px-5 py-3 text-sm font-semibold text-canvas hover:opacity-90">
             Apply to coach with Brodie

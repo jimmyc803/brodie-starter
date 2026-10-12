@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
@@ -37,8 +38,14 @@ async function ClientHome({ params }: Pick<PageProps<"/go/[token]">, "params">) 
   return (
     <div className="mx-auto w-full max-w-md px-4 pb-12 pt-5">
       <SiteHeader context={`Coach ${c.coachName}`} />
-      <h1 className="mt-8 text-[28px] font-semibold tracking-[-0.025em] text-ink">Hi {first} 👋</h1>
-      <p className="mt-1 text-ink-2">Ready when you are. Brodie counts every rep and tells you how to fix your form.</p>
+      <div className="mt-8 flex items-center gap-4">
+        <Image src="/brodie/call-face.png" alt="Brodie" width={72} height={72} className="size-[72px] shrink-0 rounded-full bg-[#0d1b22] object-cover object-top" />
+        <div className="min-w-0">
+          <h1 className="text-[28px] font-semibold tracking-[-0.025em] text-ink">Hi {first} 👋</h1>
+          <p className="text-sm text-ink-3">You&apos;re training with Brodie</p>
+        </div>
+      </div>
+      <p className="mt-3 text-ink-2">Ready when you are. Brodie counts every rep and tells you how to fix your form.</p>
 
       <section className="mt-6 rounded-[14px] border border-line bg-surface p-5">
         <p className="text-sm text-ink-3">Today&apos;s workout</p>

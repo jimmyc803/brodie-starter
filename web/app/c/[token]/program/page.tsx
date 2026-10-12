@@ -10,6 +10,7 @@ import { AddClientForm } from './client-form';
 import { ExerciseSupport } from './exercise-support';
 import { exerciseReviewBrief, supportBookingUrl } from '@/lib/programSupport';
 import { CoachShell } from '@/components/coach/coach-shell';
+import { BrodieEmpty } from '@/components/ui-kit/brodie';
 import { canManageClients } from '@/lib/coach-access';
 
 export const metadata = { title: 'Training programs | Brodie', robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
@@ -69,7 +70,7 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
           : <p className="mt-4 text-sm text-ink-2">No clients yet. Add a client to this coach account to assign a day.</p>}
     </section>
     <section className="mt-10"><h2 className="text-lg font-semibold text-ink">Program library</h2><p className="mt-0.5 max-w-3xl text-sm text-ink-3">Review each exercise, set, rep and note against your PDF before assigning. Every exercise stays in your program. During a call, Brodie tracks only supported movements; exercises marked “No video tracking” are omitted from the automated workout. Days with no tracked exercises stay in your library but cannot be assigned to a video call.</p>
-      {!programs.length && <div className="mt-5 rounded-[14px] border border-dashed border-line p-10 text-center text-ink-3">Your first training plan starts with a PDF.</div>}
+      {!programs.length && <BrodieEmpty title="Your first training plan starts with a PDF." className="mt-5"><p className="mt-1 text-sm text-ink-2">Upload it above and Brodie reads the days, sets and reps.</p></BrodieEmpty>}
       {programs.map(program => <article key={program.id} className="mt-4 rounded-[14px] border border-line bg-surface p-6"><h3 className="text-lg font-semibold text-ink">{program.title}</h3><div className="mt-5 grid gap-5 lg:grid-cols-3">{days.filter(d => d.program_id === program.id).map(day => <div key={day.id} className="rounded-[10px] border border-line bg-canvas p-4"><p className="text-xs text-ink-3">Day {day.day_number}</p><h4 className="mt-0.5 font-semibold text-ink">{day.title}</h4><ul className="mt-4 space-y-4">{day.exercises.map((exercise, i) => <li key={i} className="text-sm"><div className="flex items-start justify-between gap-3"><span className="font-medium text-ink">{exercise.name}</span><span className="shrink-0 tabular-nums text-ink-2">{exercise.sets} × {exercise.reps === 0 ? 'timed' : exercise.reps}</span></div><span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${exercise.supported ? 'bg-good-soft text-good' : 'bg-idle-soft text-ink-2'}`}>{exercise.supported ? 'Video tracking' : 'No video tracking'}</span>{exercise.notes && <p className="mt-1 text-xs leading-relaxed text-ink-3">{exercise.notes}</p>}</li>)}</ul></div>)}</div></article>)}
     </section>
     {supportBrief && <ExerciseSupport brief={supportBrief} bookingUrl={bookingUrl} />}

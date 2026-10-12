@@ -13,6 +13,9 @@ models/
 *.npz
 *.jpg
 *.png
+!web/public/brodie/*.png
+!web/app/icon.png
+!web/app/apple-icon.png
 *.pcm
 *.wav
 .env
