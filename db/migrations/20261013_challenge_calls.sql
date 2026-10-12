@@ -20,12 +20,19 @@
 --   (at < window_start) > after_count (at >= connected_at + call_count_s) > liveness_fail (liveness_result = 'fail').
 --   reps.valid = valid AND NOT in_challenge AND extra is null; multiplier = power_multiplier when
 --   at ∈ [starts_at, ends_at) of power_hours(ch_et_day(at)) else 1; points = valid ? multiplier : 0.
--- counted_toward_cap = accept AND (ended_at - connected_at >= min_counted_call_s OR rep_count >= 1); recomputed by
---   ch_call_end, ch_commit_reps and the ch_tick timeout (whichever runs last sees both inputs). rep_count is the max of
---   the worker-reported count and the committed rep count.
+-- counted_toward_cap = accept AND (ended_at - connected_at >= min_counted_call_s OR rep_count >= 1). rep_count is the
+--   max of the worker-reported count and the committed rep count.
+-- End finalization (calls.end_reason): the FIRST end wins and retries never move ended_at/count_end_at. ch_tick's
+--   in_call timeout sets ended_at with end_reason 'timeout'; that provisional end may be replaced exactly once, by an
+--   explicit ch_call_end with p_ended_at ('end') or by ch_commit_reps whose payload has ended_at ('commit'). Only those
+--   two reconciliations recompute counted_toward_cap from scratch (true->false allowed); every other path ORs it in
+--   (monotonic), so a retry can never flip it true->false.
 -- ch_queue_join on an opted-out user re-subscribes them (clears opted_out_at) and joins: reason 'opted_out_ok'.
 
 begin;
+
+alter table calls add column if not exists end_reason text
+  check (end_reason is null or end_reason in ('end', 'timeout', 'commit'));
 
 -- ---------------------------------------------------------------- internal helpers
 create or replace function ch_calls_cfg_int(p_key text, p_default int) returns int
@@ -220,7 +227,7 @@ begin
     if v_client.banned_at is not null then
       v_reason := 'banned';
     elsif exists (select 1 from line_state where user_id = v_user and line_id <> p_line_id
-                                              and state in ('claimed', 'in_call')) then
+                                              and (state = 'in_call' or (state = 'claimed' and claimed_until > p_now))) then
       v_reason := 'not_your_turn';
     elsif ch_calls_today(v_user, p_now) >= ch_calls_cfg_int('daily_call_cap', 5) then
       v_reason := 'at_cap';
@@ -238,8 +245,22 @@ begin
     for v_q in select id from queue where user_id = v_user and status in ('waiting', 'notified') order by id for update loop
       perform ch_calls_queue_set(v_q.id, 'connected', p_now, 'call_start ' || p_call_id, p_line_id);
     end loop;
+    -- an expired (not yet ticked) claim of this user on another line is stale: release it with the connect
+    for v_q in select line_id from line_state where user_id = v_user and line_id <> p_line_id and state = 'claimed'
+                order by line_id loop
+      perform ch_calls_line_set(v_q.line_id, 'idle', null, null, null, null, null, p_now,
+                                'stale claim released by call_start ' || p_call_id);
+    end loop;
     perform ch_calls_line_set(p_line_id, 'in_call', v_user, p_call_id, null, null, p_now, p_now,
                               'call_start ' || p_call_id);
+  elsif v_reason in ('banned', 'at_cap') and v_user is not null and v_ls.state = 'claimed'
+        and v_ls.claimed_until > p_now and v_ls.user_id = v_user then
+    -- the claim holder can never use this claim: release it now (queue entry expired, line idle)
+    for v_q in select id from queue where user_id = v_user and status in ('waiting', 'notified') order by id for update loop
+      perform ch_calls_queue_set(v_q.id, 'expired', p_now, 'call_start ' || p_call_id || ' ' || v_reason);
+    end loop;
+    perform ch_calls_line_set(p_line_id, 'idle', null, null, null, null, null, p_now,
+                              'claim holder rejected ' || v_reason || ' call_start ' || p_call_id);
   end if;
 
   insert into calls (id, line_id, user_id, handle_raw, decision, reject_reason, connected_at)
@@ -280,15 +301,28 @@ begin
   perform ch_calls_lock_user(v_call.user_id);
   select * into v_call from calls where id = p_call_id for update;
 
-  v_ended := greatest(coalesce(p_ended_at, p_now), v_call.connected_at);
   v_reps := greatest(coalesce(p_rep_count, 0), coalesce(v_call.rep_count, 0));
-  update calls
-     set ended_at = v_ended,
-         count_end_at = coalesce(p_count_end_at, count_end_at),
-         rep_count = v_reps,
-         counted_toward_cap = ch_calls_counted(decision, connected_at, v_ended, v_reps)
-   where id = p_call_id
-  returning * into v_call;
+  if v_call.ended_at is not null and v_call.end_reason = 'timeout' and p_ended_at is not null then
+    -- explicit end replaces the provisional tick-timeout end once; full recompute
+    v_ended := greatest(p_ended_at, v_call.connected_at);
+    update calls
+       set ended_at = v_ended, end_reason = 'end',
+           count_end_at = coalesce(p_count_end_at, count_end_at),
+           rep_count = v_reps,
+           counted_toward_cap = ch_calls_counted(decision, connected_at, v_ended, v_reps)
+     where id = p_call_id
+    returning * into v_call;
+  else
+    -- first end wins; retries only add reps and can only turn counted_toward_cap on
+    v_ended := coalesce(v_call.ended_at, greatest(coalesce(p_ended_at, p_now), v_call.connected_at));
+    update calls
+       set ended_at = v_ended, end_reason = coalesce(end_reason, 'end'),
+           count_end_at = coalesce(count_end_at, p_count_end_at),
+           rep_count = v_reps,
+           counted_toward_cap = counted_toward_cap or ch_calls_counted(decision, connected_at, v_ended, v_reps)
+     where id = p_call_id
+    returning * into v_call;
+  end if;
 
   select * into v_ls from line_state where line_id = v_call.line_id;
   if found and v_ls.state = 'in_call' and v_ls.call_id = p_call_id then
@@ -318,6 +352,9 @@ declare
   v_total int;
   v_valid int;
   v_points int;
+  v_reconcile bool;
+  v_cend timestamptz;
+  v_reps int;
 begin
   if p_now is null then
     raise exception 'ch_commit_reps: p_now required';
@@ -346,6 +383,7 @@ begin
                  then p_payload ->> 'liveness_result' else v_call.liveness_result end;
   v_started := coalesce((p_payload ->> 'started_at')::timestamptz, v_call.connected_at);
   v_ended := coalesce((p_payload ->> 'ended_at')::timestamptz, v_call.ended_at, p_now);
+  v_reconcile := v_call.end_reason = 'timeout' and (p_payload ->> 'ended_at') is not null;
 
   insert into sessions (client_id, started_at, ended_at) values (v_call.user_id, v_started, v_ended)
   returning id into v_session;
@@ -402,13 +440,27 @@ begin
   from reps where set_id = v_set;
   update sets set completed_reps = v_valid where id = v_set;
 
-  update calls
-     set session_id = v_session,
-         committed_at = p_now,
-         liveness_result = v_live,
-         rep_count = greatest(coalesce(rep_count, 0), v_total),
-         counted_toward_cap = ch_calls_counted(decision, connected_at, ended_at, greatest(coalesce(rep_count, 0), v_total))
-   where id = p_call_id;
+  v_reps := greatest(coalesce(v_call.rep_count, 0), v_total);
+  if v_reconcile then
+    -- late commit after a tick timeout: the worker's ended_at replaces the provisional one; full recompute
+    v_cend := greatest(v_ended, v_call.connected_at);
+    update calls
+       set session_id = v_session, committed_at = p_now, liveness_result = v_live, rep_count = v_reps,
+           ended_at = v_cend, end_reason = 'commit',
+           counted_toward_cap = ch_calls_counted(decision, connected_at, v_cend, v_reps)
+     where id = p_call_id;
+    insert into audit_log (actor, action, target, before, after, reason, at)
+    values ('system', 'call:reconcile', p_call_id,
+            jsonb_build_object('ended_at', v_call.ended_at, 'counted_toward_cap', v_call.counted_toward_cap),
+            jsonb_build_object('ended_at', v_cend,
+                               'counted_toward_cap', ch_calls_counted(v_call.decision, v_call.connected_at, v_cend, v_reps)),
+            'commit after timeout', p_now);
+  else
+    update calls
+       set session_id = v_session, committed_at = p_now, liveness_result = v_live, rep_count = v_reps,
+           counted_toward_cap = counted_toward_cap or ch_calls_counted(decision, connected_at, ended_at, v_reps)
+     where id = p_call_id;
+  end if;
 
   return jsonb_build_object('ok', true, 'session_id', v_session, 'valid_reps', v_valid, 'points', v_points,
                             'already', false);
@@ -470,7 +522,8 @@ begin
                                   + make_interval(secs => v_count_s + v_reveal_s), p_now));
         update calls
            set ended_at = v_ended,
-               counted_toward_cap = ch_calls_counted(decision, connected_at, v_ended, rep_count)
+               end_reason = case when ended_at is null then 'timeout' else end_reason end,
+               counted_toward_cap = counted_toward_cap or ch_calls_counted(decision, connected_at, v_ended, rep_count)
          where id = v_call.id;
         insert into audit_log (actor, action, target, after, reason, at)
         values ('system', 'call:timeout', v_call.id, jsonb_build_object('ended_at', v_ended), 'in_call timeout', p_now);
@@ -546,6 +599,7 @@ declare
   v_qid bigint;
   v_pos int;
   v_line_open bool;
+  v_ws timestamptz := ch_calls_cfg_ts('window_start');
 begin
   if p_now is null then
     raise exception 'ch_queue_join: p_now required';
@@ -558,9 +612,6 @@ begin
   if found then
     v_ct := ch_calls_today(p_user_id, p_now);
   end if;
-  v_line_open := exists (select 1 from line_state ls join lines l on l.id = ls.line_id where l.active and ls.state = 'idle')
-                 and not exists (select 1 from queue where status = 'waiting' and user_id is distinct from p_user_id)
-                 and not ch_calls_frozen(p_now);
 
   if v_client.id is null or v_client.joined_at is null then
     v_reason := 'not_registered';
@@ -589,6 +640,16 @@ begin
     insert into audit_log (actor, action, target, after, reason, at)
     values ('system', 'queue:join', v_qid::text, jsonb_build_object('user_id', p_user_id), v_reason, p_now);
   end if;
+
+  -- line_open mirrors ch_call_start's chert_meta walk-in acceptance for this user (incl. D-13: own entry ok)
+  v_line_open := v_reason in ('ok', 'opted_out_ok', 'already')
+                 and (v_ws is null or p_now >= v_ws) and not ch_calls_frozen(p_now)
+                 and v_ct < v_cap
+                 and exists (select 1 from line_state ls join lines l on l.id = ls.line_id
+                              where l.active and ls.state = 'idle')
+                 and not exists (select 1 from queue where status in ('waiting', 'notified') and user_id <> p_user_id)
+                 and not exists (select 1 from line_state where user_id = p_user_id
+                                    and (state = 'in_call' or (state = 'claimed' and claimed_until > p_now)));
 
   if v_reason in ('ok', 'opted_out_ok', 'already') then
     select w.pos into v_pos from ch_calls_waiting(p_now) w where w.user_id = p_user_id;

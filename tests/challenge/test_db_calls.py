@@ -100,9 +100,19 @@ def full_call(st, handle, at, dur_s=195, reps=0):
     return call_id, idle_at
 
 
-def commit(st, call_id, reps, now, liveness="pass", started_at=None):
+def commit(st, call_id, reps, now, liveness="pass", started_at=None, ended_at=None):
     return st.rpc("ch_commit_reps", {"p_call_id": call_id, "p_now": now, "p_payload": {
-        "started_at": started_at, "ended_at": None, "liveness_result": liveness, "judge_version": "j1", "reps": reps}})
+        "started_at": started_at, "ended_at": ended_at, "liveness_result": liveness, "judge_version": "j1",
+        "reps": reps}})
+
+
+def add_line2(conn):
+    conn.execute("insert into lines (id, chert_agent_name) values ('line-2', 'brodie2')")
+    conn.execute("insert into line_state (line_id, state, updated_at) values ('line-2', 'idle', now())")
+
+
+def call_row(conn, call_id):
+    return conn.execute("select ended_at, counted_toward_cap, end_reason from calls where id=%s", (call_id,)).fetchone()
 
 
 def rep(n, at, valid=True, **kw):
@@ -555,3 +565,151 @@ def test_rep_time_fallback_and_unique_numbering(st, conn):
     assert [x[0] for x in rows] == [1, 2, 3]
     assert sorted(x[5] for x in rows) == [T0 + timedelta(seconds=7), T0 + timedelta(seconds=8),
                                           T0 + timedelta(seconds=9.5)]
+
+
+# ---------------------------------------------------------------- fix round regressions
+
+def test_end_retry_keeps_first_end_and_never_uncounts(st, conn):
+    uid, h = user(conn)
+    c, _ = start(st, h, T0)
+    assert end(st, c, T0 + timedelta(seconds=200), 0)["counted_toward_cap"] is True
+    # retry with a different (short) ended_at: first end wins, still counted
+    assert end(st, c, T0 + timedelta(seconds=10), 0)["counted_toward_cap"] is True
+    assert call_row(conn, c) == (T0 + timedelta(seconds=200), True, "end")
+    # null retry later: ended_at does not move to p_now
+    assert st.rpc("ch_call_end", {"p_call_id": c, "p_ended_at": None, "p_count_end_at": None, "p_rep_count": 0,
+                                  "p_now": T0 + timedelta(seconds=900)})["counted_toward_cap"] is True
+    assert call_row(conn, c) == (T0 + timedelta(seconds=200), True, "end")
+    assert conn.execute("select ch_calls_today(%s, %s)", (uid, T0)).fetchone()[0] == 1
+
+
+def test_short_end_retry_cannot_be_extended(st, conn):
+    _, h = user(conn)
+    c, _ = start(st, h, T0)
+    assert end(st, c, T0 + timedelta(seconds=10), 0)["counted_toward_cap"] is False
+    assert end(st, c, T0 + timedelta(seconds=200), 0)["counted_toward_cap"] is False
+    assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "end")
+
+
+def test_timeout_end_replaced_once_by_explicit_end(st, conn):
+    uid, h = user(conn)
+    c, _ = start(st, h, T0)
+    tick(st, T0 + timedelta(seconds=255))
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+    # null retry after timeout keeps the timeout end (no move to p_now)
+    st.rpc("ch_call_end", {"p_call_id": c, "p_ended_at": None, "p_count_end_at": None, "p_rep_count": 0,
+                           "p_now": T0 + timedelta(seconds=400)})
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+    # explicit end: recovered 10 s, 0-rep call is not counted
+    assert end(st, c, T0 + timedelta(seconds=10), 0, now=T0 + timedelta(seconds=500))["counted_toward_cap"] is False
+    assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "end")
+    assert end(st, c, T0 + timedelta(seconds=300), 0, now=T0 + timedelta(seconds=600))["counted_toward_cap"] is False
+    assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "end")
+    assert conn.execute("select ch_calls_today(%s, %s)", (uid, T0)).fetchone()[0] == 0
+
+
+def test_late_commit_after_timeout_reconciles(st, conn):
+    uid, h = user(conn)
+    c, _ = start(st, h, T0)
+    tick(st, T0 + timedelta(seconds=255))
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+    r = commit(st, c, [], T0 + timedelta(seconds=600), ended_at=T0 + timedelta(seconds=10))
+    assert r["ok"] is True and r["already"] is False
+    assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "commit")
+    assert conn.execute("select ch_calls_today(%s, %s)", (uid, T0)).fetchone()[0] == 0
+    assert conn.execute("select count(*) from audit_log where action='call:reconcile' and target=%s",
+                        (c,)).fetchone()[0] == 1
+    # a later end does not override the reconciled end; a commit retry is idempotent
+    assert end(st, c, T0 + timedelta(seconds=195), 0, now=T0 + timedelta(seconds=700))["counted_toward_cap"] is False
+    assert commit(st, c, [], T0 + timedelta(seconds=800), ended_at=T0 + timedelta(seconds=300))["already"] is True
+    assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "commit")
+
+
+def test_late_commit_without_ended_at_does_not_reconcile(st, conn):
+    _, h = user(conn)
+    c, _ = start(st, h, T0)
+    tick(st, T0 + timedelta(seconds=255))
+    commit(st, c, [], T0 + timedelta(seconds=600))
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+
+
+def test_commit_after_explicit_end_never_uncounts(st, conn):
+    _, h = user(conn)
+    c, _ = start(st, h, T0)
+    assert end(st, c, T0 + timedelta(seconds=200), 0)["counted_toward_cap"] is True
+    commit(st, c, [], T0 + timedelta(seconds=300), ended_at=T0 + timedelta(seconds=5))
+    assert call_row(conn, c) == (T0 + timedelta(seconds=200), True, "end")
+
+
+@pytest.mark.parametrize("why", ["banned", "at_cap"])
+def test_claim_holder_rejected_releases_claim(st, conn, why):
+    a, ha = user(conn)
+    join(st, a, T0)
+    tick(st, T0)
+    qa = conn.execute("select id from queue where user_id=%s", (a,)).fetchone()[0]
+    assert line(conn)[:2] == ("claimed", a)
+    if why == "banned":
+        conn.execute("update clients set banned_at=now() where id=%s", (a,))
+    else:
+        set_cfg(conn, "daily_call_cap", 0)
+    _, r = start(st, ha, T0 + timedelta(seconds=10))
+    assert (r["decision"], r["reason"]) == ("reject", why)
+    s = line(conn)
+    assert (s[0], s[1], s[3]) == ("idle", None, None)
+    assert conn.execute("select status from queue where id=%s", (qa,)).fetchone()[0] == "expired"
+    actions = [x for (x,) in conn.execute("select action from audit_log where target='line-1' order by id")]
+    assert actions == ["line:idle->claimed", "line:claimed->idle"]
+    # tick has nothing left to no-show
+    assert tick(st, T0 + timedelta(seconds=200))["no_shows"] == []
+
+
+def test_claim_holder_rejected_in_claim_window_mode_releases_claim(st, conn):
+    a, _ = user(conn)
+    join(st, a, T0)
+    tick(st, T0)
+    conn.execute("update clients set banned_at=now() where id=%s", (a,))
+    _, r = start(st, None, T0 + timedelta(seconds=10), mode="claim_window")
+    assert r["reason"] == "banned"
+    assert line(conn)[0] == "idle"
+    assert conn.execute("select status from queue where user_id=%s", (a,)).fetchone()[0] == "expired"
+
+
+def test_expired_claim_on_other_line_does_not_block_walk_in(st, conn):
+    add_line2(conn)
+    a, ha = user(conn)
+    join(st, a, T0)
+    t = tick(st, T0)
+    assert [x["line_id"] for x in t["claims"]] == ["line-1"]
+    # still-valid claim on line-1 blocks a walk-in on line-2
+    assert start(st, ha, T0 + timedelta(seconds=89), line="line-2")[1]["reason"] == "not_your_turn"
+    # expired (not yet ticked) claim does not
+    c, r = start(st, ha, T0 + timedelta(seconds=95), line="line-2")
+    assert (r["decision"], r["reason"]) == ("accept", "ok")
+    assert line(conn, "line-2")[:3] == ("in_call", a, c)
+    assert line(conn, "line-1")[:2] == ("idle", None)
+    assert tick(st, T0 + timedelta(seconds=96))["no_shows"] == []
+
+
+def test_queue_join_line_open_matches_walk_in_two_lines(st, conn):
+    add_line2(conn)
+    a, _ = user(conn)
+    b, hb = user(conn)
+    join(st, a, T0)
+    tick(st, T0)
+    assert (line(conn, "line-1")[:2], line(conn, "line-2")[0]) == (("claimed", a), "idle")
+    j = join(st, b, T0 + timedelta(seconds=5))
+    assert (j["reason"], j["line_open"]) == ("ok", False)
+    # the claimant's notified entry blocks a walk-in on the idle line, consistent with line_open
+    assert start(st, hb, T0 + timedelta(seconds=6), line="line-2")[1]["reason"] == "not_your_turn"
+    # the claim holder themselves is not offered a walk-in either
+    assert join(st, a, T0 + timedelta(seconds=7))["line_open"] is False
+
+
+def test_queue_join_line_open_true_iff_walk_in_accepts(st, conn):
+    add_line2(conn)
+    a, ha = user(conn)
+    j = join(st, a, T0)
+    assert (j["reason"], j["line_open"]) == ("ok", True)
+    assert start(st, ha, T0 + timedelta(seconds=1), line="line-2")[1]["decision"] == "accept"
+    b, _ = user(conn)
+    assert join(st, b, et(2026, 10, 12, 19, 0))["line_open"] is False  # before window_start
