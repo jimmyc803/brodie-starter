@@ -165,7 +165,7 @@ Env flags (read once at startup, logged, echoed in /health and admin): `CALLER_I
 ## C5. Judge (challenge/judge/)
 ```python
 JUDGE_VERSION = "j1"
-DEFAULT_THRESHOLDS = {"min_conf":0.5, "frame_conf_frac":0.9, "knee_min_deg":160, "knee_floor_margin":0.04,
+DEFAULT_THRESHOLDS = {"min_conf":0.5, "frame_conf_frac":0.9, "knee_min_deg":160, "knee_floor_margin":0.02,
   "hip_line_max_dev_deg":15, "depth_elbow_max_deg":90, "depth_margin":0.05, "lockout_min_deg":160,
   "min_rep_s":0.8, "max_cadence_rpm":60, "classifier_veto":["pushups - shallow","pushups - insufficient","pushups - elevated hips"],
   "classifier_veto_substrings":["knee","sag"], "liveness_window_s":[45,150], "liveness_timeout_s":4, "cue_min_gap_s":4}
@@ -195,3 +195,4 @@ Cue keys (say_now phrases; exact text in SPEC §6) are the dict `challenge.judge
 - call_result_public adds `points_before int, avatar_level_before int, avatar_level_after int, rank_before int` (before = user totals excluding this call and later calls; rank_before = rank by points as of just before this call's connected_at, nullable if unranked). Also `competition_public` adds `avatar_level_thresholds jsonb` (non-sensitive) so the site can compute levels for display.
 
 - C7.x: calls gains `end_reason text` (end|timeout|commit). First end wins; only an explicit end/commit ended_at may replace a timeout end (once); counted_toward_cap only recomputed then.
+- C7.y (judge): metrics = 2nd-most-extreme value after a running 3-frame median; persons_in_frame = 2nd-highest count in the rep window; the rep window spans from the previous rep fire (or reset) with no truncation; RepAccumulator(thr=None, max_lag_s=2.0). knee_floor_margin 0.02 (D-17).
