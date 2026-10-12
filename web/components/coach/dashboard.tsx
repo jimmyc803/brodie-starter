@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ClientList } from "@/components/coach/client-list";
 import { AddClient } from "@/components/coach/add-client";
 import { ClientLink } from "@/components/coach/client-link";
+import { ManageClient } from "@/components/coach/manage-client";
 import { SessionDetail } from "@/components/coach/session-detail";
 import { canManageClients } from "@/lib/coach-access";
 import { ReviewBanner } from "@/components/coach/review-banner";
@@ -101,7 +102,7 @@ export function CoachDashboard({
 
           {client && summary ? (
             <div className="min-w-0 space-y-4">
-              <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} coachName={view.coach.name} showLink={canEdit} />
+              <ClientHeader client={client} summary={summary} base={base} activeSession={session?.session.share_token ?? null} programsHref={programsHref} coachName={view.coach.name} showLink={canEdit} editToken={canEdit ? token : undefined} />
               {session ? (
                 <SessionDetail view={session} clientName={client.name} clips={clips} programHref={programsHref} />
               ) : (
@@ -126,6 +127,7 @@ function ClientHeader({
   programsHref,
   coachName,
   showLink,
+  editToken,
 }: {
   client: CoachClient;
   summary: ClientSummary;
@@ -134,6 +136,7 @@ function ClientHeader({
   programsHref: string;
   coachName: string;
   showLink: boolean;
+  editToken?: string;
 }) {
   const status = STATUS_LABEL[summary.status];
   return (
@@ -144,6 +147,7 @@ function ClientHeader({
         </span>
         <h2 className="text-xl font-semibold text-zinc-50">{client.name}</h2>
         <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${status.className}`}>{status.text}</span>
+        {editToken ? <ManageClient key={client.id} token={editToken} clientId={client.id} name={client.name} base={base} /> : null}
       </div>
 
       <dl className="mt-4 grid gap-3 sm:grid-cols-3">

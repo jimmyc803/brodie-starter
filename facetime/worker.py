@@ -441,6 +441,20 @@ class CoachJob:
             except Exception as e: print(f'[worker] set_video_quality failed: {e}', flush=True)
         self.video_task = asyncio.create_task(self.read_video(track))
 
+    def probe_caller(self, participant):
+        """CALLER_PROBE=1: write everything the dispatcher tells us about the caller to data/tmp/caller_probe.jsonl (local, gitignored),
+        to find out whether a Chert call carries the caller's handle (to match a FaceTime call to a client)."""
+        try:
+            room_md = getattr(self.room, 'metadata', '')
+            rec = dict(t=time.time(), room=self.room.name, room_metadata=room_md, job_metadata=self.md, identity=participant.identity,
+                       name=getattr(participant, 'name', ''), metadata=getattr(participant, 'metadata', ''), attributes=dict(getattr(participant, 'attributes', {}) or {}))
+            path = os.path.join(os.path.dirname(STARTER_DIR), 'data', 'tmp', 'caller_probe.jsonl'); os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, 'a') as f: f.write(json.dumps(rec, default=str) + '\n')
+            print(f'[worker] caller probe -> {path}: fields name={bool(rec["name"])} metadata={bool(rec["metadata"])} attributes={sorted(rec["attributes"])} '
+                  f'job_metadata={sorted(self.md)}', flush=True)
+        except Exception as e:
+            print(f'[worker] caller probe failed: {e!r}', flush=True)
+
     def bind(self, participant, what):
         """A caller: remember it (the leave grace is keyed on it), start the model session once (never on a warm job: this only runs
         when somebody publishes), and in voice mode emit the synthetic session {state: open} event once the session is up."""
@@ -449,6 +463,7 @@ class CoachJob:
         extra = getattr(self.event_writer, 'extra', None)                   # the JSONL lines carry the call id from the bind on (null before it)
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
+        if os.environ.get('CALLER_PROBE'): self.probe_caller(participant)
         if self.recap is None and not self.warm and not self.voice_mode and self.a.plan and call_client_id(self.a):
             from facetime.call_recap import CallRecap
             self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None), client_id=call_client_id(self.a))
