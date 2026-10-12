@@ -27,6 +27,10 @@ _ALIASES: dict[str, CommandKind] = {
     "Q": "QUEUE", "LINE": "QUEUE", "S": "STATUS", "ME": "STATUS",
     "LEADERBOARD": "TOP", "LB": "TOP", "UNSTOP": "START",
 }
+_FUZZY_COMMANDS: tuple[CommandKind, ...] = (
+    "QUEUE", "STATUS", "LEAVE", "RULES", "POWER", "HELP", "JOIN",
+)
+_STOP_WORDS = {"STOP", "STOPALL", "QUIT", "CANCEL", "UNSUBSCRIBE", "END"}
 _EDGES = string.whitespace + string.punctuation.replace("_", "") + "“”‘’…—–"
 _BLOCKED = ("fuck", "shit", "bitch", "cunt", "asshole", "motherfucker", "nigger", "nigga", "faggot", "fag", "kike", "chink", "tranny")
 
@@ -50,11 +54,13 @@ def parse(body: str) -> Command:
     parts = re.split(r"[\s:]+", text, maxsplit=1)
     word = parts[0].strip(_EDGES).upper()
     arg = parts[1].strip(_EDGES) if len(parts) > 1 else ""
+    if word in _STOP_WORDS or re.search(r"\bstop\b", text, re.IGNORECASE):
+        return Command("STOP", arg)
     kind = _COMMANDS.get(word) or _ALIASES.get(word)
     if kind is None and len(word) >= 4:
         candidates = {
-            candidate for spelling, candidate in {**_COMMANDS, **_ALIASES}.items()
-            if len(spelling) >= 4 and _one_edit(word, spelling)
+            candidate for candidate in _FUZZY_COMMANDS
+            if (candidate != "JOIN" or arg) and _one_edit(word, candidate)
         }
         if len(candidates) == 1:
             kind = candidates.pop()

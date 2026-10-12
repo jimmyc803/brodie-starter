@@ -32,6 +32,42 @@ def test_commands(body, kind, arg):
     assert (command.kind, command.arg) == (kind, arg)
 
 
+@pytest.mark.parametrize("body", [
+    "fine", "like", "mine", "john", "stat", "star", "step", "shop",
+    "linx", "leaderboar", "starr", "unstopp", "yess", "joi", "joim",
+    "joim: !!!", "nonstop", "stopped", "stopper", "stop_all", "quitx",
+    "cance", "unsubscrib", "ends", "stopalls",
+])
+def test_commands_do_not_fuzzy_match_aliases_or_consent(body):
+    assert parse(body).kind == "UNKNOWN"
+
+
+@pytest.mark.parametrize(("body", "kind", "arg"), [
+    ("queu", "QUEUE", ""), ("staus", "STATUS", ""),
+    ("leav", "LEAVE", ""), ("rule", "RULES", ""),
+    ("powe", "POWER", ""), ("helpp", "HELP", ""),
+    ("joim: Coach_1", "JOIN", "Coach_1"),
+])
+def test_canonical_command_typos(body, kind, arg):
+    command = parse(body)
+    assert (command.kind, command.arg) == (kind, arg)
+
+
+@pytest.mark.parametrize("word", ["STOP", "STOPALL", "QUIT", "CANCEL", "UNSUBSCRIBE", "END"])
+@pytest.mark.parametrize("style", [str.upper, str.lower, str.title])
+@pytest.mark.parametrize("wrapper", ["{}", " !!!{}?! ", "“{}”"])
+def test_exact_opt_out_words(word, style, wrapper):
+    assert parse(wrapper.format(style(word))).kind == "STOP"
+
+
+@pytest.mark.parametrize("body", [
+    "please stop", "please STOP texting me", "please (sToP)! thanks",
+    "QUEUE stop", "START please stop", "YES stop", "JOIN stop", "help\nstop\nplease",
+])
+def test_standalone_stop_overrides_other_commands(body):
+    assert parse(body).kind == "STOP"
+
+
 @pytest.mark.parametrize("name", ["Amy", "Coach_12", "_name_", "A" * 20])
 def test_valid_names(name):
     assert validate_display_name(name) == (True, "")
@@ -67,7 +103,8 @@ def envelope(**overrides):
     return json.dumps({"messages": [item]}).encode()
 
 
-def test_mock_round_trip(caplog):
+def test_mock_round_trip(caplog, monkeypatch):
+    monkeypatch.setenv("CHALLENGE_ALLOW_MOCK_WEBHOOK", "1")
     provider = MockProvider()
     with caplog.at_level("INFO"):
         inbound = provider.parse_inbound({}, envelope())[0]
@@ -86,6 +123,15 @@ def test_mock_round_trip(caplog):
     assert "Messaging inbound" in caplog.text
     assert "Messaging outbound" in caplog.text
     assert inbound.handle not in caplog.text
+
+
+@pytest.mark.parametrize("value", [None, "", "0", "true", "True", "yes", "01", " 1", "1 ", "1"])
+def test_mock_webhook_requires_explicit_opt_in(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("CHALLENGE_ALLOW_MOCK_WEBHOOK", raising=False)
+    else:
+        monkeypatch.setenv("CHALLENGE_ALLOW_MOCK_WEBHOOK", value)
+    assert MockProvider().verify({}, envelope()) is (value == "1")
 
 
 @pytest.mark.parametrize("payload", [

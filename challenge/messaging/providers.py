@@ -113,7 +113,8 @@ class MockProvider:
         return self._send(handle, image_url=image_url, caption=caption)
 
     def verify(self, headers: dict, body: bytes) -> bool:
-        return True
+        """Accept mock webhooks only with CHALLENGE_ALLOW_MOCK_WEBHOOK=1."""
+        return os.environ.get("CHALLENGE_ALLOW_MOCK_WEBHOOK") == "1"
 
     def parse_inbound(self, headers: dict, body: bytes) -> list[Inbound]:
         return _parse_messages(body, self.name)
