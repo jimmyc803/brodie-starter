@@ -110,7 +110,7 @@ Line/queue mutations lock rows `select … for update` (line_state rows, then th
   Per active line: claimed & claimed_until ≤ now → queue no_show, line idle; in_call & in_call_since + call_count_s+call_reveal_s+in_call_timeout_extra_s ≤ now → offline; offline & offline_until ≤ now → idle;
   then for each idle line, unless frozen/after window_end: pop next eligible (calls_today asc, entered_at asc; skip cap/banned/opted_out/in a call) → line claimed(claimed_until = now + claim_window_s), queue notified.
   Waiting entries of users now at cap / banned / opted out → status expired.
-- `ch_queue_join(p_user_id uuid, p_now timestamptz)` → `{ok, reason /* ok|already|at_cap|in_call|banned|frozen|not_registered|opted_out_ok */, position, calls_today, calls_left, line_open bool}`. line_open = some line idle and no one waiting.
+- `ch_queue_join(p_user_id uuid, p_now timestamptz)` → `{ok, reason /* ok|already|at_cap|in_call|banned|frozen|not_registered|opted_out_ok */, position, calls_today, calls_left, line_open bool}`. line_open = this user could walk in now: some line idle, no other waiting/notified entry, window open, under cap, no live claim/call (matches ch_call_start; D-13).
 - `ch_queue_leave(p_user_id uuid, p_reason text /* 'left'|'stop' */, p_now)` → `{ok, was_queued}`. If the user holds a claim, line → idle.
 - `ch_queue_view(p_now)` → `{lines:[{line_id,state,user_id,call_id,claimed_until,offline_until,in_call_since}], queue:[{queue_id,user_id,display_name,status,entered_at,calls_today,position}], avg_cycle_s}`.
   avg_cycle_s = avg(ended_at−connected_at) of last 10 accepted calls (default call_count_s+call_reveal_s) + line_offline_gap_s.
@@ -193,3 +193,5 @@ Cue keys (say_now phrases; exact text in SPEC §6) are the dict `challenge.judge
 - Worker writes a local checkpoint JSON (call meta + reps so far) after every rep, not only at end(); reconciler commits checkpoints of calls that never ended (stale > max length + 120 s) with ended_at = last rep time.
 - Website reads are uncached (dynamic, no-store); realtime pulse → router.refresh().
 - call_result_public adds `points_before int, avatar_level_before int, avatar_level_after int, rank_before int` (before = user totals excluding this call and later calls; rank_before = rank by points as of just before this call's connected_at, nullable if unranked). Also `competition_public` adds `avatar_level_thresholds jsonb` (non-sensitive) so the site can compute levels for display.
+
+- C7.x: calls gains `end_reason text` (end|timeout|commit). First end wins; only an explicit end/commit ended_at may replace a timeout end (once); counted_toward_cap only recomputed then.
