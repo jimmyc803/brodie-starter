@@ -1,5 +1,6 @@
 import { chromium, expect } from '@playwright/test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -18,28 +19,29 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
   const errors=[]; page.on('pageerror',error=>errors.push(error.message));
   const check=async(name,fn)=>{await fn();results.push({name,status:'passed'});console.log(`PASS browser: ${name}`);};
   try {
-    await check('demo has one read-only explanation and working private workspace onboarding',async()=>{
+    await check('demo has one read-only explanation and links to current coach application',async()=>{
       const beforeCoaches=(await db.query('select * from coaches order by id')).rows;
       const beforeClients=(await db.query('select * from clients order by id')).rows;
       await page.goto(`${url}/c/demo-tristan-R7mQ2vK9xL4pN8sW1tY3aB5c/program`);
-      await expect(page.getByRole('link',{name:'Create private workspace'})).toBeVisible({timeout:90000});
+      await expect(page.getByRole('link',{name:'Apply to coach'})).toBeVisible({timeout:90000});
       await expect(page.getByText(/public demo coach link.*view-only/)).toHaveCount(1);
       await expect(page.getByLabel('Program PDF')).toHaveCount(0);
       await expect(page.getByRole('button',{name:'Assign training day',exact:true})).toHaveCount(0);
       await expect(page.locator('form')).toHaveCount(0);
       assert.deepEqual((await db.query('select * from coaches order by id')).rows,beforeCoaches);
       assert.deepEqual((await db.query('select * from clients order by id')).rows,beforeClients);
-      await page.getByRole('link',{name:'Create private workspace'}).click();
-      await page.locator('[name="coach_name"]').fill('Tristan');
-      await page.locator('[name="client_name"]').fill('Ryan');
-      await page.getByRole('button',{name:'Create private workspace',exact:true}).click();
-      await expect(page).toHaveURL(/\/c\/[a-f0-9]{64}\/program$/, {timeout:30000});
-      token=new URL(page.url()).pathname.split('/')[2];
-      coach=(await db.query('select * from coaches where share_token=$1',[token])).rows[0];
-      assert.equal(coach.name,'Tristan');
-      const clients=(await db.query('select * from clients where coach_id=$1',[coach.id])).rows;
-      assert.equal(clients.length,1); client=clients[0]; assert.equal(client.name,'Ryan');
-      assert.match(client.share_token,/^[a-f0-9]{64}$/); assert.notEqual(client.share_token,token);
+      await page.getByRole('link',{name:'Apply to coach'}).click();
+      await expect(page).toHaveURL(/\/start$/);
+      await expect(page.getByRole('heading',{name:'Coach with Brodie'})).toBeVisible();
+      await expect(page.getByLabel('Your name',{exact:true})).toBeVisible();
+      await expect(page.getByLabel('Email',{exact:true})).toBeVisible();
+      // Application approval is a separate product flow. Seed an approved coach
+      // explicitly; this suite tests PDF processing, ownership and assignments.
+      // Do not submit an application or trigger any external coach alert.
+      token=randomBytes(32).toString('hex');
+      coach=(await db.query('insert into coaches(name,share_token,status) values($1,$2,$3) returning *',['Tristan',token,'approved'])).rows[0];
+      client=(await db.query('insert into clients(coach_id,name,share_token) values($1,$2,$3) returning *',[coach.id,'Ryan',randomBytes(32).toString('hex')])).rows[0];
+      await page.goto(`${url}/c/${token}/program`);
       // Next's cached navigation can retain prior route trees under display:none.
       // Verify the active private page, then reload to exercise persisted ownership.
       await expect(page.getByText(/public demo coach link.*view-only/).filter({visible:true})).toHaveCount(0);
@@ -70,7 +72,8 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
       await page.getByRole('button',{name:'Add client',exact:true}).click();
       await expect(page.getByLabel('Client',{exact:true}).getByRole('option',{name:'Jordan',exact:true})).toHaveCount(1);
       const added=(await db.query('select * from clients where coach_id=$1 and name=$2',[coach.id,'Jordan'])).rows;
-      assert.equal(added.length,1); assert.match(added[0].share_token,/^[a-f0-9]{64}$/);
+      assert.equal(added.length,1); assert.match(added[0].share_token,/^[A-Za-z0-9_-]{32}$/);
+      assert.notEqual(added[0].share_token,client.share_token); assert.notEqual(added[0].share_token,token);
       assert.deepEqual((await db.query('select * from clients where coach_id<>$1 order by id',[coach.id])).rows,beforeOtherClients);
       assert(gateway.requests.slice(requestStart).some(r=>r.method==='POST' && r.path==='/rest/v1/clients'));
       await page.reload();

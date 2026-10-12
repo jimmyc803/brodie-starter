@@ -10,6 +10,7 @@ import { AddClientForm } from './client-form';
 import { ExerciseSupport } from './exercise-support';
 import { exerciseReviewBrief, supportBookingUrl } from '@/lib/programSupport';
 import { CoachShell } from '@/components/coach/coach-shell';
+import { canManageClients } from '@/lib/coach-access';
 
 export const metadata = { title: 'Training programs | Brodie', robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
 export const maxDuration = 90;
@@ -22,7 +23,7 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   try { db = supabaseServer(); } catch {
     return <p className="rounded-2xl border border-zinc-800 bg-zinc-900 p-8">Program service is not configured yet. Add the server credentials to enable uploads and assignments.</p>;
   }
-  const coachResult = await db.from('coaches').select('id,name').eq('share_token', token).maybeSingle();
+  const coachResult = await db.from('coaches').select('id,name,status').eq('share_token', token).maybeSingle();
   if (coachResult.error) return <p role="alert">Program service is temporarily unavailable. Please retry.</p>;
   const coach = coachResult.data;
   if (!coach) notFound();
@@ -51,6 +52,7 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   const dayLabels = days.map(day => ({ id: day.id, label: `${titles.get(day.program_id)} · Day ${day.day_number}: ${day.title}` }));
   const current = currentAssignments(clients, dayLabels, assignments);
   const readOnly = readOnlyCoachToken(token);
+  const canAddClients = canManageClients(token, coach.status);
   const supportBrief = exerciseReviewBrief(programs.map(program => ({ title: program.title, days: days.filter(day => day.program_id === program.id) })));
   const bookingUrl = supportBookingUrl(process.env.COACH_SUPPORT_BOOKING_URL);
   return <CoachShell token={token} coachName={coach.name} active="programs">
@@ -58,7 +60,7 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
     {!readOnly && <><div className="grid gap-6 md:grid-cols-2">
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 1</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Upload a program</h2><UploadForm token={token} /></section>
       <section id="assign" className="scroll-mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><p className="text-sm text-zinc-500">Step 2</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-zinc-50">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }))} /></section>
-    </div><section className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><h2 className="text-lg font-semibold">Add a client</h2><p className="mb-4 mt-1 text-sm text-zinc-400">Create a client here, then choose their next training day above.</p><AddClientForm token={token} /></section></>}
+    </div><section className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"><h2 className="text-lg font-semibold">Add a client</h2>{canAddClients ? <><p className="mb-4 mt-1 text-sm text-zinc-400">Create a client here, then choose their next training day above.</p><AddClientForm token={token} /></> : <p className="mt-1 text-sm text-zinc-400">Adding clients unlocks once your coach application is approved. You can upload and review PDFs in your sandbox now.</p>}</section></>}
     <section aria-labelledby="current-assignments-title" className="mt-6 rounded-2xl border border-zinc-800 bg-zinc-900 p-6">
       <h2 id="current-assignments-title" className="text-lg font-semibold text-zinc-50">Current assignments</h2>
       <p className="mt-0.5 text-sm text-zinc-500">The training day each client will load on their next call.</p>
