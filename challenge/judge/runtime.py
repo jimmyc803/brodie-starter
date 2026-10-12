@@ -6,6 +6,8 @@ JudgeRuntime per push-up Coach (judge option on) and drives it on the pipeline's
     on_frame(FrameObs)            every processed frame (also frames without a pose or while the counter is paused)
     on_label(t, label)            every classifier correction label the Coach emitted (Coach.say(..., 'correction', label))
     on_rep(event) -> RepVerdict   when the counter's count goes up; event = {'t': fire time on the same clock, 'n': ...,
+                                  (the rep's OWN fire time: a rep the counter held and confirms later keeps its earlier t;
+                                  frames newer than t stay pending for the next rep while within max_lag_s of the newest)
                                   optional 'torso_ok': bool (None/absent: computed from the window, see metrics.py)}
     set_challenge_window(t0, t1)  reps fired inside [t0, t1] are marked in_challenge (liveness challenge; the caller
                                   neither counts nor penalises them) and get no corrective cue.
@@ -44,9 +46,9 @@ class RepVerdict:
 
 
 class JudgeRuntime:
-    def __init__(self, thr: dict | None = None, max_window_s: float = 6.0):
+    def __init__(self, thr: dict | None = None, max_lag_s: float = 2.0):
         self.thr = merged_thresholds(thr)
-        self.acc = RepMetricsAccumulator(self.thr, max_window_s=max_window_s)
+        self.acc = RepMetricsAccumulator(self.thr, max_lag_s=max_lag_s)
         self.windows: list[tuple[float, float]] = []
         self.verdicts: list[RepVerdict] = []
         self._labels: list[tuple[float, str]] = []
@@ -54,7 +56,7 @@ class JudgeRuntime:
         self._last_cue_t: float | None = None
 
     def reset(self) -> None:
-        """Counting (re)starts: drop the buffered frames, labels, cadence history and cue rate limit (challenge windows stay)."""
+        """Counting (re)starts (also when the tracked person is replaced, so no rep mixes two people): drop the buffered frames, labels, cadence history and cue rate limit (challenge windows stay)."""
         self.acc.reset()
         self._labels = []
         self._last_fire = None

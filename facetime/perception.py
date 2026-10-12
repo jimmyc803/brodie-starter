@@ -159,7 +159,8 @@ class Perception:
         self._t = 0.0; self._frame = 0; self._frame_events = []
         self._coach_id = None; self._last_count = 0
         self._rc_t = {}; self._rc_last_i = None       # counter frame index -> service time, for turning_t on the event clock
-        self._judge_off = None                        # pipeline judge clock - event clock (seconds), from the last frame
+        self._judge_off = None                        # pipeline judge clock - event clock (seconds), from the last judged frame
+        self._windows = []; self._win_judge = None; self._win_done = 0   # challenge windows (event clock) and how many the judge has
         self._seen = (None, -1e9)                     # exercise_seen: (name, t of the last event)
         self.hold = False                                              # set by the voice layer while a conversation is going; session.py pauses the rest/wait clock
         self._vis_emitted = None; self._vis_cand = (None, 0); self._paused = False; self.vis_hold = 5   # 0.5 s before a state change is reported (paused is hysteretic already)
@@ -198,12 +199,23 @@ class Perception:
         if self.say_cb is not None: self.say_cb(text, intent, meta)
 
     def set_challenge_window(self, t0, t1):
-        """Mark reps fired in [t0, t1] (event clock) in_challenge (liveness challenge). Converted to the pipeline's judge clock
-        with the offset of the last processed frame; applies to the current push-up Coach's judge. False when no judge runs."""
+        """Mark reps fired in [t0, t1] (event clock) in_challenge (liveness challenge). The window is kept on the event clock
+        and applied to the push-up judge on its own clock (offset = pipeline judge time - event time of the latest judged
+        frame): at once when that offset is known, else (prewarmed pipeline, no judged frame yet) as soon as it is; and again
+        to every new judge (a fresh push-up Coach). Returns True if applied now, False if queued."""
+        t0, t1 = float(t0), float(t1)
+        if t1 < t0: raise ValueError(f'challenge window ends before it starts: {t0} > {t1}')
+        self._windows.append((t0, t1))
+        return self._apply_windows()
+
+    def _apply_windows(self):
         j = getattr(self.pipe, 'judge', None)
-        if j is None: return False
-        off = self._judge_off or 0.0
-        j.set_challenge_window(t0 + off, t1 + off); return True
+        if j is None or self._judge_off is None: return False
+        if id(j) != self._win_judge: self._win_judge = id(j); self._win_done = 0      # a new judge gets every window
+        for t0, t1 in self._windows[self._win_done:]:
+            j.set_challenge_window(t0 + self._judge_off, t1 + self._judge_off)
+        self._win_done = len(self._windows)
+        return True
 
     # ---- per frame ----
     def process_frame(self, rgb, t_recv=None, t_ms=None, meta=None):
@@ -224,7 +236,9 @@ class Perception:
         self._t = t_recv - self.t0; self._frame = self.n; self._frame_events = []
         if self.live: self._recv_hist.append(t_recv); del self._recv_hist[:-4]
         r = step()
-        if r.get('judge_t') is not None: self._judge_off = r['judge_t'] - self._t
+        if r.get('judge_t') is not None:
+            self._judge_off = r['judge_t'] - self._t
+            if self._windows: self._apply_windows()
         t_dec = time.time(); self.n += 1
         m = dict(frame=self._frame, t_recv=t_recv, t_decision=t_dec, pose_ms=round(r['pose_ms'], 1), clf_ms=round(r['clf_ms'], 1), pose_model=self.pipe.pose_variant)
         if meta: m.update(meta)

@@ -79,6 +79,8 @@ def resolve_trigger(arg):
     return load_model(path), path
 SHORT_SIDE = 288
 JUDGE_EXERCISES = ('pushups',)   # classifier classes the strict judge runs for
+JUDGE_LAG_S = 2.0                # judge pending tail (RepMetricsAccumulator max_lag_s)
+JUDGE_LAG_GAP_S = 10.0           # ... with a gap-gated counter (a held rep is confirmed up to gap_confirm rep periods later)
 
 def judge_default():
     """The judge option's default: on for CHALLENGE_MODE=competition."""
@@ -134,7 +136,7 @@ class FramePipeline:
         num_poses: None = 2 with the judge on (people count), else 1. pose_variant=None: no pose model (landmark injection)."""
         self.judge_on = judge_default() if judge is None else bool(judge); self.judge_thr = judge_thr; self.judge = None
         self.num_poses = int(num_poses) if num_poses is not None else (2 if self.judge_on else 1)
-        self._judged = 0; self.persons = 0
+        self._judged = 0; self.persons = 0; self.n_switch = 0; self._rc_t = {}
         self.clf = _TimedClassifier(Classifier(model_path)) if model_path else None
         self.params = dict(POLICY_DEFAULT, **(params or {})); self.rep_params = rep_params; self.fps = fps
         self.thresholds = thresholds if thresholds is not None else (json.load(open(THR_DEFAULT)) if _os.path.exists(THR_DEFAULT) else None)
@@ -178,7 +180,11 @@ class FramePipeline:
         if not (self.judge_on and ex in JUDGE_EXERCISES and self.coach is not None and self.coach.rc is not None):
             return None
         from challenge.judge.runtime import JudgeRuntime
-        return JudgeRuntime(self.judge_thr)
+        # frames newer than a rep's fire time stay pending for max_lag_s; a counter with the gap gate can confirm a held rep
+        # seconds later (both on one frame, each with its own fire time), so it gets a longer tail
+        lag = JUDGE_LAG_GAP_S if getattr(self.coach.rc, 'gap_gate', 0) else JUDGE_LAG_S
+        self._rc_t = {}
+        return JudgeRuntime(self.judge_thr, max_lag_s=lag)
 
     def arm(self):
         """End of the warm-up: from the next frame the Coach's policy runs (counter state carries over; the counter's settle
@@ -208,19 +214,25 @@ class FramePipeline:
             ms = self.last_ms + 1
         self.last_ms = ms
         t = time.perf_counter(); a, w = self.pose(img, ms); pose_ms = (time.perf_counter() - t) * 1000
-        persons = getattr(self.pose, 'persons', None)
-        return self.process_landmarks(a, w, persons=persons, t_ms=ms, aspect=img.shape[1] / img.shape[0], pose_ms=pose_ms)
+        persons = getattr(self.pose, 'persons', None); switched = bool(getattr(self.pose, 'switched', False))
+        return self.process_landmarks(a, w, persons=persons, t_ms=ms, aspect=img.shape[1] / img.shape[0], pose_ms=pose_ms, switched=switched)
 
-    def process_landmarks(self, a, w, persons=None, t_ms=None, aspect=None, pose_ms=0.0):
+    def process_landmarks(self, a, w, persons=None, t_ms=None, aspect=None, pose_ms=0.0, switched=False):
         """The injection seam (module docstring): one frame's pose -> the same result dict as process().
         a: (33,5) normalised image landmarks [x,y,z,visibility,presence] of the primary person or None (no pose);
         w: (33,3) world landmarks or None; persons: people in frame (None: 1 with a pose, 0 without);
         t_ms: frame time in ms (None: wall clock since construction); aspect: frame width / height (None: 16/9, judge only);
-        pose_ms: pose compute time to report (0 for injected landmarks)."""
+        pose_ms: pose compute time to report (0 for injected landmarks); switched: the primary person was replaced on this
+        frame (rtcoach.pose PrimaryTracker) - with the judge on, the counter's partial rep and the judge window restart
+        here so no rep mixes two people (the count is kept)."""
         ms = int((time.monotonic() - self.t0) * 1000) if t_ms is None else int(t_ms)
         ok = a is not None; self.last_landmarks = a                      # (33,5) normalised x,y,z,vis,pres or None (for --show overlays)
         if persons is None: persons = 1 if ok else 0
         self.persons = int(persons)
+        if switched and self.judge is not None:
+            rc0 = self.coach.rc if self.coach is not None else None
+            if rc0 is not None and hasattr(rc0, 'restart'): rc0.restart()
+            self.judge.reset(); self.n_switch += 1
         if self.clf is not None: self.clf.last_ms = 0.0; seq0 = self.clf.ex_seq
         ev = []; step_ms = 0.0
         v = self.vis.update(a, ok)                                     # whole body in frame? (facetime/visibility.py)
@@ -262,10 +274,17 @@ class FramePipeline:
         for e in ev:
             if e.get('intent') == 'correction' and e.get('why'): j.on_label(t_s, e['why'])
         out = {}
+        ri = getattr(rc, 'i', None)
+        if ri is not None and ri not in self._rc_t:                       # counter frame index -> judge clock
+            self._rc_t[ri] = t_s
+            if len(self._rc_t) > 600: del self._rc_t[min(self._rc_t)]
+        fires = getattr(rc, 'fire_i', None)
         c = rc.count if rc is not None else 0
         if c < self._judged: self._judged = 0
         for n in range(self._judged + 1, c + 1):
-            out[n] = j.on_rep({'t': t_s, 'n': n}).event_fields()
+            # each rep closes at its own fire time: a held rep confirmed together with the next one keeps its earlier time
+            t_fire = self._rc_t.get(fires[n - 1], t_s) if fires is not None and len(fires) >= n else t_s
+            out[n] = j.on_rep({'t': t_fire, 'n': n}).event_fields()
         self._judged = c
         return out
 

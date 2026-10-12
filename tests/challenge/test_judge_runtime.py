@@ -3,6 +3,8 @@ counting in rtcoach.pose and the side-view push-up adaptation of RepCounter2. No
 FramePipeline.process_landmarks / Perception.process_landmarks (pose_variant=None builds the pipeline without a pose model)."""
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -12,7 +14,7 @@ from challenge.judge.runtime import JudgeRuntime
 from challenge.judge.synth import synth_pushups
 from facetime.perception import Config, Perception
 from facetime.pipeline import REP_PARAMS_V2, FramePipeline
-from rtcoach.pose import count_persons, select_primary
+from rtcoach.pose import PrimaryTracker, count_persons, is_duplicate, select_primary
 from rtcoach.repcount2 import RepCounter2, pose_signals
 
 EVENT_FIELDS = {'valid', 'reject_reasons', 'metrics', 'judge_version', 'cue', 'in_challenge'}
@@ -22,8 +24,12 @@ C2_METRICS = {'min_elbow_deg_l', 'min_elbow_deg_r', 'top_elbow_deg', 'max_hip_li
 RP = {k: v for k, v in REP_PARAMS_V2.items() if k != 'v2'}
 
 
-def pipeline(judge=True):
-    return FramePipeline(None, exercise='pushups', pose_variant=None, trigger='none', judge=judge)
+def pipeline(judge=True, **kw):
+    return FramePipeline(None, exercise='pushups', pose_variant=None, trigger='none', judge=judge, **kw)
+
+
+def shifted(clip, dt):
+    return [dataclasses.replace(f, t=round(f.t + dt, 6)) for f in clip.frames]
 
 
 def run_pipeline(clip, judge=True):
@@ -260,3 +266,92 @@ def test_side_view_elbow_signal_keeps_scale_with_hidden_arm():
     assert sw_s == pytest.approx(2 * sw_b, rel=0.02)
     clean = [pose_signals(f.img, f.world, 0.2, 0.5)['elbow'] for f in clip.frames]
     assert sw_s == pytest.approx(np.ptp(clean), rel=0.1)
+
+
+def test_overlapping_distinct_people_counted_as_two():
+    """Two people whose boxes overlap by more than half (one doing push-ups just behind the other) are not a duplicate:
+    the boxes are not nested and the landmarks do not match."""
+    p1 = _body(0.40, 0.55, w=0.40, h=0.20)
+    p2 = _body(0.50, 0.50, w=0.40, h=0.20)
+    p2[:, :2] += np.random.default_rng(7).normal(0, 0.03, (33, 2)).astype(np.float32)
+    assert not is_duplicate(p1, p2)
+    assert count_persons([p1, p2]) == 2 and count_persons([p2, p1]) == 2
+    standing = _body(0.45, 0.45, w=0.10, h=0.60)                    # someone standing over the plank
+    assert count_persons([p1, standing]) == 2
+
+
+def test_primary_tracker_flags_switch_and_keeps_track_through_dropouts():
+    a, b = _body(0.25, 0.5), _body(0.75, 0.5)
+    tr = PrimaryTracker()
+    assert tr.update([a]) == (0, False)
+    assert tr.update([]) == (None, False)                          # dropout: the tracked centroid is kept
+    assert tr.update([b, a]) == (1, False)                         # still the same person, in either order
+    assert tr.update([b]) == (0, True)                             # only someone else is left: a switch
+    assert tr.update([b]) == (0, False)
+
+
+# ---- fix round: person switch, held reps, prewarmed challenge windows ----
+
+def test_person_switch_restarts_partial_rep_and_judge_window():
+    a = synth_pushups(n_reps=3, lead_in_s=2.0, tail_s=0.0, knees_down=True)
+    first = [f for f in a.frames if f.t <= a.frames[-1].t - 1.0]     # person A leaves mid-rep 3
+    b = synth_pushups(n_reps=3, lead_in_s=1.0, body='tall')         # person B, clean
+    later = shifted(b, first[-1].t + 0.1)
+
+    def run(flag):
+        pipe = pipeline()
+        out = []
+        for k, f in enumerate(first + later):
+            r = pipe.process_landmarks(f.img, f.world, f.persons, round(f.t * 1000), f.aspect,
+                                       switched=flag and k == len(first))
+            out += [(n, v) for n, v in r.get('judge', {}).items()]
+        return pipe, out
+
+    pipe, out = run(True)
+    assert pipe.n_switch == 1 and pipe.coach.rc.n_restart == 1
+    assert [n for n, _ in out] == [1, 2, 3, 4, 5]                   # A's partial rep dropped, B's 3 reps counted
+    assert [v['valid'] for _, v in out] == [False, False, True, True, True]
+    _, mixed = run(False)                                           # without the switch a rep spans both people
+    assert [v['valid'] for _, v in mixed][:3] == [False, False, False] and len(mixed) == 6
+
+
+def test_two_reps_confirmed_on_one_frame_keep_their_own_windows():
+    """Gap gate: a rep after a long pause is held until the next rep confirms it, then both count on one frame. Each is
+    judged on its own window and fire time (the held one does not swallow the other's frames)."""
+    a = synth_pushups(n_reps=4, lead_in_s=2.0, tail_s=0.0)
+    b = synth_pushups(n_reps=3, lead_in_s=4.0)
+    frames = a.frames + shifted(b, a.frames[-1].t + 0.1)
+    pipe = pipeline(rep_params=dict(REP_PARAMS_V2, gap_gate=1.5))
+    by_frame = []
+    for f in frames:
+        r = pipe.process_landmarks(f.img, f.world, f.persons, round(f.t * 1000), f.aspect)
+        if r.get('judge'):
+            by_frame.append(r['judge'])
+    rc = pipe.coach.rc
+    assert rc.deferred, 'the scenario must exercise the held-rep path'
+    double = next(d for d in by_frame if len(d) == 2)
+    (n1, v1), (n2, v2) = sorted(double.items())
+    assert v1['valid'] and v2['valid'], (v1['reject_reasons'], v2['reject_reasons'])
+    assert v1['metrics']['rep_duration_s'] > 4.0 and v2['metrics']['rep_duration_s'] == pytest.approx(2.0, abs=0.15)
+    assert rc.fire_i[n1 - 1] < rc.events[n1 - 1] == rc.fire_i[n2 - 1]
+
+
+def test_challenge_window_set_before_first_frame_on_prewarmed_pipeline():
+    """Prewarmed pipeline (no exercise yet) and an event clock 100 s off the pipeline clock: a window set before any
+    frame is queued and applied once the judge clock offset is known."""
+    clip = synth_pushups(n_reps=5, lead_in_s=3.0)
+    pipe = FramePipeline(None, pose_variant=None, trigger='none', judge=True)
+    assert pipe.judge is None
+    per = Perception(Config(exercise='pushups', announce=False, judge=True), pipe=pipe, clip_s=lambda _t: None, t0=0)
+    events = []
+    per.on_event(events.append)
+    try:
+        assert per.set_challenge_window(105.5, 108.5) is False      # queued
+        for f in clip.frames:
+            per.process_landmarks(f.img, f.world, f.persons, t_recv=f.t + 100.0, t_ms=round(f.t * 1000), aspect=f.aspect)
+    finally:
+        per.close()
+    reps = [e for e in events if e['type'] == 'rep']
+    assert len(reps) == 5
+    assert [e['in_challenge'] for e in reps] == [105.5 <= e['t'] <= 108.5 for e in reps]
+    assert any(e['in_challenge'] for e in reps) and not all(e['in_challenge'] for e in reps)

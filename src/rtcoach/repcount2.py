@@ -296,12 +296,12 @@ class RepCounter2:
         MASKS=dict(MASK, **(mask or {}))   # mask: extra or replacement MASK entries, e.g. {'lunges': [...]}
         self.walk_vx=float(walk_vx or 0.0) if exercise in tuple(walk_ex) else 0.0; self.walk_n=max(1,int(walk_n)); self.hx=[]; self.n_walk=0; self.walk_i=[]
         fm=FIRST_MASK if first_mask is True else (first_mask or {}); self.fm=list(fm.get(exercise,[])) if (fm and select=='mask' and exercise not in MASKS) else []
-        self.fps=fps; self.ex=exercise; self.i=-1; self.count=0; self.events=[]; self.turning=[]; self.sel=None; self.sel_hist=[]; self.infos=[]
+        self.fps=fps; self.ex=exercise; self.i=-1; self.count=0; self.events=[]; self.fire_i=[]; self.turning=[]; self.sel=None; self.sel_hist=[]; self.infos=[]
         self.gate_kind=GATE.get(exercise) if gate else None; self.gate_on=True; self.g_false=0; self.g_true=0; self.n_gate_off=0; self.gate_i=[]
         self.gate_p=dict(up_min=up_min,wr_margin=wr_margin,prone_max=prone_max,prone_ang=prone_ang); self.gate_off_n=max(1,int(round(gate_off_s*fps))); self.gate_on_n=max(1,int(round(gate_on_s*fps)))
         self.settle=bool(settle) and exercise in SETTLE; self.settle_max_n=int(round(settle_max_s*fps)); self.settle_i0=0; self.n_resettle=0
         self.select=select; self.top_k=top_k; self.amp_frac=amp_frac; self.rank=rank; self.gap_gate=gap_gate; self.gap_confirm=gap_confirm; self.pad=pad; self.scale=scale; self.scale_decay=scale_decay; self.torso_now=None
-        self.pending=None; self.skip=0; self.deferred=[]
+        self.pending=None; self.skip=0; self.deferred=[]; self.n_restart=0
         self.minp=int((MIN_PERIOD.get(exercise,min_period_s) if exercise else min_period_s)*fps)
         masked=(select=='mask' and exercise in MASKS)
         if masked and mask_top_k: self.top_k=mask_top_k   # a masked vote has at most 5 signals and some views move only 3 of them: 2 of the best 3 must agree
@@ -359,8 +359,16 @@ class RepCounter2:
         if want==self.arm_side: self._side_cand=(None,0); return
         c,n=self._side_cand; n=n+1 if c==want else 1; self._side_cand=(want,n)
         if n>=need: self.arm_side=want; self._side_cand=(None,0); self.side_i.append((self.i,want))
-    def _emit(self, tp):
-        self.last_event=self.i; self.count+=1; self.events.append(self.i); self.turning.append(tp); return self.count
+    def _emit(self, tp, fire=None):
+        """Count a rep. fire: frame where the rep completed (default: this frame; a rep held by the gap gate and confirmed
+        later passes the frame it was held at) -> fire_i, so each rep keeps its own completion time."""
+        self.last_event=self.i; self.count+=1; self.events.append(self.i); self.fire_i.append(self.i if fire is None else fire); self.turning.append(tp); return self.count
+    def restart(self):
+        """Drop the partial rep (the tracked person was replaced): fresh trackers with a provisional rest level after seed_s,
+        as on a gate re-arm; the count is kept and the fresh trackers' votes count on from it (skip = -count), so the new
+        person's first rep is count + 1."""
+        self._reset_trackers(); self.resettle(); self.seed_at=None if (self.seed_n is None or self.settle) else self.i+self.seed_n
+        self.skip=-self.count; self.n_restart+=1
     def update(self, img, world=None, ok=True):
         self.i+=1
         if ok and img is not None:
@@ -418,7 +426,7 @@ class RepCounter2:
             # a rep after a long gap is held until the next rep confirms the set goes on; dropped if none follows
             pi,ptp,pmed=self.pending
             if med>pmed:
-                self.pending=None; self.deferred.append(self.i); self._emit(ptp); return self._emit(tp)
+                self.pending=None; self.deferred.append(self.i); self._emit(ptp, pi); return self._emit(tp)
             if self.i-pi>self.gap_confirm*self._med_int(): self.pending=None; self.skip+=1
             return None
         if med>self.count:
