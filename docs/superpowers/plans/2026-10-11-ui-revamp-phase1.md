@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Restyle the whole web app to the approved "Clean · Light" system with one written style guide, make colored numbers self-explanatory, and turn `/` into a trainer landing page with an early-access form.
+**Goal:** Restyle the whole web app (including the coach app shell, sign-up and client pages merged in PRs #35–#37) to the approved "Clean · Light" system with one written style guide, make colored numbers self-explanatory, and turn `/` into a trainer landing page that sends coaches to the existing `/start` application.
 
-**Architecture:** Semantic color/shape tokens are defined once in `web/app/globals.css` (Tailwind v4 `@theme`) and documented in `web/STYLE.md`; components switch from raw `zinc-*`/hex classes to those tokens. Set/muscle quality rules move into one pure module (`web/lib/quality.ts`) shared by recap and coach views. Dark "stage" components (heat map, video players) keep their internal styling and sit on a `stage` panel. Early access = a new Supabase table + a validated server action.
+**Architecture:** Semantic color/shape tokens are defined once in `web/app/globals.css` (Tailwind v4 `@theme`) and documented in `web/STYLE.md`; components switch from raw `zinc-*`/hex classes to those tokens. Set/muscle quality rules move into one pure module (`web/lib/quality.ts`) shared by recap and coach views. Dark "stage" components (heat map, video players) keep their internal styling and sit on a `stage` panel. No backend or data changes: coach sign-up already exists (`/start` → `/admin` approval).
 
 **Tech Stack:** Next.js 16 App Router, React 19, Tailwind CSS v4, Geist font (already loaded via `next/font`), Supabase (service-role server client), Vitest (`npm test`), Playwright-core screenshots (scratchpad script).
 
@@ -27,7 +27,7 @@
 - Coach with 0 clients, client with 0 sessions, session with 0 reps: empty states must render in the light theme with readable text (Task 5 test).
 - 50+ clients, long names, and ↑/↓ at the first/last row: list must not overflow and the selection must clamp, not wrap or crash (Task 5 `moveSelection` tests).
 - Sets not reached and form-unchecked exercises (bicep curls, pull-ups): grey chip and honest tooltip, never green (Task 2 tests).
-- Early access: same email in different case, bot-filled honeypot, missing Supabase env: dedupe, silent accept, friendly error — never a crash or a leaked error (Task 7 tests).
+- Sign-up form states (`/start`): validation error, pending submit, success, and a pending (unapproved) coach landing in the sandbox must all stay readable in the light theme (Task 7 screenshot checklist).
 - Phone width 390px: recap and coach dashboard must not scroll horizontally (Task 9 screenshot check).
 
 ---
@@ -45,9 +45,10 @@
 - `web/components/coach/*` — dashboard, client list (table + keyboard), session detail.
 - `web/lib/client-nav.ts` — pure keyboard selection helper.
 - `web/app/c/[token]/program/*` — programs restyle.
-- `db/migrations/20261011_early_access.sql`, `web/lib/early-access.ts`, `web/app/early-access-action.ts`, `web/components/landing/early-access-form.tsx` — early access.
+- `web/components/coach/{coach-shell,overview,getting-started,review-banner,add-client,manage-client,client-link}.tsx`, `web/app/c/[token]/clients/page.tsx` — coach app (restyle only).
+- `web/app/start/page.tsx`, `web/components/signup-form.tsx`, `web/app/go/[token]/page.tsx`, `web/components/call/*`, `web/app/privacy/page.tsx`, `web/app/admin/[key]/page.tsx` — sign-up, client and policy pages (restyle only).
 - `web/app/page.tsx` — landing page.
-- Tests: `web/tests/style-tokens.test.ts`, `web/tests/quality.test.ts`, `web/tests/client-nav.test.ts`, `web/tests/early-access.test.ts`, `web/tests/no-raw-palette.test.ts`.
+- Tests: `web/tests/style-tokens.test.ts`, `web/tests/quality.test.ts`, `web/tests/client-nav.test.ts`, `web/tests/no-raw-palette.test.ts`.
 
 ---
 
@@ -880,227 +881,48 @@ Only the upload button keeps brand orange; for the assign form use a second cons
 
 ---
 
-### Task 7: Early access — table, validation, server action
+### Task 7: Coach app shell, Overview, Clients page and coach widgets
 
 **Files:**
-- Create: `db/migrations/20261011_early_access.sql`, `web/lib/early-access.ts`, `web/app/early-access-action.ts`
-- Test: `web/tests/early-access.test.ts`
+- Modify: `web/components/coach/coach-shell.tsx`, `web/components/coach/overview.tsx`, `web/components/coach/getting-started.tsx`, `web/components/coach/review-banner.tsx`, `web/components/coach/add-client.tsx`, `web/components/coach/manage-client.tsx`, `web/components/coach/client-link.tsx`, `web/app/c/[token]/page.tsx`, `web/app/c/[token]/clients/page.tsx`
 
 **Interfaces:**
-- Produces:
-  - `type EarlyAccessInput = { name: string; email: string; coach_type: "online" | "in_person" | "both"; client_count: "1-10" | "11-30" | "31-100" | "100+"; note: string }`
-  - `parseEarlyAccess(form: FormData): { ok: true; value: EarlyAccessInput } | { ok: false; message: string } | { ok: "bot" }`
-  - `type EarlyAccessState = { ok: boolean; message: string }`
-  - `joinEarlyAccess(_prev: EarlyAccessState, form: FormData): Promise<EarlyAccessState>` (server action)
+- Consumes: tokens (Task 1), `Brand` (Task 2), `MuscleBalance` (Task 2) where the overview shows green/yellow/red muscle counts.
 
-- [ ] **Step 1: Migration** — `db/migrations/20261011_early_access.sql`
-
-```sql
--- Trainer leads from the landing page. Apply after db/schema.sql. RLS on, no policies: only the service role writes.
-create table if not exists early_access (
-  id           uuid primary key default gen_random_uuid(),
-  created_at   timestamptz not null default now(),
-  name         text not null check (length(name) between 1 and 120),
-  email        text not null check (length(email) between 3 and 254),
-  coach_type   text not null check (coach_type in ('online', 'in_person', 'both')),
-  client_count text not null check (client_count in ('1-10', '11-30', '31-100', '100+')),
-  note         text not null default '' check (length(note) <= 1000),
-  source       text not null default 'landing'
-);
-create unique index if not exists early_access_email_idx on early_access (lower(email));
-alter table early_access enable row level security;
-```
-
-- [ ] **Step 2: Failing tests** — `web/tests/early-access.test.ts`
-
-```ts
-import { describe, expect, it } from "vitest";
-import { parseEarlyAccess } from "@/lib/early-access";
-
-const form = (over: Record<string, string> = {}) => {
-  const f = new FormData();
-  const base = { name: "Tristan", email: "Coach@Example.com ", coach_type: "online", client_count: "11-30", note: "", website: "" };
-  for (const [k, v] of Object.entries({ ...base, ...over })) f.set(k, v);
-  return f;
-};
-
-describe("parseEarlyAccess", () => {
-  it("accepts a valid form and normalizes the email", () => {
-    const r = parseEarlyAccess(form());
-    expect(r).toEqual({ ok: true, value: { name: "Tristan", email: "coach@example.com", coach_type: "online", client_count: "11-30", note: "" } });
-  });
-  it("rejects a bad email with a friendly message", () => {
-    expect(parseEarlyAccess(form({ email: "nope" }))).toEqual({ ok: false, message: "Enter a valid email." });
-  });
-  it("rejects an empty name", () => {
-    expect(parseEarlyAccess(form({ name: "  " }))).toEqual({ ok: false, message: "Enter your name." });
-  });
-  it("rejects values outside the choices", () => {
-    expect(parseEarlyAccess(form({ coach_type: "gym" })).ok).toBe(false);
-    expect(parseEarlyAccess(form({ client_count: "5" })).ok).toBe(false);
-  });
-  it("flags bots that fill the hidden website field", () => {
-    expect(parseEarlyAccess(form({ website: "http://spam" }))).toEqual({ ok: "bot" });
-  });
-  it("trims and caps the note", () => {
-    const r = parseEarlyAccess(form({ note: "x".repeat(2000) }));
-    expect(r.ok === true && r.value.note.length).toBe(1000);
-  });
-});
-```
-
-- [ ] **Step 3: FAIL** — `npx vitest run tests/early-access.test.ts`.
-
-- [ ] **Step 4: Implement `web/lib/early-access.ts`**
-
-```ts
-// Validation for the landing page early-access form (db/migrations/20261011_early_access.sql).
-export const COACH_TYPES = ["online", "in_person", "both"] as const;
-export const CLIENT_COUNTS = ["1-10", "11-30", "31-100", "100+"] as const;
-
-export type EarlyAccessInput = {
-  name: string;
-  email: string;
-  coach_type: (typeof COACH_TYPES)[number];
-  client_count: (typeof CLIENT_COUNTS)[number];
-  note: string;
-};
-
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
-const str = (f: FormData, k: string) => (typeof f.get(k) === "string" ? (f.get(k) as string) : "");
-
-export function parseEarlyAccess(f: FormData): { ok: true; value: EarlyAccessInput } | { ok: false; message: string } | { ok: "bot" } {
-  if (str(f, "website").trim()) return { ok: "bot" }; // honeypot: hidden from people, filled by bots
-  const name = str(f, "name").trim().slice(0, 120);
-  const email = str(f, "email").trim().toLowerCase();
-  const coach_type = str(f, "coach_type");
-  const client_count = str(f, "client_count");
-  if (!name) return { ok: false, message: "Enter your name." };
-  if (email.length > 254 || !EMAIL.test(email)) return { ok: false, message: "Enter a valid email." };
-  if (!(COACH_TYPES as readonly string[]).includes(coach_type)) return { ok: false, message: "Choose how you coach." };
-  if (!(CLIENT_COUNTS as readonly string[]).includes(client_count)) return { ok: false, message: "Choose how many clients you have." };
-  return {
-    ok: true,
-    value: { name, email, coach_type: coach_type as EarlyAccessInput["coach_type"], client_count: client_count as EarlyAccessInput["client_count"], note: str(f, "note").trim().slice(0, 1000) },
-  };
-}
-```
-
-- [ ] **Step 5: PASS** — rerun the test.
-
-- [ ] **Step 6: Server action** — `web/app/early-access-action.ts`
-
-```ts
-"use server";
-
-import { parseEarlyAccess } from "@/lib/early-access";
-import { hasSupabase } from "@/lib/session-view";
-import { supabaseServer } from "@/lib/supabase/server";
-
-export type EarlyAccessState = { ok: boolean; message: string };
-const THANKS = "You're on the list. We'll email you when your spot opens.";
-
-export async function joinEarlyAccess(_prev: EarlyAccessState, form: FormData): Promise<EarlyAccessState> {
-  const parsed = parseEarlyAccess(form);
-  if (parsed.ok === "bot") return { ok: true, message: THANKS };
-  if (!parsed.ok) return { ok: false, message: parsed.message };
-  if (!hasSupabase()) return { ok: false, message: "Sign-ups are paused right now. Email us instead." };
-  const { error } = await supabaseServer().from("early_access").insert({ ...parsed.value, source: "landing" });
-  if (error && error.code !== "23505") return { ok: false, message: "Something went wrong. Please try again." }; // 23505 = already signed up
-  return { ok: true, message: THANKS };
-}
-```
-
-- [ ] **Step 7: Apply the migration to the beat-muse project** — confirm `web/.env.local`'s `SUPABASE_URL` host is `tqfilmqvbhrywjstmyhu.supabase.co`, then:
-
-```bash
-cd ~/Desktop/Projects/bm-ui && supabase db query --project-ref tqfilmqvbhrywjstmyhu -f db/migrations/20261011_early_access.sql   # check `supabase db query --help` for the exact flags first
-```
-
-If the CLI refuses, give Jimmy the SQL file to paste into the Supabase SQL editor and wait. Verify with a REST insert+delete of a test row using the service key (never print the key).
-
-- [ ] **Step 8: Commit** — `git add db/migrations/20261011_early_access.sql web/lib/early-access.ts web/app/early-access-action.ts web/tests/early-access.test.ts && git commit -m "Early access: leads table, validated server action with honeypot + email dedupe"`
+- [ ] **Step 1: Coach shell** — in `coach-shell.tsx` replace the logo `<Link>` contents with `<Brand />` (import from `@/components/ui-kit/brand`, drop the inline "B" tile and "for Coaches"); outer div `bg-canvas text-ink`; `<aside>` adds `lg:bg-sunken/60` and uses `border-line`; nav item active `bg-surface font-semibold text-ink shadow-[0_0_0_1px_var(--color-line)]`, inactive `text-ink-2 hover:bg-surface/70 hover:text-ink`; badge `bg-bad-soft text-bad`; footer avatar `bg-surface text-ink-2`, name `text-ink`, sub `text-ink-3`.
+- [ ] **Step 2: Remaining files** — apply the **Task 6 class map**, plus: `bg-zinc-950` → `bg-canvas`, `bg-zinc-900` → `bg-surface`, `bg-zinc-800` / `bg-zinc-800/80` → `bg-sunken`, `hover:bg-zinc-900` → `hover:bg-sunken`, `border-zinc-800` / `border-zinc-800/80` → `border-line`, `border-zinc-700` → `border-line-strong`, `text-zinc-300` → `text-ink-2`, `text-zinc-600` → `text-ink-3`, `bg-red-500/15 … text-red-300` → `bg-bad-soft … text-bad`, `bg-green-500` (logo / dots) → `bg-brand` for the logo and `bg-good` for status dots, `text-3xl font-bold tracking-tight` → `text-[28px] font-semibold tracking-[-0.025em]`, `rounded-2xl` → `rounded-[14px]`, `rounded-xl` → `rounded-[10px]`, primary `rounded-full bg-zinc-50 … text-zinc-950` buttons → the STYLE.md primary (brand) recipe if it is the screen's main action, otherwise the secondary recipe. Chart/line colors in `overview.tsx` that encode quality use `var(--color-good)` / `var(--color-warn)` / `var(--color-bad)`; neutral chart strokes/grid use `var(--color-line-strong)` / `var(--color-ink-3)`.
+- [ ] **Step 3: Self-explaining numbers** — anywhere the overview prints colored counts without words, add the word (e.g. `6 solid · 3 okay · 2 work on` via `MuscleBalance`, or a label next to the number).
+- [ ] **Step 4: Verify** — `grep -n "zinc-\|green-\|red-\|yellow-" ` on every file in this task prints nothing; `npx tsc --noEmit && npm test`; screenshots of `/c/demo` (Overview) and `/c/demo/clients` at 1440×900 and 390×844; empty states (coach with no clients via the lab page `/lab/coach` if it supports it) readable.
+- [ ] **Step 5: Commit** — `git add web/components/coach web/app/c && git commit -m "web: coach shell, overview and client widgets in Clean · Light"`
 
 ---
 
-### Task 8: Trainer landing page
+### Task 8: Landing page, sign-up, client home, privacy, admin
 
 **Files:**
-- Create: `web/components/landing/early-access-form.tsx`
-- Modify: `web/app/page.tsx`, `web/app/layout.tsx` (metadata description only)
+- Modify: `web/app/page.tsx`, `web/app/layout.tsx` (description), `web/app/start/page.tsx`, `web/components/signup-form.tsx`, `web/app/go/[token]/page.tsx`, `web/components/call/call-launcher.tsx`, `web/components/call/facetime-launcher.tsx`, `web/app/privacy/page.tsx`, `web/app/admin/[key]/page.tsx`
 
-**Interfaces:**
-- Consumes: `joinEarlyAccess`, `EarlyAccessState` (Task 7), `COACH_TYPES`, `CLIENT_COUNTS`, `Brand`.
-
-- [ ] **Step 1: Form component** — `web/components/landing/early-access-form.tsx`
-
-```tsx
-"use client";
-
-import { useActionState } from "react";
-
-import { joinEarlyAccess, type EarlyAccessState } from "@/app/early-access-action";
-
-const field = "mt-1.5 block w-full rounded-[10px] border border-line-strong bg-surface px-3 py-2.5 text-sm text-ink placeholder:text-ink-3 focus:border-ink/40 focus:outline-none";
-const label = "text-[12.5px] font-medium text-ink-2";
-
-export function EarlyAccessForm() {
-  const [state, action, pending] = useActionState<EarlyAccessState, FormData>(joinEarlyAccess, { ok: false, message: "" });
-  if (state.ok) return <p role="status" className="rounded-[14px] bg-good-soft p-6 text-center text-sm font-semibold text-good">{state.message}</p>;
-  return (
-    <form action={action} className="grid gap-4 sm:grid-cols-2">
-      <label className="block"><span className={label}>Name</span><input name="name" required maxLength={120} autoComplete="name" className={field} /></label>
-      <label className="block"><span className={label}>Email</span><input name="email" type="email" required maxLength={254} autoComplete="email" className={field} /></label>
-      <label className="block"><span className={label}>How do you coach?</span>
-        <select name="coach_type" required defaultValue="" className={field}>
-          <option value="" disabled>Choose one</option>
-          <option value="online">Online</option><option value="in_person">In person</option><option value="both">Both</option>
-        </select>
-      </label>
-      <label className="block"><span className={label}>How many clients?</span>
-        <select name="client_count" required defaultValue="" className={field}>
-          <option value="" disabled>Choose one</option>
-          <option value="1-10">1–10</option><option value="11-30">11–30</option><option value="31-100">31–100</option><option value="100+">100+</option>
-        </select>
-      </label>
-      <label className="block sm:col-span-2"><span className={label}>Anything we should know? (optional)</span>
-        <textarea name="note" rows={3} maxLength={1000} className={field} />
-      </label>
-      {/* honeypot: hidden from people and screen readers */}
-      <input name="website" tabIndex={-1} autoComplete="off" aria-hidden className="hidden" />
-      <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
-        <button disabled={pending} className="rounded-[10px] bg-brand px-5 py-2.5 text-sm font-semibold text-on-brand transition hover:brightness-95 disabled:opacity-50">
-          {pending ? "Sending…" : "Get early access"}
-        </button>
-        {state.message ? <p role="alert" className="text-sm text-bad">{state.message}</p> : <p className="text-xs text-ink-3">Free during early access. No spam.</p>}
-      </div>
-    </form>
-  );
-}
-```
-
-- [ ] **Step 2: Replace `web/app/page.tsx`**
+- [ ] **Step 1: Landing page** — replace `web/app/page.tsx` with the landing page below (every CTA → `/start`, footer keeps the Privacy link):
 
 ```tsx
 import Link from "next/link";
 
-import { EarlyAccessForm } from "@/components/landing/early-access-form";
 import { SiteHeader } from "@/components/site-header";
 
 const STEPS = [
   { title: "Upload your program", body: "The PDF you already use. Brodie reads the days, exercises, sets and reps." },
-  { title: "Your client FaceTimes Brodie", body: "Brodie counts every rep on camera, cues form out loud and talks them through rest." },
-  { title: "You see how it went", body: "A recap with a muscle heat map for the client, and a triage inbox for you." },
+  { title: "Send each client their link", body: "They tap it and FaceTime Brodie, which counts every rep and cues form out loud." },
+  { title: "See how it went", body: "A recap with a muscle heat map for the client, and an inbox of who needs you." },
 ];
 const FEATURES = [
   { title: "Triage inbox", body: "Clients who need you come first: flagged sets, short sessions, missed workouts." },
-  { title: "Form flags with clips", body: "Tap a muscle to watch the reps behind it. Brodie notes what it cued." },
+  { title: "Form flags with clips", body: "Tap a muscle to watch the reps behind it, with what Brodie cued." },
   { title: "Built for big rosters", body: "Search, filters and keyboard navigation for coaches with dozens of clients." },
 ];
 const FAQ = [
-  { q: "What does my client need?", a: "An iPhone with FaceTime. No app to install, no account to make." },
-  { q: "Is the video private?", a: "Recaps are private links. Workout footage is stored privately and only shown to you and your client." },
-  { q: "What does it cost?", a: "Free during early access. We'll talk pricing with you before anything changes." },
+  { q: "What does my client need?", a: "A phone with FaceTime and their link from you. No app, no account." },
+  { q: "Is the video private?", a: "Recaps are private links. Read exactly what we keep in our privacy notice." },
+  { q: "What does it cost?", a: "Free during the pilot. We review every coach and onboard you personally." },
 ];
 
 export default function Home() {
@@ -1111,11 +933,10 @@ export default function Home() {
           context={
             <>
               <Link href="/c/demo" className="hidden text-ink-2 hover:text-ink sm:inline">Coach demo</Link>
-              <a href="#early-access" className="rounded-[10px] bg-brand px-3.5 py-2 text-sm font-semibold text-on-brand hover:brightness-95">Get early access</a>
+              <Link href="/start" className="rounded-[10px] bg-brand px-3.5 py-2 text-sm font-semibold text-on-brand hover:brightness-95">Apply to coach</Link>
             </>
           }
         />
-
         <section className="mt-16 max-w-2xl sm:mt-24">
           <p className="text-[12.5px] font-medium text-ink-3">For online coaches and busy trainers</p>
           <h1 className="mt-2 text-[40px] font-semibold leading-[1.03] tracking-[-0.03em] text-balance sm:text-[56px]">
@@ -1126,11 +947,11 @@ export default function Home() {
             You get a recap of every set and an inbox of who needs you.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
-            <a href="#early-access" className="rounded-[10px] bg-ink px-5 py-3 text-sm font-semibold text-canvas hover:opacity-90">Join the early access list</a>
+            <Link href="/start" className="rounded-[10px] bg-ink px-5 py-3 text-sm font-semibold text-canvas hover:opacity-90">Start coaching with Brodie</Link>
             <Link href="/r/demo" className="rounded-[10px] border border-line-strong px-5 py-3 text-sm font-semibold text-ink hover:bg-sunken">See a client recap</Link>
           </div>
+          <p className="mt-3 text-xs text-ink-3">Free during the pilot. Takes a minute.</p>
         </section>
-
         <ol className="mt-20 grid gap-3 sm:grid-cols-3">
           {STEPS.map((s, i) => (
             <li key={s.title} className="rounded-[14px] border border-line bg-surface p-5">
@@ -1140,7 +961,6 @@ export default function Home() {
             </li>
           ))}
         </ol>
-
         <section className="mt-20">
           <h2 className="text-[26px] font-semibold tracking-[-0.025em]">Built for coaches with a lot of clients</h2>
           <div className="mt-5 grid gap-3 sm:grid-cols-3">
@@ -1151,18 +971,11 @@ export default function Home() {
               </div>
             ))}
           </div>
-          <div className="mt-4 flex flex-wrap gap-3 text-sm">
-            <Link href="/c/demo" className="font-semibold text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink">Open the coach dashboard demo →</Link>
-            <Link href="/r/demo" className="font-semibold text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink">Open a client recap →</Link>
+          <div className="mt-4 flex flex-wrap gap-4 text-sm">
+            <Link href="/c/demo" className="font-semibold underline decoration-line-strong underline-offset-4 hover:decoration-ink">Open the coach demo →</Link>
+            <Link href="/r/demo" className="font-semibold underline decoration-line-strong underline-offset-4 hover:decoration-ink">Open a client recap →</Link>
           </div>
         </section>
-
-        <section id="early-access" className="mt-20 scroll-mt-8 rounded-[18px] border border-line bg-surface p-6 sm:p-8">
-          <h2 className="text-[26px] font-semibold tracking-[-0.025em]">Get early access</h2>
-          <p className="mt-1.5 max-w-xl text-sm text-ink-2">We&apos;re onboarding a small group of coaches. Tell us about your roster and we&apos;ll set you up.</p>
-          <div className="mt-6"><EarlyAccessForm /></div>
-        </section>
-
         <section className="mt-20 grid gap-6 sm:grid-cols-3">
           {FAQ.map((f) => (
             <div key={f.q}>
@@ -1171,21 +984,24 @@ export default function Home() {
             </div>
           ))}
         </section>
-
-        <footer className="mt-20 border-t border-line pt-6 text-xs text-ink-3">© Brodie for Coaches · Coaching feedback, not medical advice.</footer>
+        <section className="mt-20 rounded-[18px] border border-line bg-surface p-6 text-center sm:p-10">
+          <h2 className="text-[26px] font-semibold tracking-[-0.025em]">Coach more clients without losing the details</h2>
+          <Link href="/start" className="mt-5 inline-block rounded-[10px] bg-brand px-5 py-3 text-sm font-semibold text-on-brand hover:brightness-95">Apply to coach with Brodie</Link>
+        </section>
+        <footer className="mt-16 flex gap-4 border-t border-line pt-6 text-xs text-ink-3">
+          <span>© Brodie for Coaches</span>
+          <Link href="/privacy" className="hover:text-ink">Privacy</Link>
+        </footer>
       </div>
     </main>
   );
 }
 ```
 
-(Hero button is `bg-ink`, not brand, so the header "Get early access" stays the one brand element above the fold; the form button is brand inside its own section.)
-
-- [ ] **Step 3: Metadata** — in `web/app/layout.tsx` set `description: "AI form coaching over FaceTime for online coaches: your client works out with Brodie, you get a recap of every rep."`.
-
-- [ ] **Step 4: Verify** — `npx tsc --noEmit && npm test`; dev server: submit the form with a real-looking test email → success message; submit again with the same email in caps → success (deduped); delete the test row via REST with the service key afterwards. Screenshot `/` at 390×844 and 1440×900.
-
-- [ ] **Step 5: Commit** — `git add web/app/page.tsx web/app/layout.tsx web/components/landing && git commit -m "web: trainer landing page with early-access form"`
+- [ ] **Step 2: Metadata** — `web/app/layout.tsx` description: `"AI form coaching over FaceTime for online coaches: your client works out with Brodie, you get a recap of every rep."`
+- [ ] **Step 3: Sign-up, client home, call launchers, privacy, admin** — apply the **Task 6 class map**, plus: `bg-zinc-950` → `bg-canvas`, `bg-zinc-900` → `bg-surface`, `bg-zinc-800` / `bg-zinc-800/80` → `bg-sunken`, `hover:bg-zinc-900` → `hover:bg-sunken`, `border-zinc-800` / `border-zinc-800/80` → `border-line`, `border-zinc-700` → `border-line-strong`, `text-zinc-300` → `text-ink-2`, `text-zinc-600` → `text-ink-3`, `bg-red-500/15 … text-red-300` → `bg-bad-soft … text-bad`, `bg-green-500` (logo / dots) → `bg-brand` for the logo and `bg-good` for status dots, `text-3xl font-bold tracking-tight` → `text-[28px] font-semibold tracking-[-0.025em]`, `rounded-2xl` → `rounded-[14px]`, `rounded-xl` → `rounded-[10px]`, primary `rounded-full bg-zinc-50 … text-zinc-950` buttons → the STYLE.md primary (brand) recipe if it is the screen's main action, otherwise the secondary recipe. Specifics: `/start` bullet dots `bg-brand`; signup submit button = brand primary recipe; form fields `rounded-[10px] border border-line-strong bg-surface text-ink placeholder:text-ink-3`; error text `text-bad`, success `text-good`. `/go/[token]` is phone-first: the start-call button is the one brand element; past recaps are cards. Admin keeps its layout; approve = brand, reject = secondary.
+- [ ] **Step 4: Verify** — `grep` for `zinc-|green-|red-|yellow-` in these files prints nothing; `npx tsc --noEmit && npm test`; screenshots at 390×844 and 1440×900 of `/`, `/start` (empty, with a validation error, after submit in a local dev run against a throwaway email that is then deleted), `/go/<a demo client token if available>`, `/privacy`.
+- [ ] **Step 5: Commit** — `git add web/app web/components && git commit -m "web: landing page for coaches → /start; sign-up, client home, privacy, admin in Clean · Light"`
 
 ---
 
