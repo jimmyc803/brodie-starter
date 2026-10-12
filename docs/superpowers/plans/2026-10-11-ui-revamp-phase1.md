@@ -60,7 +60,7 @@
 - Test: `web/tests/style-tokens.test.ts`
 
 **Interfaces:**
-- Produces Tailwind utilities used by every later task: `bg-canvas bg-surface bg-sunken bg-stage text-ink text-ink-2 text-ink-3 border-line border-line-strong bg-brand text-on-brand text-good text-warn text-bad text-none bg-good-soft bg-warn-soft bg-bad-soft bg-none-soft` (and the same names with `border-`/`bg-`/`text-`/`fill-` prefixes).
+- Produces Tailwind utilities used by every later task: `bg-canvas bg-surface bg-sunken bg-stage text-ink text-ink-2 text-ink-3 border-line border-line-strong bg-brand text-on-brand text-good text-warn text-bad text-idle bg-good-soft bg-warn-soft bg-bad-soft bg-idle-soft` (and the same names with `border-`/`bg-`/`text-`/`fill-` prefixes).
 
 - [ ] **Step 1: Write the failing test** — `web/tests/style-tokens.test.ts`
 
@@ -75,8 +75,8 @@ const TOKENS: Record<string, string> = {
   ink: "#141414", "ink-2": "#55524c", "ink-3": "#8a867f",
   line: "#14141414", "line-strong": "#14141426",
   brand: "#ff5a1f", "on-brand": "#ffffff",
-  good: "#15803d", warn: "#a16207", bad: "#dc2626", none: "#8a867f",
-  "good-soft": "#15803d14", "warn-soft": "#ca8a041a", "bad-soft": "#dc262612", "none-soft": "#14141410",
+  good: "#15803d", warn: "#a16207", bad: "#dc2626", idle: "#8a867f",
+  "good-soft": "#15803d14", "warn-soft": "#ca8a041a", "bad-soft": "#dc262612", "idle-soft": "#14141410",
 };
 
 describe("Clean · Light tokens", () => {
@@ -113,11 +113,11 @@ Expected: FAIL (`--color-canvas` missing, STYLE.md missing).
   --color-good: #15803d;
   --color-warn: #a16207;
   --color-bad: #dc2626;
-  --color-none: #8a867f;
+  --color-idle: #8a867f;
   --color-good-soft: #15803d14;
   --color-warn-soft: #ca8a041a;
   --color-bad-soft: #dc262612;
-  --color-none-soft: #14141410;
+  --color-idle-soft: #14141410;
 ```
 
 and at the end of the file add:
@@ -157,7 +157,7 @@ Read this before touching any UI. Components use the tokens below as Tailwind cl
 | `good` / `good-soft` | #15803D | quality: solid |
 | `warn` / `warn-soft` | #A16207 | quality: okay / short |
 | `bad` / `bad-soft` | #DC2626 | quality: work on |
-| `none` / `none-soft` | #8A867F | not measured, not reached |
+| `idle` / `idle-soft` | #8A867F | not measured, not reached |
 
 Rules: quality colors only when they mean quality. Grey means "not measured" — form-unchecked exercises (bicep curls,
 pull-ups) are never green. Every colored number gets a word next to it. One brand-orange element per screen.
@@ -337,7 +337,7 @@ const TONE: Record<Quality, string> = {
   good: "bg-good-soft text-good",
   warn: "bg-warn-soft text-warn",
   bad: "bg-bad-soft text-bad",
-  none: "bg-none-soft text-ink-2",
+  none: "bg-idle-soft text-ink-2",
   skipped: "border border-dashed border-line-strong text-ink-3",
 };
 
@@ -706,7 +706,7 @@ const TABS: { key: ClientStatus | "all"; label: string }[] = [
   { key: "all", label: "All" },
   { key: "inactive", label: "Inactive" },
 ];
-const DOT: Record<ClientStatus, string> = { review: "bg-bad", on_track: "bg-good", inactive: "bg-none" };
+const DOT: Record<ClientStatus, string> = { review: "bg-bad", on_track: "bg-good", inactive: "bg-idle" };
 
 // The coach's roster as a compact table: search ("/" focuses), status tabs, ↑/↓ to move, Enter to open.
 export function ClientList({ clients, base, selectedId }: { clients: ClientSummary[]; base: string; selectedId: string | null }) {
@@ -806,7 +806,7 @@ export function ClientList({ clients, base, selectedId }: { clients: ClientSumma
 ```
 
 - [ ] **Step 6: Restyle `web/components/coach/dashboard.tsx`** (logic unchanged):
-  - `STATUS_LABEL` classNames: review `bg-bad-soft text-bad`, on_track `bg-good-soft text-good`, inactive `bg-none-soft text-ink-2`.
+  - `STATUS_LABEL` classNames: review `bg-bad-soft text-bad`, on_track `bg-good-soft text-good`, inactive `bg-idle-soft text-ink-2`.
   - The dashboard now renders inside `CoachShell` (Task 7 restyles the shell); don't add a header here. If a `SiteHeader` is still rendered, remove it.
   - header: `h1` → `text-[28px] font-semibold tracking-[-0.025em] text-ink` with text `Clients`; the sub line `text-sm text-ink-2`; review count span `text-bad`.
   - empty states: `rounded-[14px] border border-dashed border-line-strong p-8 text-center text-ink-2`.
@@ -855,7 +855,7 @@ export function ClientList({ clients, base, selectedId }: { clients: ClientSumma
 | `text-zinc-500` | `text-ink-3` |
 | `hover:text-zinc-100` | `hover:text-ink` |
 | `bg-green-500/10 text-green-300` | `bg-good-soft text-good` |
-| `bg-zinc-800 text-zinc-400` | `bg-none-soft text-ink-2` |
+| `bg-zinc-800 text-zinc-400` | `bg-idle-soft text-ink-2` |
 | `border-yellow-400/20 bg-yellow-400/10 px-4 py-3 text-sm text-yellow-100` | `border-line bg-warn-soft px-4 py-3 text-sm text-warn` |
 | `text-red-400` | `text-bad` |
 | `text-green-400` | `text-good` |
