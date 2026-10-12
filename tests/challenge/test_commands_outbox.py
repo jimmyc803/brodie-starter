@@ -39,6 +39,7 @@ def env(db, conn, monkeypatch):
     provider = MockProvider()
     clock = {"now": T0}
     outbox = Outbox(store, cfg, provider, clock=lambda: clock["now"])
+    outbox._at, outbox._tokens = T0, 20.0  # warmed smoother; bucket tests build a fresh (empty) Outbox
     return conn, store, cfg, provider, outbox, clock
 
 
@@ -61,7 +62,7 @@ def enqueue(env, key, template="help", proactive=False, ctx=None):
 
 
 @pytest.mark.parametrize("text,template", [
-    ("HELP", "help"), ("nonsense", "help"), ("RULES", "rules"), ("POWER", "power"),
+    ("HELP", "help"), ("nonsense", "unknown"), ("RULES", "rules"), ("POWER", "power"),
     ("TOP", "top"), ("QUEUE", "not_registered"), ("STATUS", "not_registered"),
     ("LEAVE", "not_registered"), ("YES", "not_registered"),
     ("JOIN ab", "join_bad_name"), ("JOIN fucker", "join_bad_name"),
@@ -183,18 +184,104 @@ def test_send_time_quiet_check_and_nonproactive_welcome(env):
 
 
 def test_dedupe_and_token_bucket(env):
-    conn, _, _, provider, outbox, _ = env
+    conn, store, cfg, provider, _, clock = env
+    outbox = Outbox(store, cfg, provider, clock=lambda: clock["now"])
     conn.execute("update competition_config set value='2' where key='outbound_rate_per_min'")
     assert not enqueue(env, "same")["duplicate"]
     assert enqueue(env, "same")["duplicate"]
     for i in range(4):
         enqueue(env, str(i))
-    assert outbox.run_once(T0) == 2
+    assert outbox.run_once(T0) == 1
     assert outbox.run_once(T0) == 0
     assert outbox.run_once(T0 + timedelta(seconds=29)) == 0
     assert outbox.run_once(T0 + timedelta(seconds=30)) == 1
     assert outbox.run_once(T0 + timedelta(seconds=60)) == 1
+    assert outbox.run_once(T0 + timedelta(seconds=90)) == 1
     assert len(provider.sent) == 4
+
+
+def test_rate_limit_shared_across_instances(env):
+    conn, store, cfg, provider, a, clock = env
+    conn.execute("update competition_config set value='4' where key='outbound_rate_per_min'")
+    b = Outbox(store, cfg, provider, clock=lambda: clock["now"])
+    for i in range(12):
+        enqueue(env, f"shared{i}")
+    total = 0
+    for offset in (0, 0, 30, 30, 59, 59):
+        for box in (a, b):
+            total += box.run_once(T0 + timedelta(seconds=offset))
+    assert total == 4 == len(provider.sent)
+
+
+def test_run_once_survives_claim_and_mark_failures(env, monkeypatch):
+    conn, store, _, provider, outbox, _ = env
+    enqueue(env, "flaky")
+    real = store.rpc
+    calls = {"claim": 0}
+    def rpc(fn, args=None):
+        if fn == "ch_outbox_claim" and calls["claim"] == 0:
+            calls["claim"] += 1
+            raise RuntimeError("db down")
+        return real(fn, args)
+    monkeypatch.setattr(store, "rpc", rpc)
+    assert outbox.run_once(T0) == 0
+    assert conn.execute("select status from messages where direction='out'").fetchone()[0] == "queued"
+    assert outbox.run_once(T0 + timedelta(seconds=1)) == 1
+
+
+def test_mark_sent_retried_then_gives_up(env, monkeypatch):
+    conn, store, _, provider, outbox, _ = env
+    monkeypatch.setattr("challenge.messaging.outbox._MARK_BACKOFF_S", 0)
+    real = store.rpc
+    fails = {"n": 2}
+    def rpc(fn, args=None):
+        if fn == "ch_outbox_mark" and args["p_status"] == "sent" and fails["n"] > 0:
+            fails["n"] -= 1
+            raise RuntimeError("db down")
+        return real(fn, args)
+    monkeypatch.setattr(store, "rpc", rpc)
+    enqueue(env, "mark1")
+    assert outbox.run_once(T0) == 1
+    assert conn.execute("select status from messages where direction='out'").fetchone()[0] == "sent"
+    fails["n"] = 99
+    enqueue(env, "mark2")
+    assert outbox.run_once(T0 + timedelta(seconds=30)) == 1
+    assert conn.execute("select status from messages where dedupe_key='mark2'").fetchone()[0] == "sending"
+    assert len(provider.sent) == 2
+
+
+def test_webhook_retry_after_handler_failure_and_bad_handle(env, monkeypatch):
+    conn, store, _, _, _, clock = env
+    import challenge.dispatcher.webhooks as hooks
+    app = create_app(store, clock=lambda: clock["now"], flags=Flags(), token="test")
+    payload = {"messages": [{"id": "stop1", "handle": HANDLE, "body": "STOP", "received_at": T0.isoformat()}]}
+    real = hooks.handle_inbound
+    def boom(*args, **kwargs):
+        raise RuntimeError("handler down")
+    monkeypatch.setattr(hooks, "handle_inbound", boom)
+    with TestClient(app) as client:
+        assert client.post("/webhooks/mock", json=payload).status_code == 503
+        monkeypatch.setattr(hooks, "handle_inbound", real)
+        assert client.post("/webhooks/mock", json=payload).json() == {"ok": True, "handled": 1}
+        assert client.post("/webhooks/mock", json=payload).json() == {"ok": True, "handled": 0}
+        assert conn.execute("select count(*) from messages where direction='out'").fetchone()[0] == 1
+        for bad in ("", "not a handle"):
+            bad_payload = {"messages": [{"id": "b" + bad[:1], "handle": bad, "body": "HELP", "received_at": T0.isoformat()}]}
+            response = client.post("/webhooks/mock", json=bad_payload)
+            assert response.status_code == 200
+            assert response.json() == {"ok": False, "reason": "bad_handle"}
+
+
+def test_msg_migration_rpcs(env):
+    conn, store, *_ = env
+    rec = store.rpc("ch_inbound_record", {"p_provider_message_id": "m1", "p_handle": HANDLE, "p_body": "x", "p_now": T0})
+    assert store.rpc("ch_inbound_is_done", {"p_id": rec["id"]}) is False
+    assert store.rpc("ch_inbound_done", {"p_id": rec["id"], "p_now": T0}) == {"ok": True}
+    assert store.rpc("ch_inbound_is_done", {"p_id": rec["id"]}) is True
+    assert store.rpc("ch_outbox_sent_recent", {"p_now": T0, "p_window_s": 60}) == 0
+    for fn in ("ch_inbound_done", "ch_inbound_is_done", "ch_outbox_sent_recent"):
+        assert conn.execute("select has_function_privilege('anon', %s::regproc, 'execute')", (fn,)).fetchone()[0] is False
+        assert conn.execute("select has_function_privilege('service_role', %s::regproc, 'execute')", (fn,)).fetchone()[0] is True
 
 
 def test_retry_then_success(env, monkeypatch):

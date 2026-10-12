@@ -21,7 +21,7 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
     site = cfg.get("site_url").rstrip("/")
     ctx: dict[str, Any] = {"site_url": site, "rules_url": site + "/rules",
                            "_proactive": False}
-    template = "help"
+    template = "unknown"
 
     def power_hour() -> str:
         power = store.rpc("ch_power_hour", {"p_now": now})
@@ -31,7 +31,9 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
         end = parse_ts(power["ends_at"]).astimezone(ET).strftime("%I:%M %p")
         return f"{start}–{end}"
 
-    if command.kind in ("STOP", "START"):
+    if command.kind == "HELP":
+        template = "help"
+    elif command.kind in ("STOP", "START"):
         if user_id:
             store.rpc("ch_set_opt", {"p_user_id": user_id,
                       "p_opted_out": command.kind == "STOP", "p_now": now})

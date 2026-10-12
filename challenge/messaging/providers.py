@@ -48,6 +48,10 @@ class MessagingProvider(Protocol):
     def verify(self, headers: dict, body: bytes) -> bool: ...
 
 
+class InvalidHandle(ValueError):
+    """An inbound message carried an empty or unusable handle (not retryable)."""
+
+
 def normalize_handle(value: str) -> str | None:
     """Normalize a phone number or email without guessing international prefixes."""
     value = value.strip()
@@ -78,8 +82,10 @@ def _parse_messages(body: bytes, provider: str) -> list[Inbound]:
         ):
             raise ValueError("Invalid inbound message fields")
         handle = normalize_handle(item["handle"])
-        if not item["id"].strip() or handle is None:
-            raise ValueError("Invalid inbound message id or handle")
+        if not item["id"].strip():
+            raise ValueError("Invalid inbound message id")
+        if handle is None:
+            raise InvalidHandle("Invalid inbound message handle")
         received_at = datetime.fromisoformat(item["received_at"].replace("Z", "+00:00"))
         if received_at.tzinfo is None:
             raise ValueError("Inbound received_at must include a timezone")
