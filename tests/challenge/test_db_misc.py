@@ -1,6 +1,8 @@
 """Migration 20261013_challenge_misc.sql: registration, status/leaderboard, rank deltas, config, admin, outbox, inbound."""
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -133,15 +135,52 @@ def test_join_start_bad_name(tx, name):
     assert tx.execute("select count(*) from join_pending").fetchone()[0] == 0
 
 
-def test_join_taken_case_insensitive_and_confirm_race(tx):
+def test_join_taken_case_insensitive(tx):
     make_user(tx, "Taken_Name")
     assert rpc(tx, "ch_join_start", p_handle="+1", p_display_name="taken_NAME", p_now=NOW)["reason"] == "taken"
-    # two handles hold the same pending name; the second confirm loses
-    assert rpc(tx, "ch_join_start", p_handle="+2", p_display_name="Racer", p_now=NOW)["ok"]
-    assert rpc(tx, "ch_join_start", p_handle="+3", p_display_name="RACER", p_now=NOW)["ok"]
-    assert rpc(tx, "ch_join_confirm", p_handle="+2", p_now=NOW)["ok"]
-    assert rpc(tx, "ch_join_confirm", p_handle="+3", p_now=NOW) == {"ok": False, "reason": "taken", "user_id": None}
-    assert tx.execute("select count(*) from join_pending where handle='+3'").fetchone()[0] == 0
+
+
+def test_join_confirm_race_two_connections(db):
+    setup = connect(db)
+    name = f"Racer{uuid.uuid4().hex[:6]}"
+    h1, h2 = f"+7{uuid.uuid4().int % 10**9}", f"+8{uuid.uuid4().int % 10**9}"
+    assert rpc(setup, "ch_join_start", p_handle=h1, p_display_name=name, p_now=NOW)["ok"]
+    assert rpc(setup, "ch_join_start", p_handle=h2, p_display_name=name.upper(), p_now=NOW)["ok"]
+    barrier = threading.Barrier(2)
+    results: dict[str, object] = {}
+
+    def run(h):
+        c = connect(db, autocommit=False)
+        try:
+            barrier.wait(timeout=10)
+            r = rpc(c, "ch_join_confirm", p_handle=h, p_now=NOW)
+            time.sleep(0.3)  # hold the txn open so the confirmations overlap
+            c.commit()
+            results[h] = r
+        except Exception as e:  # surfaced by the assertion below
+            c.rollback()
+            results[h] = e
+        finally:
+            c.close()
+
+    try:
+        threads = [threading.Thread(target=run, args=(h,)) for h in (h1, h2)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join(timeout=30)
+        assert all(isinstance(r, dict) for r in results.values()), results
+        oks = [r for r in results.values() if r["ok"]]
+        taken = [r for r in results.values() if r.get("reason") == "taken"]
+        assert len(oks) == 1 and len(taken) == 1, results
+        assert setup.execute("select count(*) from clients where lower(display_name)=lower(%s)",
+                             (name,)).fetchone()[0] == 1
+        assert setup.execute("select count(*) from client_handles where handle = any(%s)", ([h1, h2],)).fetchone()[0] == 1
+        assert setup.execute("select count(*) from join_pending where handle = any(%s)", ([h1, h2],)).fetchone()[0] == 0
+    finally:
+        setup.execute("delete from clients where lower(display_name)=lower(%s)", (name,))
+        setup.execute("delete from join_pending where handle = any(%s)", ([h1, h2],))
+        setup.close()
 
 
 def test_join_no_pending_closed_and_handle_required(tx):
@@ -164,6 +203,32 @@ def test_set_opt_audited(tx):
     assert len(audit(tx, "opt_out")) == 1
     assert rpc(tx, "ch_set_opt", p_user_id=uid, p_opted_out=False, p_now=NOW) == {"ok": True, "opted_out": False}
     assert rpc(tx, "ch_set_opt", p_user_id=uuid.uuid4(), p_opted_out=True, p_now=NOW)["reason"] == "not_registered"
+
+
+def test_set_opt_out_clears_queue_and_claim(tx):
+    waiting = make_user(tx, "w_user")
+    notified = make_user(tx, "n_user")
+    other = make_user(tx, "o_user")
+    tx.execute("insert into lines (id, chert_agent_name) values ('line-opt', 'optagent') on conflict do nothing")
+    tx.execute("insert into line_state (line_id, state, updated_at) values ('line-opt','idle',now())"
+               " on conflict do nothing")
+    qw = tx.execute("insert into queue (user_id, entered_at, status) values (%s, %s, 'waiting') returning id",
+                    (waiting, NOW)).fetchone()[0]
+    qn = tx.execute("insert into queue (user_id, entered_at, status, line_id, notified_at, claim_expires_at)"
+                    " values (%s, %s, 'notified', 'line-opt', %s, %s) returning id",
+                    (notified, NOW, NOW, NOW + timedelta(minutes=1))).fetchone()[0]
+    qo = tx.execute("insert into queue (user_id, entered_at, status) values (%s, %s, 'waiting') returning id",
+                    (other, NOW)).fetchone()[0]
+    tx.execute("update line_state set state='claimed', user_id=%s, claimed_until=%s where line_id='line-opt'",
+               (notified, NOW + timedelta(minutes=1)))
+    assert rpc(tx, "ch_set_opt", p_user_id=waiting, p_opted_out=True, p_now=NOW)["opted_out"]
+    assert rpc(tx, "ch_set_opt", p_user_id=notified, p_opted_out=True, p_now=NOW)["opted_out"]
+    st = dict(tx.execute("select id, status from queue where id = any(%s)", ([qw, qn, qo],)).fetchall())
+    assert st == {qw: "left", qn: "expired", qo: "waiting"}
+    assert tx.execute("select state, user_id, claimed_until from line_state where line_id='line-opt'").fetchone() == \
+        ("idle", None, None)
+    assert {r[1] for r in audit(tx, "opt_out_queue_remove")} == {str(qw), str(qn)}
+    assert len(audit(tx, "opt_out")) == 2
 
 
 # ---------------------------------------------------------------- status / leaderboard / queue position
@@ -412,6 +477,24 @@ def test_outbox_claim_lease_reclaim_retry_and_mark(tx):
     assert rpc(tx, "ch_outbox_claim", p_limit=10, p_now=NOW + timedelta(minutes=2)) == []
     assert tx.execute("select status, last_error from messages where id=%s", (third,)).fetchone() == \
         ("failed", "lease_expired")
+
+
+def test_outbox_mark_fenced_by_attempt(tx):
+    mid = enqueue(tx, "fence")["id"]
+    first = rpc(tx, "ch_outbox_claim", p_limit=1, p_now=NOW)[0]
+    assert first["attempts"] == 1
+    second = rpc(tx, "ch_outbox_claim", p_limit=1, p_now=NOW + timedelta(minutes=5))[0]  # lease expired -> reclaim
+    assert second["id"] == mid and second["attempts"] == 2
+    lease = tx.execute("select lease_until from messages where id=%s", (mid,)).fetchone()[0]
+    for st in ("queued", "failed", "sent"):
+        r = rpc(tx, "ch_outbox_mark", p_id=mid, p_status=st, p_provider_message_id="stale", p_error="stale",
+                p_retry_at=None, p_attempt=1)
+        assert r["ok"] is False and r["reason"] == "stale"
+    assert tx.execute("select status, attempts, lease_until, last_error, provider_message_id from messages where id=%s",
+                      (mid,)).fetchone() == ("sending", 2, lease, None, None)
+    ok = rpc(tx, "ch_outbox_mark", p_id=mid, p_status="sent", p_provider_message_id="pm", p_error=None,
+             p_retry_at=None, p_attempt=2)
+    assert ok["ok"] and ok["status"] == "sent"
 
 
 def test_outbox_claim_skip_locked_two_connections(db):

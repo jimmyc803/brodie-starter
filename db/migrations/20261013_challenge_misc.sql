@@ -185,14 +185,24 @@ language sql stable security definer set search_path = public as $$
     jsonb_build_object('user_id', null))
 $$;
 
+-- Opt-out also removes the user from the queue at once (C7 lock order: line_state rows by line_id -> per-user advisory
+-- lock -> queue rows): waiting -> 'left', notified -> 'expired', and any line they hold 'claimed' -> idle. Audited.
 create or replace function ch_set_opt(p_user_id uuid, p_opted_out bool, p_now timestamptz) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_before timestamptz;
   v_after  timestamptz;
+  v_q      record;
+  v_line   record;
+  v_freed  text[] := '{}';
+  v_left   bigint[] := '{}';
 begin
   if p_opted_out is null then
     raise exception 'p_opted_out required' using errcode = '22023';
+  end if;
+  if p_opted_out then
+    perform 1 from line_state order by line_id for update;
+    perform pg_advisory_xact_lock(hashtextextended(p_user_id::text, 0));
   end if;
   select opted_out_at into v_before from clients where id = p_user_id and joined_at is not null for update;
   if not found then
@@ -204,6 +214,24 @@ begin
     insert into audit_log (actor, action, target, before, after, reason, at)
       values ('system', case when p_opted_out then 'opt_out' else 'opt_in' end, p_user_id::text,
               jsonb_build_object('opted_out_at', v_before), jsonb_build_object('opted_out_at', v_after), null, p_now);
+  end if;
+  if p_opted_out then
+    for v_line in select line_id from line_state where state = 'claimed' and user_id = p_user_id order by line_id loop
+      update line_state set state = 'idle', user_id = null, call_id = null, claimed_until = null,
+                            updated_at = p_now, version = version + 1
+        where line_id = v_line.line_id;
+      v_freed := v_freed || v_line.line_id;
+    end loop;
+    for v_q in select id, status, line_id from queue where user_id = p_user_id and status in ('waiting', 'notified')
+               order by id for update loop
+      update queue set status = case when v_q.status = 'waiting' then 'left' else 'expired' end where id = v_q.id;
+      v_left := v_left || v_q.id;
+      insert into audit_log (actor, action, target, before, after, reason, at)
+        values ('system', 'opt_out_queue_remove', v_q.id::text,
+                jsonb_build_object('status', v_q.status, 'user_id', p_user_id, 'line_id', v_q.line_id),
+                jsonb_build_object('status', case when v_q.status = 'waiting' then 'left' else 'expired' end,
+                                   'lines_idled', to_jsonb(v_freed)), 'opt_out', p_now);
+    end loop;
   end if;
   return jsonb_build_object('ok', true, 'opted_out', v_after is not null);
 end;
@@ -526,8 +554,12 @@ begin
 end;
 $$;
 
+-- Fenced by the attempt number returned by ch_outbox_claim (p_attempt). A mark whose attempt no longer matches (the
+-- lease expired and another worker reclaimed the row), or a non-'sent' mark on a row no longer 'sending', is stale:
+-- no-op returning {ok:false, reason:'stale'}. p_attempt null = unfenced (admin/legacy). Signature gained p_attempt.
+drop function if exists ch_outbox_mark(bigint, text, text, text, timestamptz);
 create or replace function ch_outbox_mark(p_id bigint, p_status text, p_provider_message_id text, p_error text,
-                                          p_retry_at timestamptz) returns jsonb
+                                          p_retry_at timestamptz, p_attempt int default null) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
   v_max int := coalesce((ch_cfg('outbox_max_attempts') #>> '{}')::int, 5);
@@ -540,6 +572,10 @@ begin
   select * into v_m from messages where id = p_id and direction = 'out' for update;
   if not found then
     return jsonb_build_object('ok', false, 'reason', 'not_found');
+  end if;
+  if p_attempt is not null and (v_m.attempts is distinct from p_attempt
+                                or (p_status <> 'sent' and v_m.status <> 'sending')) then
+    return jsonb_build_object('ok', false, 'reason', 'stale', 'status', v_m.status);
   end if;
   if v_m.status = 'sent' or (p_status <> 'sent' and v_m.status in ('failed', 'suppressed')) then
     return jsonb_build_object('ok', true, 'changed', false, 'status', v_m.status);
