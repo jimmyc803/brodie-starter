@@ -145,7 +145,7 @@ function ClientHeader({
         <span className="grid size-10 place-items-center rounded-full bg-sunken text-base font-semibold text-ink-2">
           {client.name.charAt(0).toUpperCase()}
         </span>
-        <h2 className="text-[26px] font-semibold tracking-[-0.025em] text-ink">{client.name}</h2>
+        <h2 className="min-w-0 break-words text-[26px] font-semibold tracking-[-0.025em] text-ink [overflow-wrap:anywhere]">{client.name}</h2>
         <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${status.className}`}>{status.text}</span>
         {editToken ? <ManageClient key={client.id} token={editToken} clientId={client.id} name={client.name} base={base} /> : null}
       </div>

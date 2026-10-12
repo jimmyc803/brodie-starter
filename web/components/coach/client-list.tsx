@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 import { AddClient } from "@/components/coach/add-client";
 import type { ClientStatus, ClientSummary } from "@/lib/coach-status";
-import { moveSelection } from "@/lib/client-nav";
+import { initialTab, listKeyAction, moveSelection } from "@/lib/client-nav";
 
 const TABS: { key: ClientStatus | "all"; label: string }[] = [
   { key: "review", label: "Needs review" },
@@ -28,43 +27,38 @@ export function ClientList({
   selectedId: string | null;
   addToken?: string; // the coach link, when this coach may add clients (never on the public demo)
 }) {
-  const router = useRouter();
+  const nav = useRef<HTMLElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
-  const reviewCount = clients.filter((c) => c.status === "review").length;
-  const [tab, setTab] = useState<ClientStatus | "all">(reviewCount ? "review" : "all");
-  const [cursor, setCursor] = useState<string | null>(selectedId);
+  const [tab, setTab] = useState<ClientStatus | "all">(() => initialTab(clients, selectedId));
   const q = query.trim().toLowerCase();
   const shown = clients.filter((c) => (tab === "all" || c.status === tab) && (!q || c.name.toLowerCase().includes(q)));
   const href = (id: string) => `${base}?c=${encodeURIComponent(id)}`;
 
+  // Shortcuts only where they can't collide: "/" from the page or the list, ↑/↓ from the search box or a row.
+  // ↑/↓ move real focus between row links, so the row scrolls into view and Enter is the link's own.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const t = e.target;
-      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
-      if (e.key === "/" && !typing) {
-        e.preventDefault();
-        search.current?.focus();
-        return;
-      }
-      if (typing && t !== search.current) return;
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        setCursor((c) => moveSelection(shown.map((s) => s.id), c, e.key));
-      } else if (e.key === "Enter" && cursor && shown.some((s) => s.id === cursor)) {
-        e.preventDefault();
-        router.push(href(cursor));
-      }
+      const t = e.target as Element | null;
+      const row = t instanceof HTMLElement && nav.current?.contains(t) ? t.closest<HTMLElement>("[data-client-id]") : null;
+      const where = t === search.current ? "search" : row ? "list" : !t || t === document.body ? "body" : "other";
+      const action = listKeyAction(e, where);
+      if (!action) return;
+      e.preventDefault();
+      if (action === "search") return search.current?.focus();
+      const ids = [...(nav.current?.querySelectorAll<HTMLElement>("[data-client-id]") ?? [])].map((el) => el.dataset.clientId!);
+      const next = moveSelection(ids, row?.dataset.clientId ?? null, e.key);
+      if (next) nav.current?.querySelector<HTMLElement>(`[data-client-id="${CSS.escape(next)}"]`)?.focus();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  });
+  }, []);
 
   return (
-    <nav aria-label="Clients" className="rounded-[14px] border border-line bg-sunken/60">
+    <nav ref={nav} aria-label="Clients" className="rounded-[14px] border border-line bg-sunken/60">
       <div className="space-y-2 p-3">
         {addToken ? <AddClient token={addToken} base={base} /> : null}
-        <label className="flex items-center justify-between gap-2 rounded-[10px] border border-line-strong bg-surface px-3 py-2">
+        <label className="flex items-center justify-between gap-2 rounded-[10px] border border-line-strong bg-surface px-3 py-2 focus-within:border-ink/40">
           <input
             ref={search}
             type="search"
@@ -107,16 +101,17 @@ export function ClientList({
       <ul className="max-h-[70vh] overflow-y-auto px-2 pb-2">
         {shown.map((c) => {
           const active = c.id === selectedId;
-          const focused = c.id === cursor && !active;
           return (
             <li key={c.id}>
               <Link
                 href={href(c.id)}
                 aria-current={active ? "page" : undefined}
-                onFocus={() => setCursor(c.id)}
+                data-client-id={c.id}
                 className={`${COLS} rounded-[10px] px-3 py-2.5 transition-colors ${
-                  active ? "bg-surface shadow-[0_0_0_1px_var(--color-line)]" : focused ? "bg-surface/70" : "hover:bg-surface/60"
-                } ${c.status === "inactive" && !active ? "opacity-60" : ""}`}
+                  active ? "bg-surface shadow-[0_0_0_1px_var(--color-line)]" : "hover:bg-surface/60"
+                } focus-visible:bg-surface focus-visible:shadow-[0_0_0_2px_var(--color-ink)] focus-visible:outline-none ${
+                  c.status === "inactive" && !active ? "opacity-60" : ""
+                }`}
               >
                 <span className="min-w-0">
                   <span className="block truncate text-sm font-semibold text-ink">{c.name}</span>

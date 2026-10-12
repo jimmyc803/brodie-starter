@@ -39,7 +39,7 @@ export function RecapView({ view, clips }: { view: SessionView; clips?: Exercise
 
       <div className="mt-7">
         <p className="text-[12.5px] font-medium text-ink-3">{subline}</p>
-        <h1 className="mt-1 text-[34px] font-semibold leading-[1.05] tracking-[-0.025em] text-balance">
+        <h1 className="mt-1 text-[34px] font-semibold leading-[1.05] tracking-[-0.025em] text-balance [overflow-wrap:anywhere]">
           {view.client.name}&apos;s workout
         </h1>
       </div>

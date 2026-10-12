@@ -12,7 +12,9 @@ export function RankBadge({ r }: { r: SessionRank }) {
           {skipped ? "No reps counted" : `Tier ${rank.tier} of ${RANKS.length}${pts !== null ? ` · ${pts} pts` : ""}`}
         </p>
       </div>
-      <p className="mt-1 text-[19px] font-semibold tracking-[-0.02em]" style={{ color: skipped ? undefined : rank.color }}>
+      {/* Rank colors were picked for dark cards; as text on white they're unreadable, so the name stays ink with a swatch. */}
+      <p className="mt-1 flex items-center gap-2 text-[19px] font-semibold tracking-[-0.02em] text-ink">
+        {skipped ? null : <span aria-hidden className="size-3 shrink-0 rounded-[4px]" style={{ background: rank.color }} />}
         {skipped ? "Every Brodie starts somewhere" : rank.name}
       </p>
 
