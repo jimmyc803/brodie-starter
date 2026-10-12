@@ -68,6 +68,8 @@ def vocabulary():
     v.update(["Chin over the bar", "Full hang at the bottom"])        # pull-ups (facetime/pullup.py)                      # latency probe (coach_agent --latency-probe)
     bad = [t for t in v if '\u2014' in t or '\u2013' in t]
     assert not bad, f'dashes in cue text: {bad}'
+    from challenge.judge.cues import CUES as CHALLENGE_CUES
+    v.update(CHALLENGE_CUES.values())                                # challenge mode (SPEC section 6): exact spec text, em dashes included
     return sorted(v)
 
 def sha1(text):
