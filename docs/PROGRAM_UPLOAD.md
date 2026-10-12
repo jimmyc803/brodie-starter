@@ -1,6 +1,6 @@
 # Coach program uploads
 
-Open `/coach/start` to create a private coach workspace and its first client. Save the resulting private coach link: it grants access to that coach's programs and clients. The shared demo coach remains view-only and links to this onboarding flow.
+Coaches sign up at `/start`; once approved, their private coach link grants access to their programs and clients. The shared demo coach remains view-only and links to that sign-up page.
 
 From the private Programs page, upload a PDF of up to 3 MB. The existing server pipeline stores it privately, uses the dedicated `GEMINI_PARSER_API_KEY` to parse it, and saves the complete program with its training days. Check the returned prescriptions against the original PDF before assigning a day. Parser failures remove the temporary PDF; uncertain database saves retain it and ask the coach to refresh before retrying.
 

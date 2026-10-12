@@ -255,21 +255,6 @@ export async function runBrowserTests({db,gateway,url,repoRoot,artifacts,modeFil
         assert.deepEqual((await db.query('select * from programs order by id')).rows,beforePrograms);
       } finally { await db.query("delete from program_request_budget where action='parser'"); }
     });
-    await check('exhausted workspace budget prevents new coach and client rows',async()=>{
-      const beforeCoaches=(await db.query('select * from coaches order by id')).rows;
-      const beforeClients=(await db.query('select * from clients order by id')).rows;
-      await db.query("delete from program_request_budget where action='workspace'");
-      await db.query("insert into program_request_budget(action,started_at) select 'workspace',clock_timestamp() from generate_series(1,30)");
-      try {
-        await page.goto(`${url}/coach/start`);
-        await page.locator('[name="coach_name"]').fill('Over budget coach');
-        await page.locator('[name="client_name"]').fill('Over budget client');
-        await page.getByRole('button',{name:'Create private workspace',exact:true}).click();
-        await expect(page.locator('form [role=alert]')).toContainText('Workspace creation is at its hourly limit');
-        assert.deepEqual((await db.query('select * from coaches order by id')).rows,beforeCoaches);
-        assert.deepEqual((await db.query('select * from clients order by id')).rows,beforeClients);
-      } finally { await db.query("delete from program_request_budget where action='workspace'"); }
-    });
     await check('unknown coach reveals no upload controls',async()=>{
       await page.goto(`${url}/c/harness_unknown_coach_0001/program`);
       await expect(page.getByText('This page could not be found.')).toBeVisible();
