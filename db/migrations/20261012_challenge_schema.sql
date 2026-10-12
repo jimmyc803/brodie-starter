@@ -586,7 +586,8 @@ create or replace view power_hour_public with (security_barrier = true) as
 select date_et, starts_at, ends_at from power_hours
 where announced_at is not null or starts_at <= now();
 
-create or replace view competition_public with (security_barrier = true) as
+drop view if exists competition_public;
+create view competition_public with (security_barrier = true) as
 with k as (select key, value from competition_config)
 select (select (value #>> '{}')::timestamptz from k where key = 'window_start') as window_start,
        (select (value #>> '{}')::timestamptz from k where key = 'window_end') as window_end,

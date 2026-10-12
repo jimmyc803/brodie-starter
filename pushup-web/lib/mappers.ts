@@ -47,9 +47,17 @@ export function mapCompetition(r: Raw): CompetitionPublic {
     frozen: r.frozen === true,
     rafflePrize: str(r.raffle_prize, "TBD"),
     raffleMinValidReps: num(r.raffle_min_valid_reps, 100),
+    ufcFighter: strOrNull(r.ufc_fighter),
+    firstPrize: str(r.first_prize, "$100"),
     brodieNumber: strOrNull(r.brodie_number),
     siteUrl: strOrNull(r.site_url),
   };
+}
+
+/** Top-3 prize copy: the configured fighter name, or a generic fallback while unset. */
+export function ufcFighterCopy(name: string | null | undefined): string {
+  const n = name?.trim();
+  return n ? n : "a UFC fighter";
 }
 
 /** Case-insensitive display-name filter for the "find me" box. */

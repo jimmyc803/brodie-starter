@@ -10,6 +10,7 @@ import { ArrowRightIcon, CrownIcon } from "@/components/ui/icons";
 import { LiveDot, Widgets } from "@/components/widgets";
 import { getCompetition, getLeaderboard, getLineStatus, getPowerHour } from "@/lib/data";
 import { competitionPhase, smsLink } from "@/lib/format";
+import { ufcFighterCopy } from "@/lib/mappers";
 
 export const dynamic = "force-dynamic";
 
@@ -79,7 +80,7 @@ export default async function Home() {
             {[
               ["Athletes", `${rows.length.toLocaleString("en-US")}${more}`],
               ["Valid reps", `${totalReps.toLocaleString("en-US")}${more}`],
-              ["1st prize", "$100"],
+              ["1st prize", comp?.firstPrize ?? "$100"],
             ].map(([k, v]) => (
               <div key={k} className="card px-3 py-3 sm:px-4">
                 <dt className="eyebrow">{k}</dt>
@@ -133,11 +134,11 @@ export default async function Home() {
             <ul className="mt-2 divide-y divide-hairline">
               <li className="flex items-center justify-between gap-3 px-5 py-3">
                 <span className="text-ink-2">1st place</span>
-                <span className="font-display text-3xl font-extrabold text-accent">$100</span>
+                <span className="font-display text-3xl font-extrabold text-accent">{comp?.firstPrize ?? "$100"}</span>
               </li>
               <li className="flex items-center justify-between gap-3 px-5 py-3">
                 <span className="text-ink-2">Top 3</span>
-                <span className="text-right font-semibold">Group call with a UFC fighter</span>
+                <span className="text-right font-semibold">Group call with {ufcFighterCopy(comp?.ufcFighter)}</span>
               </li>
               <li className="flex items-center justify-between gap-3 px-5 py-3">
                 <span className="text-ink-2">Raffle</span>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterByName, mapCompetition, mapLeaderboardRow, mapLineStatus, mapPowerHour } from "@/lib/mappers";
+import { filterByName, mapCompetition, mapLeaderboardRow, mapLineStatus, mapPowerHour, ufcFighterCopy } from "@/lib/mappers";
 
 describe("mappers", () => {
   it("maps leaderboard rows and never carries handles", () => {
@@ -44,6 +44,17 @@ describe("mappers", () => {
     const c = mapCompetition({ window_end: "x", frozen: true, brodie_number: "+1", raffle_min_valid_reps: 100 });
     expect(c.frozen).toBe(true);
     expect(c.rafflePrize).toBe("TBD");
+    expect(c.ufcFighter).toBeNull();
+    expect(c.firstPrize).toBe("$100");
+  });
+  it("falls back to generic UFC copy until a fighter is set", () => {
+    expect(ufcFighterCopy(null)).toBe("a UFC fighter");
+    expect(ufcFighterCopy("  ")).toBe("a UFC fighter");
+    expect(ufcFighterCopy("Max Holloway")).toBe("Max Holloway");
+    expect(mapCompetition({ ufc_fighter: "Max Holloway", first_prize: "$250" })).toMatchObject({
+      ufcFighter: "Max Holloway",
+      firstPrize: "$250",
+    });
   });
   it("filters by name case-insensitively", () => {
     const rows = [{ displayName: "Ana" }, { displayName: "Bob" }];

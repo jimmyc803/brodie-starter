@@ -4,6 +4,7 @@ import { RepIllustrations } from "@/components/rep-illustrations";
 import { CheckIcon } from "@/components/ui/icons";
 import { getCompetition } from "@/lib/data";
 import { formatEtDeadline, smsLink } from "@/lib/format";
+import { ufcFighterCopy } from "@/lib/mappers";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
@@ -147,11 +148,11 @@ export default async function RulesPage() {
         <ul className="grid gap-2 sm:grid-cols-3">
           <li className="card p-5">
             <p className="eyebrow">1st place</p>
-            <p className="mt-2 font-display text-5xl font-extrabold text-accent">$100</p>
+            <p className="mt-2 font-display text-5xl font-extrabold text-accent">{comp?.firstPrize ?? "$100"}</p>
           </li>
           <li className="card p-5">
             <p className="eyebrow">Top 3</p>
-            <p className="mt-2 font-display text-2xl font-extrabold uppercase leading-tight">Group call with a UFC fighter</p>
+            <p className="mt-2 font-display text-2xl font-extrabold uppercase leading-tight">Group call with {ufcFighterCopy(comp?.ufcFighter)}</p>
           </li>
           <li className="card p-5">
             <p className="eyebrow">Raffle · {minReps}+ valid reps</p>

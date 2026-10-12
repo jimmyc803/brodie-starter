@@ -80,6 +80,8 @@ export function fixtureCompetition(frozen: boolean): CompetitionPublic {
     frozen,
     rafflePrize: "Signed Brodie gloves",
     raffleMinValidReps: 100,
+    ufcFighter: null,
+    firstPrize: "$100",
     // Short code style number: keeps the demo free of anything phone-shaped.
     brodieNumber: "27632",
     siteUrl: null,
