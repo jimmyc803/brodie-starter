@@ -62,6 +62,7 @@ from facetime import DATA, AUDIO_TRACK_NAME
 from facetime.pipeline import FPS
 from facetime.perception import Perception, Config, add_arguments, build_pipeline, EVENT_SCHEMA_VERSION
 from facetime.coach_agent import frame_to_rgb              # the same frame conversion as the demo coach
+from facetime.lines import line_id, release as release_line, take_claim
 
 log = logging.getLogger('worker')
 ARGS_ENV = 'RTCOACH_WORKER_ARGS'      # main() hands the parsed flags to the job processes as JSON (forkserver children re-import this module)
@@ -152,7 +153,9 @@ def client_for_room(room_name):
 
 
 def call_client_id(a):
-    """Whose call this is: the room's client, else the DEMO_CLIENT_ID env (single-client demo setups)."""
+    """Whose call this is: the room's client, else the DEMO_CLIENT_ID env (single-client demo setups); nobody for a line's walk-in
+    caller (a.guest: no reservation, the demo workout, nothing saved)."""
+    if getattr(a, 'guest', False): return None
     return getattr(a, 'client_id', None) or os.environ.get('DEMO_CLIENT_ID')
 
 
@@ -204,14 +207,14 @@ def read_plan_file(path):
         return None
 
 
-def load_args(*, load_client=True, client_id=None):
+def load_args(*, load_client=True, client_id=None, guest=False):
     """The flags main() parsed, from the environment (a job process is a fresh interpreter); defaults when run without main().
     client_id: the client this call belongs to (client_for_room), else DEMO_CLIENT_ID applies."""
     a = build_parser().parse_args([])
     try: d = json.loads(os.environ.get(ARGS_ENV) or '{}')
     except ValueError: d = {}
     for k, v in d.items(): setattr(a, k, v)
-    a.client_id = client_id
+    a.client_id = client_id; a.guest = guest
     return resolve_mode(a, load_client=load_client)
 
 
@@ -259,7 +262,9 @@ async def entrypoint(ctx: JobContext):
         room_name = getattr(getattr(getattr(ctx, 'job', None), 'room', None), 'name', None)
         room_client = client_for_room(room_name)
         if room_client: print(f'[worker] client call: room {room_name!r} -> client {room_client}', flush=True)
-        a = await asyncio.to_thread(load_args, client_id=room_client) if room_client else await asyncio.to_thread(load_args)
+        if line_id(): a = await asyncio.to_thread(load_args, load_client=False)   # a line: the client is matched at the bind (_line_start)
+        elif room_client: a = await asyncio.to_thread(load_args, client_id=room_client)
+        else: a = await asyncio.to_thread(load_args)
     except AssignmentUnavailable:
         log.warning('Client assignment unavailable; refusing to start a demo workout')
         ctx.shutdown(reason='client assignment unavailable')
@@ -293,6 +298,10 @@ class CoachJob:
         self.voice_mode = perception_off(a)                       # --perception off: no Perception; the worker emits its own session/status events
         self.recap = None                                         # facetime/call_recap.py: save the session + heat map card (DEMO_CLIENT_ID)
         self.t0 = time.monotonic(); self.ev_seq = 0; self.vision = None; self.vision_logged = False; self.session_opened = False; self.open_task = None
+        # A FaceTime line worker (BRODIE_LINE, facetime/lines.py): the client is only known once a call arrives, so the plan, the voice
+        # and Perception start at the bind (start_session), after the line's reservation is taken.
+        self.line = None if self.voice_mode else line_id(); self.line_claim = None; self.line_task = None; self.session_started = False
+        self.line_bound = False
 
     # ---- lifecycle ----
     async def run(self):
@@ -302,7 +311,7 @@ class CoachJob:
             from facetime.audio_out import CuePlayer
             self.player = CuePlayer(bank=self.bank, on_record=self.log_cue, queue_ms=a.audio_queue_ms)
             os.makedirs(os.path.dirname(os.path.abspath(a.cue_log)) or '.', exist_ok=True); self.cue_log = open(a.cue_log, 'a')
-        if getattr(a, 'voice', 'off') == 'gemini' or handlers_path(a):
+        if not self.line and (getattr(a, 'voice', 'off') == 'gemini' or handlers_path(a)):
             self.voice = self.build_voice()
         self.room.on('track_subscribed', self.on_track_subscribed)
         self.room.on('participant_connected', lambda p: print(f'[worker] participant joined: {p.identity} (kind {rtc.ParticipantKind.Name(p.kind)})', flush=True))
@@ -323,18 +332,29 @@ class CoachJob:
             await self.room.local_participant.publish_track(self.player.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
             self.player_task = asyncio.create_task(self.player.run())
             print(f'[worker] published audio track {AUDIO_TRACK_NAME}', flush=True)
+        if self.warm:
+            print('[worker] warm job (chert_warm): no caller; staying joined, nothing is said until a participant publishes video' + (' or audio' if self.voice_mode else ''), flush=True)
+        if self.line:
+            print(f'[line] line {self.line!r}: the workout starts when a call arrives (the caller is matched to the line\'s reservation)', flush=True)
+        else:
+            self.start_session()
+        await self.done.wait()
+        reason = self.end_reason or (f'perception error: {self.worker_error!r}' if self.worker_error is not None else 'done')
+        await self.aclose(); self.shutdown_ctx(reason)
+
+    def start_session(self):
+        """Events, Perception (or the voice-mode status loop), the feed thread, the consumers and the voice: at join, or at the bind on a line."""
+        a = self.a; self.session_started = True
         if self.voice_mode:                                       # no Perception: the worker's own session/status events, logged the same way
             from facetime.perception import JsonlWriter
-            self.event_writer = JsonlWriter(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=ctx.job.id))
+            self.event_writer = JsonlWriter(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=self.ctx.job.id))
         else:
             self.per = Perception(self.cfg, pipe=self.pipe, say=(self.say_from_worker if self.player is not None else None), clip_s=(self.bank.duration if self.bank is not None else None))
             self.per.on_event(self.on_event)
-            self.event_writer = self.per.log_to(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=ctx.job.id))
+            self.event_writer = self.per.log_to(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=self.ctx.job.id))
             if self.player is not None:
                 self.per.audio_stats = lambda: dict(underruns=self.player.underruns, cues_played=self.cues_played, cues_dropped=self.player.n_dropped)
         print(f'[worker] events (schema v{EVENT_SCHEMA_VERSION}) -> {a.event_log}' + (f' and data topic {a.data_topic!r}' if a.publish_data else ''), flush=True)
-        if self.warm:
-            print('[worker] warm job (chert_warm): no caller; staying joined, nothing is said until a participant publishes video' + (' or audio' if self.voice_mode else ''), flush=True)
         if self.voice_mode:
             self.consumer_tasks = [asyncio.create_task(self._status_loop(), name='status-loop')]
         else:
@@ -343,9 +363,6 @@ class CoachJob:
         self.consumer_tasks += [asyncio.create_task(fn(self), name=f'consumer-{fn.__name__}') for fn in CONSUMERS]
         if self.voice is not None:
             self.consumer_tasks.append(asyncio.create_task(self.voice.run(), name='consumer-voice'))
-        await self.done.wait()
-        reason = self.end_reason or (f'perception error: {self.worker_error!r}' if self.worker_error is not None else 'done')
-        await self.aclose(); self.shutdown_ctx(reason)
 
     def end(self, reason):
         """End the job (event loop): run() wakes, cleans up and returns, then tells the framework (shutdown_ctx)."""
@@ -381,6 +398,7 @@ class CoachJob:
         if self.t_end is None: self.t_end = t0
         if self.leave_task is not None: self.leave_task.cancel()
         if self.open_task is not None and not self.open_task.done(): self.open_task.cancel()
+        if self.line_task is not None and not self.line_task.done(): self.line_task.cancel()
         for t in getattr(self, 'consumer_tasks', []): t.cancel()
         recap_close = asyncio.create_task(self.recap.aclose()) if self.recap is not None else None   # hang-up save runs alongside the teardown
         if self.video_task is not None and not self.video_task.done():                 # closes the VideoStream (read_video's finally)
@@ -420,6 +438,8 @@ class CoachJob:
         if self.cue_log: self.cue_log.close()
         if recap_close is not None:                                                    # bounded inside (12 s); a mid-plan hang-up still saves
             await asyncio.gather(recap_close, return_exceptions=True)
+        if self.line and self.line_bound:                                              # the call is over: free the line (after its cooldown)
+            await asyncio.to_thread(release_line, self.line, (self.line_claim or {}).get('claim_id'))
         print(f'[worker] job {self.ctx.job.id} done ({self.end_reason or "shutdown"}; cleanup {1000 * (time.monotonic() - t0):.0f} ms, '
               f'{1000 * (time.monotonic() - self.t_end):.0f} ms after the end trigger): frames received {self.seq}, processed {self.processed}, dropped {self.dropped}, idle ticks {self.idle}; {s}', flush=True)
 
@@ -440,6 +460,29 @@ class CoachJob:
             try: pub.set_video_quality(rtc.VideoQuality.Value('VIDEO_QUALITY_' + self.a.video_quality.upper()))
             except Exception as e: print(f'[worker] set_video_quality failed: {e}', flush=True)
         self.video_task = asyncio.create_task(self.read_video(track))
+
+    async def _line_start(self, participant):
+        """A call arrived on this line: take the line's reservation (the client who tapped Start workout), load their day, start.
+        No reservation, or no day assigned: the demo workout, saved to nobody."""
+        from facetime.plan_loader import AssignmentUnavailable
+        try:
+            self.line_claim = await asyncio.to_thread(take_claim, self.line)
+            cid = (self.line_claim or {}).get('client_id')
+            try:
+                a = await asyncio.to_thread(load_args, client_id=cid) if cid else await asyncio.to_thread(load_args, guest=True)
+                print(f'[line] line {self.line!r}: ' + (f'reserved by client {cid}' if cid else 'walk-in caller (no reservation): demo workout, not saved'), flush=True)
+            except AssignmentUnavailable:
+                print(f'[line] line {self.line!r}: client {cid} has no workout assigned: demo workout, not saved', flush=True)
+                a = await asyncio.to_thread(load_args, guest=True)
+            if self.closed: return
+            self.a = a; self.cfg = Config.from_args(a); self.warm = False          # a caller is here, whatever the room's metadata said
+            if getattr(a, 'voice', 'off') == 'gemini' or handlers_path(a): self.voice = self.build_voice()
+            self.start_session()
+            if self.bound == participant.identity: self.start_call(participant)
+        except Exception as e:
+            log.exception('line start failed: %r', e)
+            print(f'[line] could not start the call: {type(e).__name__}: {e}', flush=True)
+            self.worker_error = e; self.end('line start failed')
 
     def probe_caller(self, participant):
         """CALLER_PROBE=1: write everything the dispatcher tells us about the caller to data/tmp/caller_probe.jsonl (local, gitignored),
@@ -464,6 +507,15 @@ class CoachJob:
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
         if os.environ.get('CALLER_PROBE'): self.probe_caller(participant)
+        if self.line:
+            self.line_bound = True
+            if not self.session_started:                                    # first caller on this line: match them, then start
+                if self.line_task is None: self.line_task = asyncio.create_task(self._line_start(participant), name='line-start')
+                return
+        self.start_call(participant)
+
+    def start_call(self, participant):
+        """The bound caller's recap and model session (once each)."""
         if self.recap is None and not self.warm and not self.voice_mode and self.a.plan and call_client_id(self.a):
             from facetime.call_recap import CallRecap
             self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None), client_id=call_client_id(self.a))
