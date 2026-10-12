@@ -1,5 +1,7 @@
 import { Heatmap } from "@/components/heatmap/heatmap";
 import { ExerciseCard } from "@/components/recap/exercise-card";
+import { BrodieSays } from "@/components/ui-kit/brodie";
+import { brodieLine } from "@/lib/brodie-line";
 import { RankBadge } from "@/components/recap/rank-badge";
 import { ReviewLauncher } from "@/components/rep-review/review-launcher";
 import { SectionHeading, SiteHeader } from "@/components/site-header";
@@ -63,6 +65,10 @@ export function RecapView({ view, clips }: { view: SessionView; clips?: Exercise
           {stats.completed === 0 ? "Call ended before any reps were counted." : "Call ended before the last set."}
         </p>
       ) : null}
+
+      <div className="mt-3">
+        <BrodieSays line={brodieLine(view)} />
+      </div>
 
       <div className="mt-3">
         <RankBadge r={sessionRank(view)} />

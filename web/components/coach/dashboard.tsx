@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BrodieEmpty } from "@/components/ui-kit/brodie";
 import { ClientList } from "@/components/coach/client-list";
 import { AddClient } from "@/components/coach/add-client";
 import { ClientLink } from "@/components/coach/client-link";
@@ -85,15 +86,14 @@ export function CoachDashboard({
       ) : null}
 
       {view.clients.length === 0 ? (
-        <div className="mt-8 rounded-[14px] border border-dashed border-line-strong p-8 text-center">
-          <p className="font-semibold text-ink">No clients yet.</p>
+        <BrodieEmpty title="No clients yet." className="mt-8">
           <p className="mt-1 text-sm text-ink-2">Add your first client, assign them a day, then send them their workout link.</p>
           {canEdit ? (
             <div className="mx-auto mt-5 max-w-xs text-left">
               <AddClient token={token} base={base} />
             </div>
           ) : null}
-        </div>
+        </BrodieEmpty>
       ) : (
         <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)] lg:items-start">
           <div className="lg:sticky lg:top-6">
@@ -106,9 +106,9 @@ export function CoachDashboard({
               {session ? (
                 <SessionDetail view={session} clientName={client.name} clips={clips} programHref={programsHref} />
               ) : (
-                <p className="rounded-[14px] border border-dashed border-line-strong p-8 text-center text-ink-2">
-                  No sessions yet. When {client.name} finishes a workout with Brodie, it shows up here.
-                </p>
+                <BrodieEmpty title="No sessions yet.">
+                  <p className="mt-1 text-sm text-ink-2">When {client.name} finishes a workout with Brodie, it shows up here.</p>
+                </BrodieEmpty>
               )}
             </div>
           ) : null}
