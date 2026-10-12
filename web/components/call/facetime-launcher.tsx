@@ -59,7 +59,7 @@ export function FaceTimeLauncher({ token }: { token: string }) {
     if (left === 0)
       return (
         <div>
-          <p className="text-sm text-zinc-400">Your line was released. Tap again when you&apos;re ready.</p>
+          <p className="text-sm text-ink-2">Your line was released. Tap again when you&apos;re ready.</p>
           <StartButton onClick={claim} label="Start workout" />
         </div>
       );
@@ -67,16 +67,16 @@ export function FaceTimeLauncher({ token }: { token: string }) {
       <div>
         <a
           href={state.facetime}
-          className="block w-full rounded-full bg-green-500 px-6 py-4 text-center text-lg font-semibold text-zinc-950 transition-colors hover:bg-green-400"
+          className="block w-full rounded-[14px] bg-brand px-6 py-4 text-center text-lg font-semibold text-on-brand transition hover:brightness-95"
         >
           FaceTime Brodie
         </a>
-        <p className="mt-3 text-center text-sm text-zinc-400">
+        <p className="mt-3 text-center text-sm text-ink-2">
           Your line is held for{" "}
-          <span className="tabular-nums text-zinc-200">
+          <span className="tabular-nums text-ink">
             {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
           </span>
-          . Video call <span className="whitespace-nowrap text-zinc-200">{state.handle}</span>.
+          . Video call <span className="whitespace-nowrap text-ink">{state.handle}</span>.
         </p>
       </div>
     );
@@ -85,9 +85,9 @@ export function FaceTimeLauncher({ token }: { token: string }) {
   if (state.kind === "busy") {
     const wait = state.nextFreeAt ? Math.max(1, Math.ceil((state.nextFreeAt - (now || Date.now())) / 60_000)) : null;
     return (
-      <div className="rounded-2xl border border-yellow-500/20 bg-yellow-500/5 p-4">
-        <p className="font-medium text-yellow-200">Brodie is with someone right now</p>
-        <p className="mt-1 text-sm text-zinc-400">
+      <div className="rounded-[14px] bg-warn-soft p-4">
+        <p className="font-semibold text-warn">Brodie is with someone right now</p>
+        <p className="mt-1 text-sm text-ink-2">
           {wait ? `A line should free up in about ${wait} min.` : "A line should free up soon."} Keep this page open; it checks again
           on its own.
         </p>
@@ -99,7 +99,7 @@ export function FaceTimeLauncher({ token }: { token: string }) {
     <div>
       <StartButton onClick={claim} label={state.kind === "claiming" ? "Getting your line…" : "Start workout"} disabled={state.kind === "claiming"} />
       {state.kind === "error" ? (
-        <p role="alert" className="mt-3 text-sm text-red-300">
+        <p role="alert" className="mt-3 text-sm text-bad">
           {state.message}
         </p>
       ) : null}
@@ -113,7 +113,7 @@ function StartButton({ onClick, label, disabled }: { onClick: () => void; label:
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="mt-2 w-full rounded-full bg-green-500 px-6 py-4 text-lg font-semibold text-zinc-950 transition-colors hover:bg-green-400 disabled:opacity-60"
+      className="mt-2 w-full rounded-[14px] bg-brand px-6 py-4 text-lg font-semibold text-on-brand transition hover:brightness-95 disabled:opacity-60"
     >
       {label}
     </button>
