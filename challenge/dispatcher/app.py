@@ -139,6 +139,7 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
         return {"ok": db, "db": db, "provider": flags.MESSAGING_PROVIDER, "flags": flags.public(),
                 "fallbacks": flags.fallbacks(), "line_states": lines}
 
+    app.include_router(__import__("challenge.dispatcher.webhooks", fromlist=["create_router"]).create_router(get_store, get_outbox, clock))
     return app
 
 
