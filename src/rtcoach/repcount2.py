@@ -73,14 +73,24 @@ SETTLE_LONG_EX=('squats',)   # settle_plateau_s applies here: MM-Fit lunges lose
 FIRST_MASK={'lunges':['hip_h','knee','knee_w','sh_y']}   # first_mask=True: the set's first count needs one of these trackers to have fired (full vote otherwise)
 MIN_PERIOD={'squats':1.0,'lunges':1.2,'pushups':0.8,'jumping_jacks':0.5,'situps':1.0,'bicep_curls':0.8,'dumbbell_rows':0.8,
             'dumbbell_shoulder_press':0.8,'lateral_shoulder_raises':0.8,'tricep_extensions':0.8}
-def pose_signals(img, world, torso, torso_w):
-    """img (33,>=2), world (33,3) -> dict of scalar signals. torso, torso_w: slowly varying scales (image, world)."""
+ARMS={'left':(11,13,15),'right':(12,14,16)}
+SIDE_VIEW_EX=('pushups',)   # side_view=None -> on for these exercises only
+def arm_visibility(img):
+    """(left, right) mean visibility of the shoulder, elbow and wrist of each arm (column 3; 1.0 when img has no visibility)."""
+    if img.shape[1]<4: return 1.0,1.0
+    v=np.nan_to_num(img[:,3].astype(np.float64),nan=0.0)
+    return float(v[list(ARMS['left'])].mean()), float(v[list(ARMS['right'])].mean())
+def pose_signals(img, world, torso, torso_w, arm_side=None):
+    """img (33,>=2), world (33,3) -> dict of scalar signals. torso, torso_w: slowly varying scales (image, world).
+    arm_side None: elbow / elbow_w are the left+right sum (front view). 'left' / 'right' (side view, the other arm hidden):
+    2 x that arm's angle / 90, the same scale, so a side-view rep moves the signal as much as a front-view one."""
     xy=img[:,:2]
     sh=(xy[11]+xy[12])/2; hp=(xy[23]+xy[24])/2; an=(xy[27]+xy[28])/2; wr=(xy[15]+xy[16])/2
     S={}
     S['hip_h']=(an[1]-hp[1])/torso
     S['knee']=(_ang(xy[23],xy[25],xy[27])+_ang(xy[24],xy[26],xy[28]))/90.0
-    S['elbow']=(_ang(xy[11],xy[13],xy[15])+_ang(xy[12],xy[14],xy[16]))/90.0
+    if arm_side is None: S['elbow']=(_ang(xy[11],xy[13],xy[15])+_ang(xy[12],xy[14],xy[16]))/90.0
+    else: s_,e_,w_=ARMS[arm_side]; S['elbow']=2.0*_ang(xy[s_],xy[e_],xy[w_])/90.0
     S['wr_h']=(sh[1]-wr[1])/torso
     S['wr_spread']=float(np.linalg.norm(xy[15]-xy[16]))/torso
     S['an_spread']=float(np.linalg.norm(xy[27]-xy[28]))/torso
@@ -89,7 +99,8 @@ def pose_signals(img, world, torso, torso_w):
     S['wr_hip']=float(np.linalg.norm(wr-hp))/torso
     if world is not None:
         w=world
-        S['elbow_w']=(_ang(w[11],w[13],w[15])+_ang(w[12],w[14],w[16]))/90.0
+        if arm_side is None: S['elbow_w']=(_ang(w[11],w[13],w[15])+_ang(w[12],w[14],w[16]))/90.0
+        else: s_,e_,w_=ARMS[arm_side]; S['elbow_w']=2.0*_ang(w[s_],w[e_],w[w_])/90.0
         S['knee_w']=(_ang(w[23],w[25],w[27])+_ang(w[24],w[26],w[28]))/90.0
         S['sh_h_w']=-(w[11,1]+w[12,1])/2/torso_w
         S['wr_h_w']=-(w[15,1]+w[16,1])/2/torso_w
@@ -268,9 +279,20 @@ class RepCounter2:
                  flip=1.5, rest_ema=0.5, top_k=5, amp_frac=0.5, rank='ampn', gap_gate=0.0, gap_confirm=1.5, init_s=1.2, amp_cap=0.0, reg_w=2.0, pad=True, scale='ema', scale_decay=0.02, torso_sig=False,
                  hold_first_s=None, hold_ratio=0.0, rej_w=0.0, fire='recover', confirm=1, turn_gap=0.0, turn_depth=0.0, signals=None,
                  gate=False, gate_off_s=0.5, gate_on_s=0.3, up_min=0.6, wr_margin=0.35, prone_max=0.6, prone_ang=60.0,
-                 settle=False, settle_max_s=4.0, alias=None, mask_min_amp=False, mask_top_k=3, seed_s=0.3, settle_plateau_s=None, walk_vx=0.0, walk_n=3, walk_ex=WALK_EX, mask=None, settle_long_ex=SETTLE_LONG_EX, first_mask=False):
+                 settle=False, settle_max_s=4.0, alias=None, mask_min_amp=False, mask_top_k=3, seed_s=0.3, settle_plateau_s=None, walk_vx=0.0, walk_n=3, walk_ex=WALK_EX, mask=None, settle_long_ex=SETTLE_LONG_EX, first_mask=False,
+                 side_view=None, side_hi=0.8, side_diff=0.3, side_exit_min=0.7, side_exit_diff=0.15, side_on_s=1.0, side_off_s=1.0):
         if alias is None: alias=(select=='mask')
         if alias and exercise in ALIAS: exercise=ALIAS[exercise]
+        # side view (challenge, 2026-10-12): pushups filmed from the side hide one arm, and the bilateral elbow sum then mixes
+        # in MediaPipe's guess of the hidden arm. With side_view on (default for SIDE_VIEW_EX) elbow / elbow_w switch to 2 x the
+        # visible arm once one arm's mean visibility is >= side_hi and >= side_diff above the other's for side_on_s, and back to
+        # the sum after side_off_s with both arms >= side_exit_min and within side_exit_diff. Measured on the local clips with
+        # MediaPipe full (2026-10-12): the hidden arm reads 0.4 to 0.8 and swings with the rep phase in side views, so the
+        # choice is sticky; the five front-view clips never switch (rep events identical to side_view=False).
+        self.side_view=(exercise in SIDE_VIEW_EX) if side_view is None else bool(side_view)
+        self.side_hi=float(side_hi); self.side_diff=float(side_diff); self.side_exit_min=float(side_exit_min); self.side_exit_diff=float(side_exit_diff)
+        self.side_on_n=max(1,int(round(side_on_s*fps))); self.side_off_n=max(1,int(round(side_off_s*fps)))
+        self.arm_side=None; self._side_cand=(None,0); self.side_i=[]
         MASKS=dict(MASK, **(mask or {}))   # mask: extra or replacement MASK entries, e.g. {'lunges': [...]}
         self.walk_vx=float(walk_vx or 0.0) if exercise in tuple(walk_ex) else 0.0; self.walk_n=max(1,int(walk_n)); self.hx=[]; self.n_walk=0; self.walk_i=[]
         fm=FIRST_MASK if first_mask is True else (first_mask or {}); self.fm=list(fm.get(exercise,[])) if (fm and select=='mask' and exercise not in MASKS) else []
@@ -325,13 +347,27 @@ class RepCounter2:
         if len(self.hx)<=self.walk_n: return False
         vx=abs(self.hx[-1]-self.hx[0])/(self.walk_n/self.fps)/max(t,1e-3)
         return vx>self.walk_vx
+    def _update_arm_side(self, img):
+        """Side-view arm choice with hysteresis (see __init__). Records (frame, side) in side_i on a change."""
+        vl,vr=arm_visibility(img)
+        if self.arm_side is None:
+            want='left' if (vl>=self.side_hi and vl-vr>=self.side_diff) else ('right' if (vr>=self.side_hi and vr-vl>=self.side_diff) else None)
+            need=self.side_on_n
+        else:
+            front=min(vl,vr)>=self.side_exit_min and abs(vl-vr)<=self.side_exit_diff
+            want=None if front else self.arm_side; need=self.side_off_n
+        if want==self.arm_side: self._side_cand=(None,0); return
+        c,n=self._side_cand; n=n+1 if c==want else 1; self._side_cand=(want,n)
+        if n>=need: self.arm_side=want; self._side_cand=(None,0); self.side_i.append((self.i,want))
     def _emit(self, tp):
         self.last_event=self.i; self.count+=1; self.events.append(self.i); self.turning.append(tp); return self.count
     def update(self, img, world=None, ok=True):
         self.i+=1
         if ok and img is not None:
             img=np.asarray(img,np.float32); world=None if world is None else np.asarray(world,np.float32)
-            t,tw=self._scales(img,world); self.last=pose_signals(img,world,t,tw); self.last['torso']=self.torso_now/t
+            t,tw=self._scales(img,world)
+            if self.side_view: self._update_arm_side(img)
+            self.last=pose_signals(img,world,t,tw,self.arm_side); self.last['torso']=self.torso_now/t
         S=self.last
         if S is None: return None
         if self.gate_kind is not None:

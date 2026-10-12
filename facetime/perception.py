@@ -11,7 +11,9 @@ Event schema (EVENT_SCHEMA_VERSION "1"; one JSON object per event, docs/STARTER_
   events; a replay passes t0=0 and the clip time), t_wall (epoch seconds when the event was emitted), seq (0, 1, 2, ...), type, and
   frame (index of the processed frame, except status).
 Types: rep {exercise, n, confidence {agree, amp, trackers} | null, turning_t (the rep's turning point on the event clock), lag_s
-(t - turning_t: how long after the bottom the count landed)}, exercise_seen {name, p}, fault {label, cue_text, p}, cue {text, intent,
+(t - turning_t: how long after the bottom the count landed); with the strict judge on (pushups, Config.judge / CHALLENGE_MODE=competition)
+also valid, reject_reasons, metrics (the C2 reps metric columns), judge_version, cue (challenge.judge.cues key or null), in_challenge},
+exercise_seen {name, p}, fault {label, cue_text, p}, cue {text, intent,
 why, state, exercise, count, t_session, held_s?, t_decided?} (what the demo coach would have said: counts, corrections, praise,
 announces, milestones, visibility lines), visibility {state: full|partial|none, paused, no_pose_s}, gesture {name: tpose}, probe
 {arms_up, on_box_ms?, span_ms?, t_first_up?} (a transport may add beep), session {state, exercise, target, count, item, done, mode}, status {fps_recv, fps_processed, pose_ms, clf_ms,
@@ -21,6 +23,8 @@ Use:  per = Perception(Config(plan='squats:10'))            # or Perception(argp
       per.on_event(print); per.log_to('events.jsonl')
       events = per.process_frame(rgb, t_recv=time.monotonic())            # live: one call per sampled frame, any thread
       events = per.process_frame(rgb, t_recv=i / FPS, t_ms=i * 1000 / FPS)  # replay: the pipeline's reproducible t_ms path
+      events = per.process_landmarks(img, world, persons, t_recv=i / FPS, t_ms=i * 1000 / FPS, aspect=16 / 9)
+                                                         # injection seam: recorded/synthetic landmarks, no MediaPipe (judge_eval)
       per.close()
 """
 import dataclasses, json, logging, os, threading, time
@@ -56,6 +60,8 @@ class Config:
     auto_lite: bool = True           # live only: drop the pose model to lite when full cannot hold 10 fps
     status_every_s: float = 5.0
     seen_every_s: float = 1.0        # exercise_seen at most this often while the top class is unchanged
+    judge: bool = None               # strict push-up judge (challenge); None = on iff CHALLENGE_MODE=competition
+    judge_thr: str = None            # JSON or .json: judge thresholds over challenge.judge DEFAULT_THRESHOLDS
 
     @classmethod
     def from_args(cls, a):
@@ -83,6 +89,9 @@ def add_arguments(ap):
     ap.add_argument('--gesture-next', action='store_true', help='a T-pose held 1.5 s closes the set / skips the rest and emits a gesture event (without it no T-pose detector runs: no gesture events)')
     ap.add_argument('--latency-probe', action='store_true', help='with audio attached: beep the instant both wrists go above the head')
     ap.add_argument('--no-auto-lite', dest='auto_lite', action='store_false')
+    ap.add_argument('--judge', dest='judge', action='store_true', default=d.judge, help='strict push-up judge on every rep event (default: on iff CHALLENGE_MODE=competition)')
+    ap.add_argument('--no-judge', dest='judge', action='store_false')
+    ap.add_argument('--judge-thr', default=d.judge_thr, help='JSON (or .json file) judge thresholds over the C5 defaults')
     return ap
 
 
@@ -90,7 +99,8 @@ def build_pipeline(cfg):
     """The expensive, room-independent part (pose model, classifier, trigger), built exactly as coach_agent.Agent builds it.
     Separate from Perception so a worker can preload it (prewarm) and hand it to Perception(pipe=...) at job start."""
     pipe = FramePipeline(cfg.model, None, cfg.pose, load_json_arg(cfg.params, {}), load_json_arg(cfg.thr),
-                         rep_params=COUNTERS[cfg.counter], trigger=cfg.trigger)
+                         rep_params=COUNTERS[cfg.counter], trigger=cfg.trigger,
+                         judge=getattr(cfg, 'judge', None), judge_thr=load_json_arg(getattr(cfg, 'judge_thr', None), None))
     pipe.set_gesture_next(bool(cfg.gesture_next))
     return pipe
 
@@ -149,6 +159,7 @@ class Perception:
         self._t = 0.0; self._frame = 0; self._frame_events = []
         self._coach_id = None; self._last_count = 0
         self._rc_t = {}; self._rc_last_i = None       # counter frame index -> service time, for turning_t on the event clock
+        self._judge_off = None                        # pipeline judge clock - event clock (seconds), from the last frame
         self._seen = (None, -1e9)                     # exercise_seen: (name, t of the last event)
         self.hold = False                                              # set by the voice layer while a conversation is going; session.py pauses the rest/wait clock
         self._vis_emitted = None; self._vis_cand = (None, 0); self._paused = False; self.vis_hold = 5   # 0.5 s before a state change is reported (paused is hysteretic already)
@@ -186,17 +197,34 @@ class Perception:
                    count=meta.get('count', 0), t_session=meta.get('t_session'), **extra)
         if self.say_cb is not None: self.say_cb(text, intent, meta)
 
+    def set_challenge_window(self, t0, t1):
+        """Mark reps fired in [t0, t1] (event clock) in_challenge (liveness challenge). Converted to the pipeline's judge clock
+        with the offset of the last processed frame; applies to the current push-up Coach's judge. False when no judge runs."""
+        j = getattr(self.pipe, 'judge', None)
+        if j is None: return False
+        off = self._judge_off or 0.0
+        j.set_challenge_window(t0 + off, t1 + off); return True
+
     # ---- per frame ----
     def process_frame(self, rgb, t_recv=None, t_ms=None, meta=None):
         """rgb: HxWx3 uint8 at any size. t_recv: the frame's receive time on the service clock (None = time.monotonic() now).
         t_ms: MediaPipe VIDEO-mode timestamp for reproducible replays (i * 1000 / FPS); live callers leave it None.
         meta: extra keys for the cue passthrough (frame_seq, ts_us, t_capture ...). Returns this frame's events (list)."""
+        return self._run(lambda: self.pipe.process(rgb, t_ms=t_ms), t_recv, meta)   # an exception propagates (ends the run)
+
+    def process_landmarks(self, img, world, persons=None, t_recv=None, t_ms=None, aspect=None, meta=None):
+        """The landmark injection seam (judge_eval, tests): exactly process_frame after pose estimation, fed with a recorded or
+        synthetic pose (FramePipeline.process_landmarks: img (33,5) or None, world (33,3) or None, persons, t_ms, aspect)."""
+        return self._run(lambda: self.pipe.process_landmarks(img, world, persons=persons, t_ms=t_ms, aspect=aspect), t_recv, meta)
+
+    def _run(self, step, t_recv, meta):
         if self.closed: raise RuntimeError('Perception is closed')
         t_mono = time.monotonic()
         if t_recv is None: t_recv = t_mono
         self._t = t_recv - self.t0; self._frame = self.n; self._frame_events = []
         if self.live: self._recv_hist.append(t_recv); del self._recv_hist[:-4]
-        r = self.pipe.process(rgb, t_ms=t_ms)                         # an exception here propagates to the caller (ends the run)
+        r = step()
+        if r.get('judge_t') is not None: self._judge_off = r['judge_t'] - self._t
         t_dec = time.time(); self.n += 1
         m = dict(frame=self._frame, t_recv=t_recv, t_decision=t_dec, pose_ms=round(r['pose_ms'], 1), clf_ms=round(r['clf_ms'], 1), pose_model=self.pipe.pose_variant)
         if meta: m.update(meta)
@@ -219,9 +247,10 @@ class Perception:
         if c > self._last_count:
             conf = self._confidence(rc); ex = spoken_name(self.pipe.exercise) if self.pipe.exercise else None
             tt = r.get('turning_t'); turning_t = self._rc_t.get(int(round(tt * self.fps))) if tt is not None else None   # the turning point on the event clock
+            verdicts = r.get('judge') or {}
             for n in range(self._last_count + 1, c + 1):               # the counter can confirm two reps on one frame
                 self._emit('rep', exercise=ex, **({'exercise_key': 'bicep_curl'} if ex == 'bicep curls' else {}), n=n, confidence=conf, turning_t=(round(turning_t, 3) if turning_t is not None else None),
-                           lag_s=(round(self._t - turning_t, 3) if turning_t is not None else None))
+                           lag_s=(round(self._t - turning_t, 3) if turning_t is not None else None), **verdicts.get(n, {}))
             self._last_count = c
         if r.get('ex_probs') is not None and self.pipe.clf is not None:
             p = np.asarray(r['ex_probs']); j = int(np.argmax(p)); name = spoken_name(self.pipe.clf.exs[j])

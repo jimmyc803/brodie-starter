@@ -12,8 +12,20 @@ swapped per exercise (set_exercise) or detached (rest periods); the pose model a
 Returns the coach's new events, the pose and classifier compute times, the rep count, a "moving" flag from the
 rep counter's amplitude gate and the classifier's exercise probabilities whenever it ran (for auto detection).
 The classifier is timed and tapped by wrapping the Classifier instance (no edits to src/rtcoach).
+
+Strict judge (challenge, CONTRACTS C5): judge=True (default: on when env CHALLENGE_MODE=competition; replay/eval pass it)
+builds a challenge.judge.runtime.JudgeRuntime for every push-up Coach and runs MediaPipe with num_poses=2 (primary person +
+people count, rtcoach.pose). Each frame feeds FrameObs(t = t_ms / 1000, img, world, persons, aspect) to it, the Coach's
+correction labels go to on_label, and every count increase calls on_rep; the result dict then carries
+judge = {rep n: RepVerdict.event_fields()} for the reps counted on that frame (facetime.perception merges them into the rep
+events). judge=False: nothing of this runs and the result has no 'judge' key.
+
+INJECTION SEAM (judge_eval, tests): FramePipeline.process_landmarks(img, world, persons, t_ms, aspect) is everything after
+pose estimation; process(rgb) = to_short_side + Pose + process_landmarks. Build the pipeline with pose_variant=None to skip
+loading MediaPipe entirely (process() then raises); feeding recorded/synthetic landmarks through process_landmarks runs the
+identical counter, Coach, visibility and judge code as live.
 """
-import json, logging, time
+import json, logging, os, time
 import numpy as np, cv2
 from rtcoach.pose import Pose
 from rtcoach.coach import Coach
@@ -66,6 +78,11 @@ def resolve_trigger(arg):
     from rtcoach.trigger import load_model
     return load_model(path), path
 SHORT_SIDE = 288
+JUDGE_EXERCISES = ('pushups',)   # classifier classes the strict judge runs for
+
+def judge_default():
+    """The judge option's default: on for CHALLENGE_MODE=competition."""
+    return os.environ.get('CHALLENGE_MODE', '').strip().lower() == 'competition'
 FPS = 10
 PLAIN = {'squats': 'squats', 'pushups': 'pushups', 'jumping jacks': 'jumping jacks', 'lunges': 'alternating forward lunges'}
 PLAIN.update({name: 'bicep curls' for name in CURL_NAMES})
@@ -111,7 +128,13 @@ class _TimedClassifier:
         return r
 
 class FramePipeline:
-    def __init__(self, model_path, exercise=None, pose_variant='full', params=None, thresholds=None, rep_params=REP_PARAMS, fps=FPS, trigger='auto', gesture_next=False):
+    def __init__(self, model_path, exercise=None, pose_variant='full', params=None, thresholds=None, rep_params=REP_PARAMS, fps=FPS, trigger='auto', gesture_next=False,
+                 judge=None, judge_thr=None, num_poses=None):
+        """judge: None = judge_default() (CHALLENGE_MODE=competition). judge_thr: judge thresholds over DEFAULT_THRESHOLDS.
+        num_poses: None = 2 with the judge on (people count), else 1. pose_variant=None: no pose model (landmark injection)."""
+        self.judge_on = judge_default() if judge is None else bool(judge); self.judge_thr = judge_thr; self.judge = None
+        self.num_poses = int(num_poses) if num_poses is not None else (2 if self.judge_on else 1)
+        self._judged = 0; self.persons = 0
         self.clf = _TimedClassifier(Classifier(model_path)) if model_path else None
         self.params = dict(POLICY_DEFAULT, **(params or {})); self.rep_params = rep_params; self.fps = fps
         self.thresholds = thresholds if thresholds is not None else (json.load(open(THR_DEFAULT)) if _os.path.exists(THR_DEFAULT) else None)
@@ -123,7 +146,7 @@ class FramePipeline:
         if exercise:
             self.set_exercise(exercise)
         self.pose_variant = pose_variant
-        self.pose = Pose(pose_variant, video=True)
+        self.pose = Pose(pose_variant, video=True, num_poses=self.num_poses) if pose_variant is not None else None
         self.t0 = time.monotonic(); self.last_ms = -1
         self.n = 0; self.n_ok = 0; self.pose_ms_sum = 0.0; self.clf_ms_sum = 0.0; self.last_landmarks = None
         self.vis = Visibility(fps); self.probe = ArmRaise(fps); self.was_visible = True
@@ -148,7 +171,14 @@ class FramePipeline:
                            rep_params=(self.rep_params if self.countable else None), thresholds=self.thresholds, trigger=None if curl else self.trigger)
         if not p.get('start_line', True):
             self.coach.last_say = 0.0            # the session script spoke instead; praise waits praise_after s as usual
+        self.judge = self._build_judge(ex); self._judged = 0
         return ex
+
+    def _build_judge(self, ex):
+        if not (self.judge_on and ex in JUDGE_EXERCISES and self.coach is not None and self.coach.rc is not None):
+            return None
+        from challenge.judge.runtime import JudgeRuntime
+        return JudgeRuntime(self.judge_thr)
 
     def arm(self):
         """End of the warm-up: from the next frame the Coach's policy runs (counter state carries over; the counter's settle
@@ -158,24 +188,39 @@ class FramePipeline:
         if rc is not None and hasattr(rc, 'resettle'): rc.resettle(keep=True)
 
     def detach(self):
-        self.coach = None; self.exercise = None; self.countable = False; self.armed = True
+        self.coach = None; self.exercise = None; self.countable = False; self.armed = True; self.judge = None; self._judged = 0
 
     def switch_pose(self, variant):
         """Swap the MediaPipe model (e.g. full -> lite when the box cannot hold 10 fps)."""
-        old = self.pose; self.pose = Pose(variant, video=True); self.pose_variant = variant; old.close()
+        old = self.pose; self.pose = Pose(variant, video=True, num_poses=self.num_poses); self.pose_variant = variant
+        if old is not None: old.close()
         log.warning('pose model switched to %s', variant)
 
     def process(self, rgb, t_ms=None):
         """rgb: HxWx3 uint8 at any size. Returns dict(events, pose_ms, clf_ms, ok, count, moving, ex_probs, visible, vis_cues).
         t_ms: optional frame timestamp for MediaPipe's VIDEO mode (replays pass i * 1000 / FPS so runs are reproducible);
         live callers leave it None and the wall clock is used."""
+        if self.pose is None:
+            raise RuntimeError('FramePipeline was built without a pose model (pose_variant=None): feed landmarks via process_landmarks')
         img = to_short_side(rgb)
         ms = int((time.monotonic() - self.t0) * 1000) if t_ms is None else int(t_ms)
         if ms <= self.last_ms:                     # MediaPipe VIDEO mode needs strictly increasing timestamps
             ms = self.last_ms + 1
         self.last_ms = ms
         t = time.perf_counter(); a, w = self.pose(img, ms); pose_ms = (time.perf_counter() - t) * 1000
+        persons = getattr(self.pose, 'persons', None)
+        return self.process_landmarks(a, w, persons=persons, t_ms=ms, aspect=img.shape[1] / img.shape[0], pose_ms=pose_ms)
+
+    def process_landmarks(self, a, w, persons=None, t_ms=None, aspect=None, pose_ms=0.0):
+        """The injection seam (module docstring): one frame's pose -> the same result dict as process().
+        a: (33,5) normalised image landmarks [x,y,z,visibility,presence] of the primary person or None (no pose);
+        w: (33,3) world landmarks or None; persons: people in frame (None: 1 with a pose, 0 without);
+        t_ms: frame time in ms (None: wall clock since construction); aspect: frame width / height (None: 16/9, judge only);
+        pose_ms: pose compute time to report (0 for injected landmarks)."""
+        ms = int((time.monotonic() - self.t0) * 1000) if t_ms is None else int(t_ms)
         ok = a is not None; self.last_landmarks = a                      # (33,5) normalised x,y,z,vis,pres or None (for --show overlays)
+        if persons is None: persons = 1 if ok else 0
+        self.persons = int(persons)
         if self.clf is not None: self.clf.last_ms = 0.0; seq0 = self.clf.ex_seq
         ev = []; step_ms = 0.0
         v = self.vis.update(a, ok)                                     # whole body in frame? (facetime/visibility.py)
@@ -203,7 +248,26 @@ class FramePipeline:
                  coach_t=(self.coach.i / self.fps if self.coach is not None else None))
         if self.gesture is not None and v['visible'] and self.gesture.observe(a, ok):   # not while the coach cannot see the whole body
             r['gesture_next'] = True                                   # the T-pose hold completed on this frame (--gesture-next)
+        if self.judge is not None:
+            r['persons'] = self.persons; r['judge_t'] = ms / 1000.0
+            r['judge'] = self._judge_step(a, w, ok, ms / 1000.0, aspect, ev, rc)
         return r
+
+    def _judge_step(self, a, w, ok, t_s, aspect, ev, rc):
+        """Feed the judge this frame and its correction labels; verdicts for the reps counted on this frame: {n: event fields}."""
+        from challenge.judge.metrics import FrameObs
+        j = self.judge
+        j.on_frame(FrameObs(t=t_s, img=(a if ok else None), world=(w if ok else None), persons=self.persons,
+                            **({'aspect': float(aspect)} if aspect else {})))
+        for e in ev:
+            if e.get('intent') == 'correction' and e.get('why'): j.on_label(t_s, e['why'])
+        out = {}
+        c = rc.count if rc is not None else 0
+        if c < self._judged: self._judged = 0
+        for n in range(self._judged + 1, c + 1):
+            out[n] = j.on_rep({'t': t_s, 'n': n}).event_fields()
+        self._judged = c
+        return out
 
     @staticmethod
     def _rep_imminent(rc):
@@ -237,7 +301,7 @@ class FramePipeline:
         return getattr(rc, 'state', None) is not None
 
     def close(self):
-        self.pose.close()
+        if self.pose is not None: self.pose.close()
 
 def load_json_arg(s, default=None):
     if s is None: return default
