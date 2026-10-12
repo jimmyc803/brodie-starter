@@ -6,6 +6,7 @@
     db.insert('reps', [{...}, {...}]) -> list
     db.select('assignments', client_id=f'eq.{cid}', order='assigned_at.desc', limit=1, select='*,program_days(*)') -> list
     db.update('sessions', {'status': 'done'}, id=f'eq.{sid}') -> list
+    db.rpc('take_line_claim', p_line='line1') -> the function's result (list of rows for a set-returning function)
     db.upload('recaps', 'path/file.png', png_bytes, 'image/png') -> storage path
     db.delete('sessions', id=f'eq.{sid}') -> list   # the deleted rows; refuses to run without a filter
     db.exists('recaps', 'path/file.png') -> bool
@@ -52,6 +53,9 @@ class Supa:
     def update(self, table, patch, **filters):
         return self._check(self.c.patch(f'{self.url}/rest/v1/{table}', headers={**self._h, 'Prefer': 'return=representation'},
                                         params=filters, json=patch))
+
+    def rpc(self, fn, **args):
+        return self._check(self.c.post(f'{self.url}/rest/v1/rpc/{fn}', headers=self._h, json=args))
 
     def upload(self, bucket, path, data, content_type='application/octet-stream'):
         self._check(self.c.post(f'{self.url}/storage/v1/object/{bucket}/{path}', headers={**self._h, 'Content-Type': content_type, 'x-upsert': 'true'},

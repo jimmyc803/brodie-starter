@@ -5,8 +5,10 @@ import { connection } from "next/server";
 import { Suspense } from "react";
 
 import { CallLauncher } from "@/components/call/call-launcher";
+import { FaceTimeLauncher } from "@/components/call/facetime-launcher";
 import { SiteHeader } from "@/components/site-header";
 import { getClientHome } from "@/lib/client-view";
+import { linesEnabled } from "@/lib/lines";
 
 export const metadata: Metadata = {
   title: "Your workout · Brodie",
@@ -29,7 +31,7 @@ export default function ClientHomePage({ params }: PageProps<"/go/[token]">) {
 async function ClientHome({ params }: Pick<PageProps<"/go/[token]">, "params">) {
   await connection(); // private, live data
   const { token } = await params;
-  const c = await getClientHome(token);
+  const [c, facetime] = await Promise.all([getClientHome(token), linesEnabled()]);
   if (!c) notFound();
   const first = c.name.split(" ")[0];
   return (
@@ -46,13 +48,13 @@ async function ClientHome({ params }: Pick<PageProps<"/go/[token]">, "params">) 
         </p>
         {c.next ? (
           <div className="mt-5">
-            <CallLauncher token={token} firstName={first} />
+            {facetime ? <FaceTimeLauncher token={token} /> : <CallLauncher token={token} firstName={first} />}
           </div>
         ) : null}
       </section>
 
       <ul className="mt-4 space-y-1.5 text-sm text-zinc-400">
-        <li>• Use Safari or Chrome and allow the camera when asked.</li>
+        <li>{facetime ? "• Tap Start workout, then FaceTime Brodie from this phone (video call)." : "• Use Safari or Chrome and allow the camera when asked."}</li>
         <li>• Prop the phone up, step back until your whole body is in view.</li>
         <li>
           • Your camera is only used live to coach you; the call isn&apos;t recorded. Starting a workout means you agree to the{" "}
