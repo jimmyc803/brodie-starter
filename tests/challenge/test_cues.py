@@ -1,7 +1,7 @@
 import json, os
 
 from challenge.judge.cues import CUES, REASON_CUE, cue_for_reason, text_for_reason
-from facetime import CUES_DIR_GEMINI
+from facetime.audio_out import default_cues_dir
 from facetime.cues_tts import vocabulary
 
 KEYS = """knees_down too_shallow no_lockout not_in_frame hips multiple_people challenge_tap_left challenge_tap_right
@@ -27,13 +27,18 @@ def test_reason_mapping():
     assert cue_for_reason('not_horizontal') == 'not_in_frame'
     assert cue_for_reason('too_fast') is None and text_for_reason('too_fast') is None
     assert cue_for_reason('classifier:pushups - shallow') == 'too_shallow'
+    assert cue_for_reason('classifier:pushups (on knees) - deep') == 'knees_down'
+    assert cue_for_reason('classifier:pushups - hip sag') == 'hips'
+    assert cue_for_reason('classifier:pushups - elevated hips') == 'hips'
     assert cue_for_reason('classifier:unknown') is None
 
 
 def test_audio_bank_has_every_phrase_when_present():
-    mf = os.path.join(CUES_DIR_GEMINI, 'manifest.json')
-    if not os.path.exists(mf):
+    bank = default_cues_dir()
+    if not os.path.isdir(bank):
         return
+    mf = os.path.join(bank, 'manifest.json')
+    assert os.path.exists(mf), f'no manifest in {bank}'
     m = json.load(open(mf))
-    missing = [t for t in CUES.values() if t not in m or not os.path.exists(os.path.join(CUES_DIR_GEMINI, m[t]['file']))]
+    missing = [t for t in CUES.values() if t not in m or not os.path.exists(os.path.join(bank, m[t]['file']))]
     assert not missing, missing

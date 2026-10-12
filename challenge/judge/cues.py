@@ -39,15 +39,17 @@ REASON_CUE = {
     'not_horizontal': 'not_in_frame',
 }
 
-# Fault-classifier label -> cue key (reason 'classifier:<label>').
-CLASSIFIER_CUE = {
-    'pushups - shallow': 'too_shallow',
-    'pushups - insufficient': 'too_shallow',
-    'pushups - elevated hips': 'hips',
-    'pushups (on knees) - shallow': 'knees_down',
-    'pushups (on knees) - elevated hips': 'knees_down',
-    'pushups - legs on the floor': 'knees_down',
-}
+def classifier_cue(label):
+    """Cue key for a fault-classifier label: any knee label -> knees_down, any sag or hips label -> hips,
+    shallow or insufficient depth -> too_shallow; anything else has no cue."""
+    low = label.lower()
+    if 'knee' in low or 'legs on the floor' in low:
+        return 'knees_down'
+    if 'sag' in low or 'hips' in low:
+        return 'hips'
+    if 'shallow' in low or 'insufficient' in low:
+        return 'too_shallow'
+    return None
 
 def phrases():
     return sorted(set(CUES.values()))
@@ -55,7 +57,7 @@ def phrases():
 def cue_for_reason(reason):
     """Cue key for a reject reason (None: say nothing). Unknown reasons and unmapped classifier labels give None."""
     if reason.startswith('classifier:'):
-        return CLASSIFIER_CUE.get(reason.split(':', 1)[1])
+        return classifier_cue(reason.split(':', 1)[1])
     return REASON_CUE.get(reason)
 
 def text_for_reason(reason):
