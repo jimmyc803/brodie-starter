@@ -2,26 +2,32 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { createMaxWaitDebounce } from "@/lib/throttle";
 import { getBrowserClient } from "@/lib/supabase-browser";
 
-/** Subscribes to site_pulse changes and refreshes server data (debounced 500ms). */
+const RECONCILE_MS = 30_000;
+
+/**
+ * Subscribes to site_pulse changes and refreshes server data (debounced 500ms, never delayed >1s).
+ * Also refreshes on every (re)subscribe and every 30s to reconcile missed events.
+ */
 export function LiveRefresh() {
   const router = useRouter();
 
   useEffect(() => {
+    const refresher = createMaxWaitDebounce(() => router.refresh(), 500, 1000);
+    const interval = setInterval(() => router.refresh(), RECONCILE_MS);
     const sb = getBrowserClient();
-    if (!sb) return;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     const channel = sb
-      .channel("site_pulse")
-      .on("postgres_changes", { event: "*", schema: "public", table: "site_pulse" }, () => {
-        clearTimeout(timer);
-        timer = setTimeout(() => router.refresh(), 500);
-      })
-      .subscribe();
+      ?.channel("site_pulse")
+      .on("postgres_changes", { event: "*", schema: "public", table: "site_pulse" }, refresher.trigger)
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") refresher.trigger();
+      });
     return () => {
-      clearTimeout(timer);
-      void sb.removeChannel(channel);
+      refresher.cancel();
+      clearInterval(interval);
+      if (sb && channel) void sb.removeChannel(channel);
     };
   }, [router]);
 

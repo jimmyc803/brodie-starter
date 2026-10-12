@@ -58,3 +58,9 @@ export function filterByName<T extends { displayName: string }>(rows: T[], q: st
   if (!needle) return rows;
   return rows.filter((r) => r.displayName.toLowerCase().includes(needle));
 }
+
+/** Escape a user string for a PostgREST ilike pattern (wildcards, backslash). */
+export function ilikePattern(q: string): string {
+  const esc = q.trim().replace(/[\\%_]/g, (c) => `\\${c}`);
+  return `%${esc}%`;
+}

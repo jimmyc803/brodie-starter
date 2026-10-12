@@ -64,3 +64,24 @@ export function smsLink(brodieNumber: string | null): string | null {
   if (!brodieNumber) return null;
   return `sms:${brodieNumber}&body=JOIN%20`;
 }
+
+/** YYYY-MM-DD of the given instant in America/New_York. */
+export function etDate(nowMs: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(nowMs));
+}
+
+/** Today's (ET) power hour if present, else the nearest upcoming one, else null. */
+export function pickPowerHour(rows: PowerHour[], nowMs: number): PowerHour | null {
+  const today = etDate(nowMs);
+  const t = rows.find((r) => r.dateEt === today);
+  if (t) return t;
+  const upcoming = rows
+    .filter((r) => Date.parse(r.startsAt) > nowMs)
+    .sort((a, b) => Date.parse(a.startsAt) - Date.parse(b.startsAt));
+  return upcoming[0] ?? null;
+}

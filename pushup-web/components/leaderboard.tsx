@@ -1,13 +1,38 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Avatar } from "@/components/brodie-avatar";
-import { filterByName } from "@/lib/mappers";
+import { filterByName, ilikePattern, mapLeaderboardRow } from "@/lib/mappers";
+import { getBrowserClient } from "@/lib/supabase-browser";
 import type { LeaderboardRow } from "@/lib/types";
 
 export function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
   const [q, setQ] = useState("");
-  const shown = filterByName(rows, q);
+  const [found, setFound] = useState<LeaderboardRow[] | null>(null);
+  const needle = q.trim();
+
+  // "Find me" queries the full public leaderboard, independent of the top-100 shown.
+  useEffect(() => {
+    const sb = getBrowserClient();
+    if (!needle || !sb) return;
+    let cancelled = false;
+    const id = setTimeout(async () => {
+      const { data, error } = await sb
+        .from("leaderboard_public")
+        .select("*")
+        .ilike("display_name", ilikePattern(needle))
+        .order("rank", { ascending: true })
+        .limit(20);
+      if (cancelled) return;
+      setFound(error || !data ? null : data.map(mapLeaderboardRow));
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(id);
+    };
+  }, [needle]);
+
+  const shown = needle ? (found ?? filterByName(rows, needle)) : rows;
 
   return (
     <section aria-label="Leaderboard">
@@ -16,15 +41,18 @@ export function Leaderboard({ rows }: { rows: LeaderboardRow[] }) {
         <input
           type="search"
           value={q}
-          onChange={(e) => setQ(e.target.value)}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setFound(null);
+          }}
           placeholder="Search your name"
           className="mt-1 w-full rounded-lg border border-hairline bg-surface px-3 py-3 text-base text-ink placeholder:text-ink-2 focus:border-accent focus:outline-none"
         />
       </label>
-      {rows.length === 0 ? (
+      {rows.length === 0 && !needle ? (
         <p className="mt-6 text-ink-2">No one on the board yet. Be the first.</p>
       ) : shown.length === 0 ? (
-        <p className="mt-6 text-ink-2">No match in the top {rows.length}.</p>
+        <p className="mt-6 text-ink-2">No one found with that name.</p>
       ) : (
         <ol className="mt-4 divide-y divide-hairline rounded-xl border border-hairline bg-surface">
           {shown.map((r) => (

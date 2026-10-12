@@ -5,6 +5,7 @@ import {
   mapLineStatus,
   mapPowerHour,
 } from "./mappers";
+import { pickPowerHour } from "./format";
 import type { CompetitionPublic, LeaderboardRow, LineStatus, PowerHour } from "./types";
 
 /** GET a PostgREST view with the anon key. Returns [] if env is missing or the request fails. */
@@ -37,10 +38,12 @@ export async function getLineStatus(): Promise<LineStatus | null> {
   return rows[0] ? mapLineStatus(rows[0]) : null;
 }
 
-/** Today's (or the next upcoming) power hour: the most recent rows by date. */
+/** Today's ET power hour, else the nearest upcoming one. */
 export async function getPowerHour(): Promise<PowerHour | null> {
-  const rows = await fetchView("power_hour_public?select=*&order=date_et.desc&limit=1");
-  return rows[0] ? mapPowerHour(rows[0]) : null;
+  const nowMs = Date.now();
+  const from = new Date(nowMs - 2 * 86_400_000).toISOString().slice(0, 10);
+  const rows = await fetchView(`power_hour_public?select=*&date_et=gte.${from}&order=date_et.asc&limit=14`);
+  return pickPowerHour(rows.map(mapPowerHour), nowMs);
 }
 
 export async function getCompetition(): Promise<CompetitionPublic | null> {
