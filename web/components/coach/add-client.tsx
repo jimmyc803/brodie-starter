@@ -19,14 +19,14 @@ export function AddClient({ token, base }: { token: string; base: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="w-full rounded-lg border border-dashed border-zinc-700 px-3 py-2 text-sm text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+        className="w-full rounded-lg border border-dashed border-line-strong px-3 py-2 text-sm text-ink-2 transition-colors hover:border-ink/40 hover:text-ink"
       >
         + Add client
       </button>
     );
   return (
-    <form action={action} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-      <label htmlFor="new-client" className="text-xs text-zinc-400">
+    <form action={action} className="rounded-lg border border-line bg-canvas p-3">
+      <label htmlFor="new-client" className="text-xs text-ink-2">
         Client name
       </label>
       <input
@@ -37,18 +37,18 @@ export function AddClient({ token, base }: { token: string; base: string }) {
         autoFocus
         autoComplete="off"
         placeholder="e.g. Alex Kim"
-        className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-500 focus:outline-none"
+        className="mt-1 w-full rounded-md border border-line-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-3 focus:border-ink/40 focus:outline-none"
       />
       <div className="mt-2 flex gap-2">
-        <button disabled={pending} className="rounded-full bg-zinc-50 px-4 py-1.5 text-sm font-medium text-zinc-950 disabled:opacity-50">
+        <button disabled={pending} className="rounded-full bg-ink px-4 py-1.5 text-sm font-medium text-canvas disabled:opacity-50">
           {pending ? "Adding…" : "Add"}
         </button>
-        <button type="button" onClick={() => setOpen(false)} className="px-2 text-sm text-zinc-400 hover:text-zinc-200">
+        <button type="button" onClick={() => setOpen(false)} className="px-2 text-sm text-ink-2 hover:text-ink">
           Cancel
         </button>
       </div>
       {state.message && !state.ok ? (
-        <p role="alert" className="mt-2 text-xs text-red-300">
+        <p role="alert" className="mt-2 text-xs text-bad">
           {state.message}
         </p>
       ) : null}

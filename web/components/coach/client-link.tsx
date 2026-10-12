@@ -24,16 +24,16 @@ export function ClientLink({ code, name, coachName }: { code: string; name: stri
     else window.location.href = `sms:?&body=${encodeURIComponent(message)}`;
   }
   return (
-    <div className="rounded-xl bg-zinc-950/40 px-4 py-3">
-      <p className="text-xs text-zinc-500">Workout link · {name.split(" ")[0]} opens this to train with Brodie</p>
+    <div className="rounded-[10px] bg-canvas px-4 py-3">
+      <p className="text-xs text-ink-3">Workout link · {name.split(" ")[0]} opens this to train with Brodie</p>
       <div className="mt-1.5 flex flex-wrap items-center gap-2">
-        <code className="min-w-0 flex-1 truncate rounded-md bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300" title={url}>
+        <code className="min-w-0 flex-1 truncate rounded-md bg-surface px-2 py-1.5 text-xs text-ink-2" title={url}>
           {url}
         </code>
-        <button type="button" onClick={copy} className="rounded-full bg-zinc-50 px-3 py-1.5 text-xs font-medium text-zinc-950">
+        <button type="button" onClick={copy} className="rounded-full bg-ink px-3 py-1.5 text-xs font-medium text-canvas">
           {copied ? "Copied" : "Copy"}
         </button>
-        <button type="button" onClick={share} className="rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100">
+        <button type="button" onClick={share} className="rounded-full border border-line-strong px-3 py-1.5 text-xs font-medium text-ink">
           Text it
         </button>
       </div>

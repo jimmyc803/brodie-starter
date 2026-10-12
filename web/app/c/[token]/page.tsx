@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 // Unknown tokens get a real 404 from web/proxy.ts before rendering; notFound() here is the streamed fallback.
 export default function CoachHomePage({ params, searchParams }: PageProps<"/c/[token]">) {
   return (
-    <main className="flex flex-1 flex-col bg-zinc-950 font-[family-name:var(--font-geist-sans)] text-zinc-100">
+    <main className="flex flex-1 flex-col bg-canvas font-[family-name:var(--font-geist-sans)] text-ink">
       <Suspense fallback={<div className="min-h-dvh" />}>
         <Home params={params} searchParams={searchParams} />
       </Suspense>
