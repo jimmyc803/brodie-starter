@@ -88,7 +88,8 @@ def test_migration_applies_twice_without_duplicate_seed(pg_cluster, db):
                 "power_multiplier", "rank_drop_min", "rank_drop_throttle_h", "quiet_hours", "recap_hour",
                 "streak_risk_hour", "raffle_min_valid_reps", "raffle_prize", "avatar_level_thresholds",
                 "judge_thresholds", "registration_open", "competition_frozen", "swearing", "site_url",
-                "brodie_number", "team_alert_handles", "challenge_coach_id", "outbound_rate_per_min"} == keys
+                "brodie_number", "team_alert_handles", "challenge_coach_id", "outbound_rate_per_min",
+                "ufc_fighter", "first_prize"} == keys
         assert c.execute("select value from competition_config where key='daily_call_cap'").fetchone()[0] == 5
         assert c.execute("select ch_cfg('window_start') #>> '{}'").fetchone()[0] == "2026-10-12T20:00:00-04:00"
 
