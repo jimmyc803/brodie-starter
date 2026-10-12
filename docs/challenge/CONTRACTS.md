@@ -126,7 +126,7 @@ Line/queue mutations lock rows `select … for update` (line_state rows, then th
   `ch_admin_ban(p_user_id, p_reason, p_actor)`, `ch_admin_unban(p_user_id, p_reason, p_actor)`, `ch_admin_queue_remove(p_queue_id, p_reason, p_actor)`.
 - Outbox: `ch_outbox_enqueue(p_handle, p_user_id, p_template, p_body, p_media_url, p_dedupe_key, p_not_before, p_now)` → `{id, duplicate bool}` (dedupe_key unique; duplicate = no new row);
   `ch_outbox_claim(p_limit int, p_now)` → rows (status queued & not_before ≤ now → sending, attempts+1; `for update skip locked`);
-  `ch_outbox_mark(p_id bigint, p_status text, p_provider_message_id text, p_error text, p_retry_at timestamptz)`;
+  `ch_outbox_mark(p_id bigint, p_status text, p_provider_message_id text, p_error text, p_retry_at timestamptz, p_attempt int default null)` — pass the `attempts` from claim; a stale attempt returns {ok:false,reason:"stale"} (C7 fence);
   `ch_inbound_record(p_provider_message_id, p_handle, p_body, p_now)` → `{id, duplicate bool}`.
 - `ch_heartbeat(p_component text, p_detail jsonb, p_now)`.
 
