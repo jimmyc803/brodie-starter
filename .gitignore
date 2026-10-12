@@ -24,3 +24,8 @@ models/
 
 # Downloaded licensed starter archives
 *.tgz
+
+# judge_eval (team-recorded clips never leave the machine)
+judge_eval/clips/
+judge_eval/labels.yaml
+judge_eval/results/

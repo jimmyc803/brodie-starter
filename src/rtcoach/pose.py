@@ -27,6 +27,8 @@ PERSON_VIS=0.5
 TRACK_MAX_D=0.25
 DUP_GROW=0.2
 DUP_DIST=0.5
+PERSON_PRES=0.5       # 2nd-person floor: mean presence over the torso landmarks of a non-primary pose
+PERSON_MIN_LMS=10     # 2nd-person floor: landmarks with visibility >= PERSON_VIS (judge min_conf) in a non-primary pose
 def _box(a):
     """Landmark bbox (x0,y0,x1,y1), clipped to the image, over the landmarks with visibility >= PERSON_VIS (all if < 4 are)."""
     m=a[:,3]>=PERSON_VIS; xy=np.clip(a[m if int(m.sum())>=4 else slice(None),:2].astype(float),0.0,1.0)
@@ -44,13 +46,20 @@ def is_duplicate(a, b):
     if int(m.sum())<4: m=np.ones(len(a),bool)
     d=float(np.mean(np.linalg.norm(a[m,:2].astype(float)-b[m,:2].astype(float),axis=1)))
     return d<DUP_DIST*max(_diag(ba),_diag(bb),1e-9)
+def passes_floor(a):
+    """2nd-person floor (non-primary poses only): mean torso presence >= PERSON_PRES AND >= PERSON_MIN_LMS landmarks with
+    visibility >= PERSON_VIS. A low-confidence fragment is not a person."""
+    pres=float(np.nanmean(a[list(TORSO),4])) if a.shape[1]>=5 else 1.0
+    return pres>=PERSON_PRES and int((a[:,3]>=PERSON_VIS).sum())>=PERSON_MIN_LMS
 def count_persons(poses, primary=0):
     """poses: list of (33,>=4) image-landmark arrays -> people in frame: poses with mean torso visibility >= PERSON_VIS that
-    are not a duplicate (is_duplicate) of one already counted. The primary is considered first."""
+    are not a duplicate (is_duplicate) of one already counted and (non-primary poses) pass the floor (passes_floor).
+    The primary is considered first and is exempt from the floor (its own quality is the judge's not_in_frame gate)."""
     order=[primary]+[k for k in range(len(poses)) if k!=primary]; kept=[]
     for k in order:
         a=poses[k]
         if float(np.nanmean(a[list(TORSO),3]))<PERSON_VIS: continue
+        if k!=primary and not passes_floor(a): continue
         if any(is_duplicate(q,a) for q in kept): continue
         kept.append(a)
     return len(kept)

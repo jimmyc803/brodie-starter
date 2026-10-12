@@ -1,0 +1,22 @@
+# judge_eval/labels.yaml schema (copy to judge_eval/labels.yaml; clips live in judge_eval/clips/, both gitignored).
+#   clip              file name inside --clips-dir
+#   category          clean | knees | half | sag | pike | no_lockout | fast_sloppy | partial_frame | two_people |
+#                     replay | bad_light | off_angle     (SHIP GATE cheat set: knees half sag pike no_lockout replay two_people)
+#   camera            free text: "side-left", "side-right", "front", "laptop-replay", ...
+#   expected_valid    int, reps a human would accept (0 for every cheat clip)
+#   expected_rejected {reason: n}   reps a human would reject, by judge reason (multiple_people, not_in_frame, knees_down,
+#                     hips_sag, hips_pike, too_shallow, no_lockout, too_fast, not_horizontal, classifier:<label>); optional
+clips:
+  - clip: clean_alex_side.mp4
+    category: clean
+    camera: side-left
+    expected_valid: 10
+  - clip: knees_sam_side.mp4
+    category: knees
+    camera: side-right
+    expected_valid: 0
+    expected_rejected: {knees_down: 8}
+  - clip: laptop_replay.mp4
+    category: replay
+    camera: laptop-replay
+    expected_valid: 0
