@@ -6,7 +6,7 @@ from hypothesis import given, strategies as st
 
 from challenge import scoring as sc
 from challenge.config import DEFAULTS, Config
-from challenge.store import SupaStore, StoreError, store_from_env
+from challenge.store import Json, SupaStore, StoreError, store_from_env
 from challenge.timeutil import (ET, et_day, et_midnight_after, in_quiet_hours, next_quiet_end, parse_ts)
 
 UTC = timezone.utc
@@ -230,3 +230,59 @@ def test_store_from_env(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL")
     with pytest.raises(StoreError):
         store_from_env()
+
+
+def test_reasons_independent_of_valid():
+    f = lambda at, valid, **kw: sc.rep_points(at, valid, False, kw.pop("lf", False), WEND, None, 2, **kw)
+    for v in (True, False):
+        assert f("2026-10-19T04:00:00Z", v)[3] == "after_freeze"
+        assert f("2026-10-14T16:00:00Z", v, lf=True)[3] == "liveness_fail"
+        assert f("2026-10-12T23:59:59Z", v, window_start="2026-10-13T00:00:00Z")[3] == "before_start"
+        assert f("2026-10-14T16:03:01Z", v, count_end_at="2026-10-14T16:03:00Z")[3] == "after_count"
+        assert f("2026-10-14T16:03:01Z", v, count_end_at="2026-10-14T16:03:00Z")[0] is False
+    assert f("2026-10-14T16:03:00Z", True, count_end_at="2026-10-14T16:03:00Z")[3] == "after_count"
+    ok = f("2026-10-14T16:02:59Z", True, window_start="2026-10-13T00:00:00Z", count_end_at="2026-10-14T16:03:00Z")
+    assert ok == (True, 1, 1, None)
+    assert f("2026-10-13T00:00:00Z", True, window_start="2026-10-13T00:00:00Z")[0] is True
+
+
+def test_rank_order_negative_totals():
+    rows = [
+        {"id": "n5", "points": -5, "reached_at": "2026-10-13T00:00:00Z", "joined_at": "2026-10-12T00:00:00Z"},
+        {"id": "n1", "points": -1, "reached_at": "2026-10-14T00:00:00Z", "joined_at": "2026-10-12T00:00:00Z"},
+        {"id": "p2", "points": 2, "reached_at": "2026-10-14T00:00:00Z", "joined_at": "2026-10-12T00:00:00Z"},
+        {"id": "z", "points": 0, "joined_at": "2026-10-12T00:00:00Z"},
+    ]
+    assert [r["id"] for r in sc.rank_order(rows)] == ["p2", "n1", "n5", "z"]
+
+
+def test_pgstore_wraps_jsonb(monkeypatch):
+    import psycopg
+    from psycopg.types.json import Jsonb
+    from challenge.store import PgStore
+    captured = {}
+
+    class Conn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, sql, params):
+            captured["sql"], captured["params"] = sql, params
+            class C:
+                def fetchone(self): return ({"ok": True},)
+            return C()
+
+    monkeypatch.setattr(psycopg, "connect", lambda dsn, autocommit: Conn())
+    out = PgStore("x").rpc("ch_config_set", {"p_key": "k", "p_value": Json(5), "p_list": [1], "p_obj": {"a": 1}, "p_actor": "a"})
+    assert out == {"ok": True}
+    p = captured["params"]
+    assert isinstance(p["p_value"], Jsonb) and isinstance(p["p_list"], Jsonb) and isinstance(p["p_obj"], Jsonb)
+    assert p["p_key"] == "k" and p["p_actor"] == "a"
+    assert "p_value => %(p_value)s" in captured["sql"]
+
+
+def test_supastore_unwraps_json_marker():
+    seen = {}
+    def h(req):
+        seen["b"] = req.read(); return httpx.Response(200, json=None)
+    SupaStore("https://x", "K", transport=httpx.MockTransport(h)).rpc("ch_config_set", {"p_value": Json(5), "p_s": Json("hi")})
+    assert seen["b"] == b'{"p_value":5,"p_s":"hi"}'

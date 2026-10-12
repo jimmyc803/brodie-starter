@@ -20,7 +20,23 @@ class Store(Protocol):
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 
+class Json:
+    """Explicit jsonb marker. Callers pass Json(x) for jsonb params whose value is a scalar
+    (e.g. ch_config_set.p_value = Json(5)); dicts/lists are always sent as jsonb."""
+
+    def __init__(self, value: Any):
+        self.value = value
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, Json) and other.value == self.value
+
+    def __repr__(self) -> str:
+        return f"Json({self.value!r})"
+
+
 def _jsonable(v: Any) -> Any:
+    if isinstance(v, Json):
+        return _jsonable(v.value)
     if isinstance(v, (datetime, date)):
         return v.isoformat()
     if isinstance(v, dict):
@@ -43,7 +59,7 @@ class PgStore:
         args = args or {}
         if not _IDENT.match(fn) or not all(_IDENT.match(k) for k in args):
             raise StoreError(f"bad rpc identifier: {fn}")
-        params = {k: Jsonb(_jsonable(v)) if isinstance(v, (dict, list)) else v for k, v in args.items()}
+        params = {k: Jsonb(_jsonable(v)) if isinstance(v, (dict, list, tuple, Json)) else v for k, v in args.items()}
         sql = f"select {fn}({', '.join(f'{k} => %({k})s' for k in args)}) as r"
         try:
             with psycopg.connect(self.dsn, autocommit=True) as conn:

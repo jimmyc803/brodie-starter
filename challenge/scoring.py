@@ -9,21 +9,29 @@ from challenge.timeutil import parse_ts
 
 
 def rep_points(at, valid: bool, in_challenge: bool, liveness_fail: bool, window_end,
-               power_hour: tuple | None, mult: int) -> tuple[bool, int, int, str | None]:
-    """-> (valid_final, multiplier, points, extra_reason). Power hour is [start, end): a rep at ends_at is 1x."""
+               power_hour: tuple | None, mult: int, window_start=None, count_end_at=None
+               ) -> tuple[bool, int, int, str | None]:
+    """-> (valid_final, multiplier, points, extra_reason).
+
+    Power hour is [start, end): a rep at ends_at is 1x. extra_reason is computed independently of the
+    incoming `valid` flag, priority after_freeze > before_start > after_count > liveness_fail.
+    A rep is after_count when at >= count_end_at (half-open, like window_end)."""
     at_u = parse_ts(at)
     multiplier = 1
     if power_hour is not None:
         start, end = parse_ts(power_hour[0]), parse_ts(power_hour[1])
         if start <= at_u < end:
             multiplier = mult
-    after_freeze = not (at_u < parse_ts(window_end))
     extra = None
-    if valid and after_freeze:
+    if not at_u < parse_ts(window_end):
         extra = "after_freeze"
-    elif valid and liveness_fail:
+    elif window_start is not None and at_u < parse_ts(window_start):
+        extra = "before_start"
+    elif count_end_at is not None and not at_u < parse_ts(count_end_at):
+        extra = "after_count"
+    elif liveness_fail:
         extra = "liveness_fail"
-    valid_final = bool(valid) and not after_freeze and not in_challenge and not liveness_fail
+    valid_final = bool(valid) and not in_challenge and extra is None
     return valid_final, multiplier, (multiplier if valid_final else 0), extra
 
 
@@ -55,12 +63,12 @@ def _far(v):
 
 
 def rank_order(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Points desc, then reached_at asc, then joined_at asc. Zero-point users come after (stable on joined_at)."""
+    """Points desc (negatives included), then reached_at asc, then joined_at asc. Users with no
+    points-earning activity (zero points and no reached_at) are listed after everyone else."""
     def key(r):
         pts = r.get("points") or 0
-        if pts <= 0:
-            return (1, 0, _MAX, _far(r.get("joined_at")))
-        return (0, -pts, _far(r.get("reached_at")), _far(r.get("joined_at")))
+        idle = pts == 0 and r.get("reached_at") is None
+        return (1 if idle else 0, -pts, _far(r.get("reached_at")), _far(r.get("joined_at")))
     return sorted(rows, key=key)
 
 
