@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 JUDGE_VERSION = "j1"
 DEFAULT_THRESHOLDS: dict[str, Any] = {
-    "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 160, "knee_floor_margin": 0.04,
+    "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 160, "knee_floor_margin": 0.02,
     "hip_line_max_dev_deg": 15, "depth_elbow_max_deg": 90, "depth_margin": 0.05, "lockout_min_deg": 160,
     "min_rep_s": 0.8, "max_cadence_rpm": 60,
     "classifier_veto": ["pushups - shallow", "pushups - insufficient", "pushups - elevated hips"],

@@ -3,9 +3,10 @@
 Model: a 2D sagittal body (metres; X toward the head, Z up from the floor) with rigid segments. In a plank the body is
 a straight line pivoting on the ankle (toes on the floor; on the knee when knees_down) and the shoulder is placed where
 that line meets the arm reach for the current elbow angle; hands stay fixed on the floor where the forearm is
-vertical at the bottom of the rep. The elbow points toward the
-feet. hip_offset (m) pushes the hip perpendicular to the shoulder-pivot line: + toward the floor (sag; limited so the hip joint
-stays >= HIP_MIN_Z above the floor, as a pelvis cannot pass through it), - away (pike). The elbow angle follows a raised-cosine cycle lockout -> depth -> lockout per rep after a lead-in hold at lockout.
+vertical at the bottom of the rep. The elbow points toward the feet. hip_offset (m) pushes the hip perpendicular to
+the shoulder-pivot line: + toward the floor (sag; limited so the hip joint stays >= HIP_MIN_Z above the floor, as a
+pelvis cannot pass through it), - away (pike). Each rep: raised-cosine descent lockout -> depth, an optional pause of
+bottom_hold_s at depth, raised-cosine ascent back to lockout; a lead-in hold at lockout precedes the first rep.
 
 Projection: a phone on the floor to the side (landscape). P_height_units = (cx + dir * X * scale, floor_y - Z * scale);
 normalised x = P_x / aspect. side='left' shows the left body side (head toward image left); far-side landmarks sit
@@ -100,9 +101,12 @@ def _wrist_for(B: dict, knees_down: bool, depth: float) -> np.ndarray:
 def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bool = False, hip_offset: float = 0.0,
                   n_reps: int = 5, rep_s: float = 2.0, noise: float = 0.0, extra_person: bool = False,
                   occlude_lower_body: bool = False, side: str = "left", body: str = "average", fps: float = 10.0,
-                  lead_in_s: float = 1.0, tail_s: float = 0.5, aspect: float = 16 / 9, seed: int = 0) -> SynthClip:
+                  lead_in_s: float = 1.0, tail_s: float = 0.5, aspect: float = 16 / 9, seed: int = 0,
+                  bottom_hold_s: float = 0.0) -> SynthClip:
     """Side-view plank push-up clip at `fps`. depth / lockout = elbow angle (deg) at the bottom / top of every rep.
     fire_times = the end of each rep cycle (back at the top), when a rep counter would fire."""
+    if not 0.0 <= bottom_hold_s < rep_s:
+        raise ValueError("bottom_hold_s must be in [0, rep_s)")
     if side not in ("left", "right"):
         raise ValueError(f"side must be 'left' or 'right', got {side!r}")
     B = BODIES[body]
@@ -122,8 +126,15 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
         if u <= 0 or u >= n_reps * rep_s:
             theta = lockout
         else:
-            ph = (u % rep_s) / rep_s
-            theta = lockout - (lockout - depth) * (1 - math.cos(2 * math.pi * ph)) / 2
+            v = u % rep_s
+            half = (rep_s - bottom_hold_s) / 2
+            if v < half:
+                k = (1 - math.cos(math.pi * v / half)) / 2
+            elif v < half + bottom_hold_s:
+                k = 1.0
+            else:
+                k = (1 + math.cos(math.pi * (v - half - bottom_hold_s) / half)) / 2
+            theta = lockout - (lockout - depth) * k
         poses.append((t, _pose(B, theta, knees_down, hip_offset, wrist)))
     xs = [p[k][0] for _, p in poses for k in p]
     xmid = (min(xs) + max(xs)) / 2
@@ -162,7 +173,8 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
                 img[idx, 4] = 0.3
         frames.append(FrameObs(t=t, img=img, world=world, persons=2 if extra_person else 1, aspect=aspect))
     meta = dict(depth=depth, lockout=lockout, knees_down=knees_down, hip_offset=hip_offset, n_reps=n_reps, rep_s=rep_s,
-                noise=noise, extra_person=extra_person, occlude_lower_body=occlude_lower_body, side=side, body=body,
+                noise=noise, bottom_hold_s=bottom_hold_s, extra_person=extra_person,
+                occlude_lower_body=occlude_lower_body, side=side, body=body,
                 fps=fps, seed=seed)
     return SynthClip(frames=frames, fire_times=fires, meta=meta)
 
