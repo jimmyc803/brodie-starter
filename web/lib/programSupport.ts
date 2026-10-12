@@ -24,6 +24,12 @@ export function parserFailureMessage(code: string): string {
   switch (code) {
     case 'INVALID_PDF': return 'This file could not be read as a PDF. Export a new PDF from the original program and upload it again.';
     case 'MISSING_KEY': return 'PDF reading is not configured for this workspace yet. Ask the Brodie team to enable the program parser, then retry. No program was saved.';
+    case 'PROVIDER_AUTH': return 'The PDF service rejected parser access. The Brodie team needs to check the parser API key and its permissions. No program was saved.';
+    case 'PROVIDER_QUOTA': return 'The PDF service has reached its request or quota limit. Retry later; if this continues, the Brodie team needs to check parser quota and billing. No program was saved.';
+    case 'PROVIDER_MODEL': return 'The configured PDF parser model is unavailable. The Brodie team needs to update the parser model configuration. No program was saved.';
+    case 'PROVIDER_REQUEST': return 'The PDF service rejected this request. Try exporting a new PDF; if it still fails, the Brodie team needs to check the parser request configuration. No program was saved.';
+    case 'PROVIDER_TIMEOUT': return 'PDF reading timed out. Retry with a shorter PDF or try again in a moment. No program was saved.';
+    case 'PROVIDER_NETWORK': return 'Brodie could not connect to the PDF service. Retry in a moment. No program was saved.';
     case 'INVALID_OUTPUT': return 'We could not read a complete training plan from this PDF. Check that days, exercise names, sets and reps are legible, or export a clearer PDF and retry. No program was saved.';
     default: return 'PDF reading is temporarily unavailable. Please retry in a moment. No program was saved.';
   }

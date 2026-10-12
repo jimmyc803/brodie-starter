@@ -7,7 +7,7 @@ export type ParsedProgram = { title: string; days: ProgramDay[] };
 export const MAX_PDF_BYTES = 10 * 1024 * 1024;
 
 export class ProgramParseError extends Error {
-  code: 'INVALID_PDF' | 'MISSING_KEY' | 'PROVIDER_ERROR' | 'INVALID_OUTPUT';
+  code: 'INVALID_PDF' | 'MISSING_KEY' | 'PROVIDER_ERROR' | 'INVALID_OUTPUT' | 'PROVIDER_AUTH' | 'PROVIDER_QUOTA' | 'PROVIDER_MODEL' | 'PROVIDER_REQUEST' | 'PROVIDER_TIMEOUT' | 'PROVIDER_NETWORK';
   constructor(message: string, code: ProgramParseError['code']) {
     super(message);
     this.name = 'ProgramParseError';
@@ -90,7 +90,7 @@ export async function parseProgram(pdf: Buffer | Uint8Array): Promise<ParsedProg
   const apiKey = process.env.GEMINI_PARSER_API_KEY?.trim();
   if (!apiKey) throw new ProgramParseError('GEMINI_PARSER_API_KEY is not configured.', 'MISSING_KEY');
   const model = process.env.GEMINI_PARSER_MODEL?.trim() || 'gemini-2.5-flash';
-  if (!/^[a-zA-Z0-9._-]+$/.test(model)) throw new ProgramParseError('Invalid parser model configuration.', 'PROVIDER_ERROR');
+  if (!/^[a-zA-Z0-9._-]+$/.test(model)) throw new ProgramParseError('Invalid parser model configuration.', 'PROVIDER_MODEL');
   let response: Response;
   try {
     response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
@@ -105,11 +105,19 @@ export async function parseProgram(pdf: Buffer | Uint8Array): Promise<ParsedProg
         generationConfig: { responseMimeType: 'application/json', responseJsonSchema: schema, temperature: 0, maxOutputTokens: 16384 },
       }),
     });
-  } catch {
-    throw new ProgramParseError('Gemini request failed or timed out. Please retry.', 'PROVIDER_ERROR');
+  } catch (error) {
+    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+    throw new ProgramParseError('Gemini request failed or timed out. Please retry.', timedOut ? 'PROVIDER_TIMEOUT' : 'PROVIDER_NETWORK');
   }
   // Do not forward provider messages; they can contain credentials or document content.
-  if (!response.ok) throw new ProgramParseError(`Gemini parser request failed (HTTP ${response.status}).`, 'PROVIDER_ERROR');
+  if (!response.ok) {
+    const code = response.status === 401 || response.status === 403 ? 'PROVIDER_AUTH'
+      : response.status === 429 ? 'PROVIDER_QUOTA'
+      : response.status === 404 ? 'PROVIDER_MODEL'
+      : response.status === 400 ? 'PROVIDER_REQUEST'
+      : 'PROVIDER_ERROR';
+    throw new ProgramParseError(`Gemini parser request failed (HTTP ${response.status}).`, code);
+  }
   let result: unknown;
   try { result = await response.json(); } catch { return fail('provider response is not JSON'); }
   const envelope = object(result, 'provider response');
