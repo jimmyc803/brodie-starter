@@ -12,14 +12,25 @@ import { supabaseServer } from "@/lib/supabase/server";
 
 // Coach dashboard data for /c/[token]: the coach, their clients, and each client's sessions as full session views
 // (newest first). Without Supabase env vars it serves the sample coach (Tristan) with the sample session.
+export type CoachStatus = "pending" | "approved" | "rejected";
 export type CoachView = {
-  coach: { name: string };
+  coach: { name: string; status: CoachStatus };
   clients: CoachClient[];
+  programs: number; // uploaded programs (for the getting-started checklist)
 };
 // next: the program day the client loads on their next call (their active assignment), if any.
-export type CoachClient = { id: string; name: string; sessions: SessionView[]; next: string | null };
+// link: the client's personal workout link code (/go/<link>), null for the built-in sample.
+// A pending coach (applied on /start, not yet approved) with no clients sees the sample session as "Demo client".
+export type CoachClient = { id: string; name: string; sessions: SessionView[]; next: string | null; link: string | null };
 
 const TOKEN_RE = /^[A-Za-z0-9_-]{4,80}$/;
+export const DEMO_CLIENT_ID = "sample-client";
+
+// The built-in sample session as a client (the sandbox for pending coaches, and the no-database fallback).
+function sampleClient(name: string): CoachClient {
+  const view = sampleSessionView();
+  return { id: DEMO_CLIENT_ID, name, sessions: [{ ...view, client: { name } }], next: view.day?.title ?? null, link: null };
+}
 const SESSIONS_PER_CLIENT = 10;
 
 export async function getCoachView(token: string): Promise<CoachView | null> {
@@ -27,20 +38,20 @@ export async function getCoachView(token: string): Promise<CoachView | null> {
   const isSample = token === "demo" || token === SAMPLE_COACH_TOKEN;
   const sample = (): CoachView => {
     const view = sampleSessionView();
-    return { coach: view.coach, clients: [{ id: "sample-client", name: view.client.name, sessions: [view], next: view.day?.title ?? null }] };
+    return { coach: { ...view.coach, status: "approved" }, programs: 1, clients: [sampleClient(view.client.name)] };
   };
   if (!hasSupabase()) return isSample ? sample() : null;
 
   // "demo" opens the seeded demo coach (Tristan) with his real sessions; the sample is the fallback if he is not seeded.
   const db = supabaseServer();
   const lookup = token === "demo" ? SAMPLE_COACH_TOKEN : token;
-  const { data: coach, error } = await db.from("coaches").select("id, name").eq("share_token", lookup).maybeSingle();
+  const { data: coach, error } = await db.from("coaches").select("id, name, status").eq("share_token", lookup).maybeSingle();
   if (error) throw new Error(`coaches lookup failed: ${error.message}`);
   if (!coach) return isSample ? sample() : null;
 
   const { data: clients, error: cErr } = await db
     .from("clients")
-    .select("id, name")
+    .select("id, name, share_token")
     .eq("coach_id", coach.id)
     .order("created_at", { ascending: true });
   if (cErr) throw new Error(`clients lookup failed: ${cErr.message}`);
@@ -73,8 +84,12 @@ export async function getCoachView(token: string): Promise<CoachView | null> {
       );
       const day = (active?.[0] as { program_days?: { title?: string; day_number?: number } | null } | undefined)?.program_days;
       const next = day?.title ? (day.title.startsWith("Day") ? day.title : `Day ${day.day_number}: ${day.title}`) : null;
-      return { id: c.id as string, name: c.name as string, sessions, next };
+      return { id: c.id as string, name: c.name as string, sessions, next, link: (c.share_token as string | null) ?? null };
     }),
   );
-  return { coach: { name: coach.name }, clients: out };
+  const { count: programs } = await db.from("programs").select("id", { count: "exact", head: true }).eq("coach_id", coach.id);
+  const status = (coach.status ?? "approved") as CoachStatus;
+  // Sandbox: until approved, a coach without clients explores with the sample session as a demo client.
+  const clientsOut = status !== "approved" && out.length === 0 ? [sampleClient("Demo client")] : out;
+  return { coach: { name: coach.name, status }, clients: clientsOut, programs: programs ?? 0 };
 }
