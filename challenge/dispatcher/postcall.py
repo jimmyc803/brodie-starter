@@ -1,12 +1,13 @@
-"""Post-call processing (SPEC §4 step 8): result text + rank-drop texts via an injected Outbox."""
+"""Post-call processing (SPEC §4 step 8). Intents are written by the DB function ch_postcall.
+
+Outbox/StoreOutbox remain the injectable interface for non-transactional senders (jobs, commands)."""
 from __future__ import annotations
 
 import logging
 from datetime import datetime
 from typing import Any, Callable, Protocol
 
-from challenge.config import Config
-from challenge.store import Store, StoreError
+from challenge.store import Store
 
 logger = logging.getLogger("challenge.dispatcher")
 
@@ -35,39 +36,8 @@ class StoreOutbox:
             "p_now": self.clock(), "p_ctx": ctx})
 
 
-def process(call_id: str, *, store: Store, outbox: Outbox, config: Config, clock: Callable[[], datetime],
-            card_delivery: str, commit: dict, reps: list[dict], mode: str) -> dict:
-    """Run after ch_commit_reps succeeded. Safe to repeat: post_call is dedupe-keyed; rank deltas
-    are consumed by the DB (rank_state), so they run only on the first (not `already`) commit."""
-    now = clock()
-    # Idempotent replay of ch_call_start returns the stored decision (and user_id) for this call.
-    started = store.rpc("ch_call_start", {"p_call_id": call_id, "p_line_id": None, "p_handle": None,
-                                          "p_mode": mode, "p_now": now})
-    user_id = (started or {}).get("user_id")
-    if not user_id:
-        return {"post_call": False, "rank_drops": 0}
-    st = store.rpc("ch_user_status", {"p_user_id": user_id, "p_now": now}) or {}
-    site = str(config.get("site_url")).rstrip("/")
-    url = f"{site}/r/{call_id}"
-    valid = int(commit.get("valid_reps") or 0)
-    ctx: dict[str, Any] = {
-        "valid_reps": valid, "rejected_reps": max(len(reps) - valid, 0),
-        "points_earned": commit.get("points") or 0, "points": st.get("points", 0),
-        "rank": st.get("rank") if st.get("rank") is not None else "-", "streak": st.get("streak", 0),
-        "result_url": url, "call_id": call_id}
-    if card_delivery == "attachment":
-        ctx["media_url"] = f"{url}/card.png"
-    outbox.enqueue(user_id=user_id, template="post_call", ctx=ctx, dedupe_key=f"post_call:{call_id}", proactive=True)
-    drops = 0
-    if not commit.get("already"):
-        for d in store.rpc("ch_rank_deltas", {"p_now": now}) or []:
-            if d.get("throttled"):
-                continue
-            gap = (d.get("ahead_points") or 0) - (d.get("points") or 0)
-            outbox.enqueue(user_id=d["user_id"], template="rank_drop", proactive=True,
-                           dedupe_key=f"rank_drop:{call_id}:{d['user_id']}",
-                           ctx={"old_rank": d["old_rank"], "rank": d["new_rank"], "next_rank": d["new_rank"] - 1,
-                                "points_gap": max(gap, 0), "points": d.get("points"),
-                                "ahead_display_name": d.get("ahead_display_name")})
-            drops += 1
-    return {"post_call": True, "rank_drops": drops}
+def process(call_id: str, *, store: Store, clock: Callable[[], datetime], card_delivery: str) -> dict:
+    """Post-call work (SPEC §4 step 8) runs entirely inside ch_postcall: one transaction writes the
+    post_call intent, the unthrottled rank_drop intents and calls.postcall_done_at. Idempotent. If it
+    fails nothing is written and ch_postcall_pending lets the jobs loop retry it."""
+    return store.rpc("ch_postcall", {"p_call_id": call_id, "p_now": clock(), "p_card_delivery": card_delivery})

@@ -33,7 +33,7 @@ class FakeOutbox:
 
 @pytest.fixture
 def env(db, conn):
-    conn.execute("truncate clients, calls, messages, audit_log, power_hours, join_pending restart identity cascade")
+    conn.execute("truncate clients, calls, messages, audit_log, power_hours, join_pending, ch_event_log restart identity cascade")
     conn.execute("update line_state set state='idle', user_id=null, call_id=null, claimed_until=null,"
                  " offline_until=null, in_call_since=null, version=0, updated_at=now()")
     now = {"t": T0}
@@ -63,6 +63,11 @@ def rep(n, at, valid=True):
     return {"n": n, "t": float(n), "at": at, "valid": valid, "reject_reasons": [] if valid else ["shallow"],
             "faults": [], "in_challenge": False, "min_elbow_deg_l": 80.5, "classifier_labels": ["pushups - correct"],
             "persons_in_frame": 1, "torso_ok": True, "side": "left"}
+
+
+def msgs(conn, template):
+    return conn.execute("select user_id::text, ctx, media_url, dedupe_key from messages where template=%s order by id",
+                        (template,)).fetchall()
 
 
 def commit_ev(call_id, key="k-commit"):
@@ -118,20 +123,22 @@ def test_end_and_commit_idempotent_with_postcall(env):
     end = {"kind": "call_ended", "call_id": "c-1", "idem_key": "k-end", "at": now["t"].isoformat(),
            "payload": {"ended_at": (T0 + timedelta(seconds=195)).isoformat(),
                        "count_end_at": (T0 + timedelta(seconds=180)).isoformat(), "rep_count": 2}}
-    assert c.post("/calls/event", headers=H, json={"kind": "call_started", "call_id": "c-1", "idem_key": "k0"}).json() == {"ok": True}
+    assert c.post("/calls/event", headers=H, json={"kind": "call_started", "call_id": "c-1", "idem_key": "k0"}).json() == {"ok": True, "duplicate": False}
     assert c.post("/calls/event", headers=H, json=end).json()["ok"] is True
     assert c.post("/calls/event", headers=H, json=end).json()["ok"] is True
     r1 = c.post("/calls/event", headers=H, json=commit_ev("c-1")).json()
     r2 = c.post("/calls/event", headers=H, json=commit_ev("c-1")).json()
-    assert r1["ok"] and r1["already"] is False and r2["ok"] and r2["already"] is True
+    assert r1["ok"] and r1["already"] is False and r2["ok"] and r2["duplicate"] is True
     assert conn.execute("select count(*) from sessions where client_id=%s", (uid,)).fetchone()[0] == 1
     assert conn.execute("select count(*) from reps r join sets s on s.id=r.set_id join sessions x on x.id=s.session_id"
                         " where x.client_id=%s", (uid,)).fetchone()[0] == 3
-    pc = [s for s in ob.sent if s["template"] == "post_call"]
-    assert len(pc) == 1 and pc[0]["user_id"] == uid and pc[0]["proactive"] is True
-    ctx = pc[0]["ctx"]
+    pc = msgs(conn, "post_call")
+    assert len(pc) == 1 and pc[0][0] == uid and pc[0][3] == "post_call:c-1"
+    assert r1["postcall"]["ok"] and r2["postcall"]["already"] is True
+    assert conn.execute("select postcall_done_at is not null from calls where id='c-1'").fetchone()[0]
+    ctx = pc[0][1]
     assert ctx["valid_reps"] == 2 and ctx["rejected_reps"] == 1 and ctx["result_url"].endswith("/r/c-1")
-    assert "media_url" not in ctx  # CARD_DELIVERY=link
+    assert "media_url" not in ctx and pc[0][2] is None  # CARD_DELIVERY=link
     # rendering the stored ctx must work with the real template
     from challenge.messaging.templates import render
     assert "Work logged" in render("post_call", ctx, False)
@@ -163,16 +170,17 @@ def test_rank_drop_text_only_unthrottled(env):
     # a overtakes b with more reps
     ev = commit_ev("ra", "k-ra")
     r = c.post("/calls/event", headers=H, json=ev).json()
-    assert r["ok"] and r["postcall"]["post_call"] is True
-    drops = [s for s in ob.sent if s["template"] == "rank_drop"]
-    assert [d["user_id"] for d in drops] == [b] and drops[0]["ctx"]["old_rank"] == 1 and drops[0]["ctx"]["rank"] == 2
-    # replay: DB already consumed deltas; no new drop texts
-    c.post("/calls/event", headers=H, json=ev)
-    assert len([s for s in ob.sent if s["template"] == "rank_drop"]) == 1
+    assert r["ok"] and r["postcall"]["ok"] is True
+    drops = [d for d in msgs(conn, "rank_drop") if d[3].endswith(":ra")]  # a's call overtook b
+    assert [d[0] for d in drops] == [b] and drops[0][1]["old_rank"] == 1 and drops[0][1]["rank"] == 2
+    # replay (new idem_key): DB already consumed deltas; no new drop texts
+    total = len(msgs(conn, "rank_drop"))
+    c.post("/calls/event", headers=H, json=commit_ev("ra", "k-ra-2"))
+    assert len(msgs(conn, "rank_drop")) == total
 
 
 def test_attachment_mode_sets_media_url(db, conn):
-    conn.execute("truncate clients, calls, messages, audit_log, power_hours, join_pending restart identity cascade")
+    conn.execute("truncate clients, calls, messages, audit_log, power_hours, join_pending, ch_event_log restart identity cascade")
     conn.execute("update line_state set state='idle', user_id=null, call_id=null, claimed_until=null,"
                  " offline_until=null, in_call_since=null")
     ob = FakeOutbox()
@@ -182,7 +190,8 @@ def test_attachment_mode_sets_media_url(db, conn):
     uid, handle = mkuser(conn)
     assert start(c, "c-att", handle).json()["decision"] == "accept"
     assert c.post("/calls/event", headers=H, json=commit_ev("c-att")).json()["ok"]
-    assert ob.sent[0]["ctx"]["media_url"].endswith("/r/c-att/card.png")
+    row = msgs(conn, "post_call")[0]
+    assert row[1]["media_url"].endswith("/r/c-att/card.png") and row[2].endswith("/r/c-att/card.png")
 
 
 def test_store_outbox_writes_messages(env):
@@ -210,3 +219,52 @@ def test_flags_from_env_and_invalid():
     assert f.CARD_DELIVERY == "attachment" and f.LINE_OFFLINE_GAP_S == 60 and "CARD_DELIVERY" not in f.fallbacks()
     with pytest.raises(Exception):
         Flags.from_env({"HANGUP_MODE": "bogus"})
+
+
+def test_duplicate_idem_key_returns_stored_result(env):
+    c, conn, st, ob, now = env
+    uid, handle = mkuser(conn)
+    assert start(c, "c-idem", handle).json()["decision"] == "accept"
+    ev = commit_ev("c-idem", "same-key")
+    r1 = c.post("/calls/event", headers=H, json=ev).json()
+    assert r1["ok"] and r1["duplicate"] is False and r1["already"] is False
+    r2 = c.post("/calls/event", headers=H, json=ev).json()
+    assert r2["duplicate"] is True and r2["already"] is False  # stored result, effect not re-run
+    assert conn.execute("select count(*) from ch_event_log where idem_key='same-key'").fetchone()[0] == 1
+    # a different key for the same commit runs the RPC again and sees it is already committed
+    r3 = c.post("/calls/event", headers=H, json=commit_ev("c-idem", "other-key")).json()
+    assert r3["duplicate"] is False and r3["already"] is True
+
+
+def test_failed_effect_is_not_logged_and_can_retry(env):
+    c, conn, *_ = env
+    uid, handle = mkuser(conn)
+    ev = commit_ev("late", "late-key")
+    assert c.post("/calls/event", headers=H, json=ev).json()["ok"] is False
+    assert conn.execute("select count(*) from ch_event_log where idem_key='late-key'").fetchone()[0] == 0
+    assert start(c, "late", handle).json()["decision"] == "accept"
+    assert c.post("/calls/event", headers=H, json=ev).json()["ok"] is True
+
+
+def test_postcall_failure_leaves_pending(env):
+    c, conn, st, ob, now = env
+    uid, handle = mkuser(conn)
+    assert start(c, "c-pend", handle).json()["decision"] == "accept"
+    conn.execute("delete from client_handles where client_id=%s", (uid,))  # outbox cannot resolve a handle
+    j = c.post("/calls/event", headers=H, json=commit_ev("c-pend")).json()
+    assert j["ok"] is True and j["postcall"] == "pending"
+    assert conn.execute("select count(*) from messages").fetchone()[0] == 0
+    assert conn.execute("select postcall_done_at from calls where id='c-pend'").fetchone()[0] is None
+    pend = st.rpc("ch_postcall_pending", {"p_now": T0 + timedelta(hours=1), "p_limit": 10})
+    assert [p["call_id"] for p in pend] == ["c-pend"]
+
+
+def test_line_offline_gap_flag_applied(db, conn):
+    st = PgStore(db)
+    before = st.rpc("ch_config_get", {})["line_offline_gap_s"]
+    try:
+        create_app(st, FakeOutbox(), clock=lambda: T0, token="tok", flags=Flags(LINE_OFFLINE_GAP_S=77))
+        assert st.rpc("ch_config_get", {})["line_offline_gap_s"] == 77
+    finally:
+        st.rpc("ch_config_set", {"p_key": "line_offline_gap_s", "p_value": __import__("challenge.store", fromlist=["Json"]).Json(before),
+                                 "p_actor": "test", "p_reason": "restore"})

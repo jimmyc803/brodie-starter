@@ -1,8 +1,8 @@
 """Dispatcher HTTP API (CONTRACTS C4): worker-facing endpoints + health.
 
-Event idempotency: `idem_key` is accepted and logged, but dedupe is enforced by the DB, which is
-the source of truth: ch_call_start/ch_call_end/ch_commit_reps are idempotent per call_id, so a
-duplicate event has a single effect; post-call texts are dedupe-keyed in the outbox.
+Event idempotency: `idem_key` is recorded in ch_event_log by ch_event_run in the same transaction as the
+effect; a duplicate key returns the stored result without re-running it (the underlying RPCs are
+also idempotent per call_id). Post-call intents are written atomically by ch_postcall.
 """
 from __future__ import annotations
 
@@ -17,11 +17,10 @@ from typing import Any, Callable, Literal
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from challenge.config import Config
 from challenge.dispatcher import postcall
 from challenge.dispatcher.flags import Flags
 from challenge.dispatcher.postcall import Outbox, StoreOutbox
-from challenge.store import Store, StoreError, store_from_env
+from challenge.store import Json, Store, StoreError, store_from_env
 
 logger = logging.getLogger("challenge.dispatcher")
 
@@ -93,6 +92,13 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
             logger.error("store error: %s", e)
             raise HTTPException(503, "store unavailable") from e
 
+    if flags.LINE_OFFLINE_GAP_S is not None:  # C4: env overrides competition_config (audited write)
+        want = flags.LINE_OFFLINE_GAP_S
+        if get_store().rpc("ch_config_get", {}).get("line_offline_gap_s") != want:
+            get_store().rpc("ch_config_set", {"p_key": "line_offline_gap_s", "p_value": Json(want),
+                                              "p_actor": "dispatcher", "p_reason": "LINE_OFFLINE_GAP_S env flag"})
+            logger.warning("line_offline_gap_s set to %s from LINE_OFFLINE_GAP_S", want)
+
     @app.post("/calls/start", dependencies=[Depends(auth)])
     def calls_start(body: StartIn) -> dict:
         r = rpc("ch_call_start", {"p_call_id": body.call_id, "p_line_id": body.line_id,
@@ -101,26 +107,26 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
 
     @app.post("/calls/event", dependencies=[Depends(auth)])
     def calls_event(ev: EventIn) -> dict:
-        now, p = clock(), ev.payload
         logger.info("event %s call=%s idem=%s", ev.kind, ev.call_id, ev.idem_key)
-        if ev.kind == "call_started":
-            return {"ok": True}  # state change already done by /calls/start
-        if ev.kind == "call_ended":
-            r = rpc("ch_call_end", {"p_call_id": ev.call_id, "p_ended_at": p.get("ended_at"),
-                                    "p_count_end_at": p.get("count_end_at"), "p_rep_count": p.get("rep_count"),
-                                    "p_now": now})
-            return {"ok": bool(r.get("ok")), "reason": r.get("reason")}
-        r = rpc("ch_commit_reps", {"p_call_id": ev.call_id, "p_payload": p, "p_now": now})
+        # Effect + ch_event_log row in one DB transaction; a duplicate idem_key returns the stored result.
+        out = rpc("ch_event_run", {"p_idem_key": ev.idem_key, "p_call_id": ev.call_id, "p_kind": ev.kind,
+                                   "p_payload": ev.payload, "p_now": clock()})
+        r = out["result"]
+        resp: dict[str, Any] = {"ok": bool(r.get("ok")), "duplicate": bool(out["duplicate"])}
         if not r.get("ok"):
-            return {"ok": False, "reason": r.get("reason")}
-        try:
-            post = postcall.process(ev.call_id, store=get_store(), outbox=get_outbox(), config=Config(get_store()),
-                                    clock=clock, card_delivery=flags.CARD_DELIVERY, commit=r,
-                                    reps=p.get("reps") or [], mode=flags.CALLER_ID_SOURCE)
-        except Exception:  # commit is durable; the worker must not retry the commit because texting failed
-            logger.exception("postcall failed for %s", ev.call_id)
-            return {"ok": True, "already": bool(r.get("already")), "postcall": "failed"}
-        return {"ok": True, "already": bool(r.get("already")), "postcall": post}
+            resp["reason"] = r.get("reason")
+            return resp
+        if ev.kind == "call_ended":
+            resp["counted_toward_cap"] = r.get("counted_toward_cap")
+        if ev.kind == "reps_committed":
+            resp["already"] = bool(r.get("already"))
+            try:  # idempotent; also retried on duplicates so an earlier failure heals
+                resp["postcall"] = postcall.process(ev.call_id, store=get_store(), clock=clock,
+                                                    card_delivery=flags.CARD_DELIVERY)
+            except Exception:  # commit is durable; ch_postcall_pending lets the jobs loop recover this
+                logger.exception("postcall failed for %s; left pending", ev.call_id)
+                resp["postcall"] = "pending"
+        return resp
 
     @app.get("/health")
     def health() -> dict:
