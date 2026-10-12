@@ -807,14 +807,7 @@ export function ClientList({ clients, base, selectedId }: { clients: ClientSumma
 
 - [ ] **Step 6: Restyle `web/components/coach/dashboard.tsx`** (logic unchanged):
   - `STATUS_LABEL` classNames: review `bg-bad-soft text-bad`, on_track `bg-good-soft text-good`, inactive `bg-none-soft text-ink-2`.
-  - `SiteHeader context`: replace the Programs link with
-    ```tsx
-    <>
-      <span className="hidden text-ink-3 sm:inline">Coach {view.coach.name}</span>
-      <Link className="rounded-[10px] border border-line-strong px-3.5 py-2 text-sm font-semibold text-ink hover:bg-sunken" href={programsHref}>Programs</Link>
-      <Link className="rounded-[10px] bg-brand px-3.5 py-2 text-sm font-semibold text-on-brand hover:brightness-95" href={programsHref}>Upload program</Link>
-    </>
-    ```
+  - The dashboard now renders inside `CoachShell` (Task 7 restyles the shell); don't add a header here. If a `SiteHeader` is still rendered, remove it.
   - header: `h1` → `text-[28px] font-semibold tracking-[-0.025em] text-ink` with text `Clients`; the sub line `text-sm text-ink-2`; review count span `text-bad`.
   - empty states: `rounded-[14px] border border-dashed border-line-strong p-8 text-center text-ink-2`.
   - grid: `lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]`.
