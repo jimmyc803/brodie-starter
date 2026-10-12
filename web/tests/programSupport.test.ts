@@ -23,6 +23,12 @@ describe('exercise support discussion', () => {
     expect(parserFailureMessage('MISSING_KEY')).toContain('enable the program parser');
     expect(parserFailureMessage('INVALID_OUTPUT')).toContain('legible');
     expect(parserFailureMessage('INVALID_PDF')).toContain('Export a new PDF');
+    expect(parserFailureMessage('PROVIDER_AUTH')).toContain('API key and its permissions');
+    expect(parserFailureMessage('PROVIDER_QUOTA')).toContain('quota and billing');
+    expect(parserFailureMessage('PROVIDER_MODEL')).toContain('model configuration');
+    expect(parserFailureMessage('PROVIDER_REQUEST')).toContain('request configuration');
+    expect(parserFailureMessage('PROVIDER_TIMEOUT')).toContain('timed out');
+    expect(parserFailureMessage('PROVIDER_NETWORK')).toContain('could not connect');
     expect(parserFailureMessage('provider-secret')).not.toContain('provider-secret');
   });
 });
