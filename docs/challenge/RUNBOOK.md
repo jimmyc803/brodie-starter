@@ -75,8 +75,8 @@ sudo -u brodie -H bash -c 'cd /opt/brodie && chert login --device'
 
 Private repositories need a read-only deploy key configured for brodie before
 cloning. Bootstrap installs dependencies, clones `/opt/brodie`, fetches SSM into
-root-owned `/etc/brodie/env` mode 0600, installs units and CloudWatch agent, and
-enables services for boot. It deliberately leaves application startup to deploy
+root-owned `/etc/brodie/env` and filtered `/etc/brodie/backup-env` mode 0600,
+installs units and CloudWatch agent, and enables services for boot. It deliberately leaves application startup to deploy
 after login and migrations. Secrets must be single-line values; duplicate leaf
 names under the SSM prefix are rejected. Never source or print the env file;
 `infra/with-env.py` parses assignments without executing shell content.
@@ -93,29 +93,56 @@ The base `db/schema.sql` must already be installed in Supabase. Deploy then
 applies all `db/migrations/*.sql` in lexical order using psql ON_ERROR_STOP,
 a session advisory lock and `public.schema_migrations` checksums. Existing
 migrations are idempotent; previously applied files must never be edited.
-Deployment and rollback share a host lock. Deployment pauses services while
-syncing dependencies and applying migrations; schedule a maintenance window
-with no active calls. The integration branch must include the challenge package,
-reconciler and required dispatcher dependencies in requirements.txt.
+Deployment and rollback share a host lock. The checkout at `/opt/brodie` is
+only the Git source; deploy fetches its branch from origin without modifying it.
+Each SHA is exported to `/opt/brodie/releases/<sha>` with its own virtualenv.
+Dependency installation, dependency checks and migrations finish before stopping
+services. Migrations must therefore work with both the running and new code.
+The integration branch must include the challenge package, reconciler and
+required dispatcher dependencies in requirements.txt.
+
+Before stopping the worker or dispatcher, both scripts poll local `/health`
+until no lines are `in_call` or `claimed`. Unhealthy, unreachable or unrecognized
+health responses fail closed. `DEPLOY_HOLD_MAX_S` defaults to 300 seconds;
+timeout aborts without stopping services unless `--force` was supplied. Force
+permits interruption after the timeout; it does not make active calls safe.
+Close admission in a maintenance window before deploying: this check does not
+lock out new claims arriving between the final poll and shutdown. A hold abort
+can leave compatible migrations already applied.
 
 ```bash
 bash scripts/deploy.sh --dry-run # safe on an operator laptop, no credentials
-sudo python3 /opt/brodie/infra/with-env.py bash /opt/brodie/scripts/deploy.sh
+# Initial bootstrap only: no dispatcher exists to answer health yet.
+sudo env DEPLOY_HOLD_MAX_S=0 python3 /opt/brodie/infra/with-env.py \
+  bash /opt/brodie/scripts/deploy.sh --force
+# Subsequent deployments use the tooling from the active release:
+sudo python3 /opt/brodie/current/infra/with-env.py bash /opt/brodie/current/scripts/deploy.sh
 sudo systemctl status brodie-worker chert-agent brodie-dispatcher --no-pager
 curl --fail https://your-domain/health
-# On deployment failure, inspect logs, then restore the recorded previous SHA:
-sudo python3 /opt/brodie/infra/with-env.py bash /opt/brodie/scripts/rollback.sh
+# Restore the previous release, without rebuilding dependencies:
+sudo python3 /opt/brodie/current/infra/with-env.py bash /opt/brodie/current/scripts/rollback.sh
+# Emergency override (may interrupt calls), after reviewing the incident:
+sudo env DEPLOY_HOLD_MAX_S=0 python3 /opt/brodie/current/infra/with-env.py \
+  bash /opt/brodie/current/scripts/rollback.sh --force
 ```
 
-The previous SHA lives at `/var/lib/brodie/previous-sha`; a successful SHA is
-recorded in `deployed-sha`. Unit files are copied only when changed; application
-services restart together because they share one virtualenv and database.
-Health must report an operational dispatcher/database within 30 retries.
-A failed deploy exits nonzero and may leave services stopped: inspect then
-rollback explicitly. Rollback restores code, dependencies and units, retains
-DB migrations and checks health. Only backwards-compatible migrations permit
-safe code rollback; destructive DB recovery requires a separately reviewed
-restore. Subsequent deploy returns to the recorded deployment branch.
+Activation atomically renames a staged symlink onto `/opt/brodie/current`,
+installs release units and restarts services. All units use `current`; releases
+share `/opt/brodie/data` through a symlink so checkpoints survive switches.
+Successful deployments keep five completed releases, protecting the active and
+previous releases. An interrupted build is removed; after a host crash, inspect
+and remove an incomplete release directory before retrying its SHA.
+
+The previous release SHA lives at `/var/lib/brodie/previous-sha`; a healthy SHA
+is recorded in `deployed-sha`. Health must report an operational dispatcher/DB
+within 30 retries. Failed activation may leave services stopped or unhealthy;
+inspect logs and explicitly roll back. Rollback switches to the recorded release
+and its existing virtualenv and units, retains database migrations, checks health
+and records the release it replaced as the new rollback target. The first deploy
+has no previous release, including when converting the old in-place layout;
+perform that conversion in a maintenance window. No automatic DB rollback occurs.
+Only backwards-compatible migrations permit safe code rollback; destructive DB
+recovery requires a separately reviewed restore.
 
 ## Restart, logs and line recovery
 
@@ -123,7 +150,7 @@ restore. Subsequent deploy returns to the recorded deployment branch.
 sudo systemctl restart brodie-worker chert-agent brodie-dispatcher
 sudo journalctl -u brodie-worker -u chert-agent -u brodie-dispatcher --since '-15 minutes' --no-pager
 sudo systemctl list-timers 'brodie-*'
-sudo python3 /opt/brodie/infra/with-env.py runuser -u brodie -- chert doctor
+sudo python3 /opt/brodie/current/infra/with-env.py runuser -u brodie -- chert doctor
 sudo systemctl start brodie-reconciler.service
 sudo journalctl -u brodie-reconciler -n 50 --no-pager
 ```
@@ -165,7 +192,7 @@ monitor catches crash loops. Timer services use Restart=on-failure because
 systemd rejects Restart=always for Type=oneshot. Journald holds service logs.
 
 ```bash
-sudo python3 /opt/brodie/infra/with-env.py bash /opt/brodie/infra/alert.sh 'Planned alert drill'
+sudo python3 /opt/brodie/current/infra/with-env.py bash /opt/brodie/current/infra/alert.sh 'Planned alert drill'
 sudo systemctl kill --signal=SIGKILL brodie-worker
 sleep 5
 sudo systemctl show brodie-worker -p ActiveState -p NRestarts
@@ -181,6 +208,11 @@ OnFailure; use the explicit alert drill to test delivery.
 
 ## Backup and restore rehearsal
 
+The backup unit runs as `brodie`. Systemd reads root-owned 0600
+`/etc/brodie/backup-env`, containing only SUPABASE_DB_URL, BACKUP_BUCKET and
+optional AWS_DEFAULT_REGION; AWS credentials come from the instance role.
+Bootstrap and deploy refresh this filtered file without exposing application keys.
+
 Nightly at 03:00 UTC the backup timer streams a custom-format pg_dump through
 gzip and uploads to `s3://BACKUP_BUCKET/YYYY/MM/DD/<UTC timestamp>.dump.gz`.
 The bucket is private, encrypted and versioned. Dump/pipeline errors prevent
@@ -191,7 +223,7 @@ before the first backup (pg_dump cannot dump a newer server).
 ```bash
 sudo systemctl start brodie-backup.service
 sudo journalctl -u brodie-backup -n 30 --no-pager
-sudo python3 /opt/brodie/infra/with-env.py bash /opt/brodie/infra/restore_test.sh
+sudo python3 /opt/brodie/current/infra/with-env.py bash /opt/brodie/current/infra/restore_test.sh
 ```
 
 The rehearsal downloads the newest archive, creates an isolated local cluster
@@ -211,7 +243,7 @@ Use the audited RPCs, with operator identity and reason, rather than table
 updates. Run an authenticated local psql session without credentials in argv:
 
 ```bash
-sudo python3 /opt/brodie/infra/with-env.py bash -c 'export PGDATABASE="$SUPABASE_DB_URL"; exec psql -X -v ON_ERROR_STOP=1'
+sudo python3 /opt/brodie/current/infra/with-env.py bash -c 'export PGDATABASE="$SUPABASE_DB_URL"; exec psql -X -v ON_ERROR_STOP=1'
 ```
 
 Then use these examples, replacing identifiers and reasons:
@@ -229,12 +261,12 @@ Rejudge and raffle use C4 admin endpoints with an allowlisted admin email.
 Load the token only inside the root environment wrapper:
 
 ```bash
-sudo python3 /opt/brodie/infra/with-env.py bash -c 'curl --fail-with-body -sS \
+sudo python3 /opt/brodie/current/infra/with-env.py bash -c 'curl --fail-with-body -sS \
  -H "X-Brodie-Token: $DISPATCHER_TOKEN" -H "X-Admin-Email: admin@example.com" \
  -H "Content-Type: application/json" -d '\''{"apply":false}'\'' \
  http://127.0.0.1:8080/admin/rejudge'
 # Review the diff before repeating with apply:true.
-sudo python3 /opt/brodie/infra/with-env.py bash -c 'curl --fail-with-body -sS \
+sudo python3 /opt/brodie/current/infra/with-env.py bash -c 'curl --fail-with-body -sS \
  -H "X-Brodie-Token: $DISPATCHER_TOKEN" -H "X-Admin-Email: admin@example.com" \
  -H "Content-Type: application/json" -d '\''{"seed":"recorded-public-draw-seed"}'\'' \
  http://127.0.0.1:8080/admin/raffle'

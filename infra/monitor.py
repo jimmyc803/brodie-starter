@@ -8,7 +8,7 @@ import urllib.request
 
 
 def alert(message):
-    subprocess.run(['bash', '/opt/brodie/infra/alert.sh', message], check=True)
+    subprocess.run(['bash', '/opt/brodie/current/infra/alert.sh', message], check=True)
 
 
 def command(*args):

@@ -7,14 +7,13 @@ OnFailure=brodie-alert@%n.service
 
 [Service]
 Type=oneshot
-User=root
-WorkingDirectory=/opt/brodie
+User=brodie
+WorkingDirectory=/opt/brodie/current
 Environment=AWS_DEFAULT_REGION=us-east-1
-EnvironmentFile=/etc/brodie/env
-Environment=PYTHONPATH=src:.
-Environment=PATH=/opt/brodie/.venv/bin:/usr/local/bin:/usr/bin:/bin
-Environment=HOME=/root
-ExecStart=/bin/bash /opt/brodie/infra/backup.sh
+EnvironmentFile=/etc/brodie/backup-env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/brodie
+ExecStart=/bin/bash /opt/brodie/current/infra/backup.sh
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal

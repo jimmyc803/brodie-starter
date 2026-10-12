@@ -8,13 +8,13 @@ OnFailure=brodie-alert@%n.service
 [Service]
 Type=simple
 User=brodie
-WorkingDirectory=/opt/brodie
+WorkingDirectory=/opt/brodie/current
 Environment=AWS_DEFAULT_REGION=us-east-1
 EnvironmentFile=/etc/brodie/env
 Environment=PYTHONPATH=src:.
-Environment=PATH=/opt/brodie/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/opt/brodie/current/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/brodie
-ExecStart=/opt/brodie/.venv/bin/python -m uvicorn challenge.dispatcher.app:app --host 127.0.0.1 --port 8080
+ExecStart=/opt/brodie/current/.venv/bin/python -m uvicorn challenge.dispatcher.app:app --host 127.0.0.1 --port 8080
 Restart=always
 RestartSec=3
 StandardOutput=journal

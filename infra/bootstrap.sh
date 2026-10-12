@@ -29,8 +29,6 @@ curl --fail --silent --show-error --location https://nodejs.org/dist/v24.9.0/SHA
 (cd "$tmp" && grep ' node-v24.9.0-linux-x64.tar.xz$' SHASUMS256.txt | sha256sum --check -)
 tar -xJf "$tmp/node-v24.9.0-linux-x64.tar.xz" --strip-components=1 -C /usr/local
 npm install -g @trychert/facetime@0.1.0-beta.4
-runuser -u brodie -- uv venv --python 3.12 --allow-existing /opt/brodie/.venv
-runuser -u brodie -- uv pip sync --python /opt/brodie/.venv/bin/python /opt/brodie/requirements.txt
 umask 077
 aws ssm get-parameters-by-path --path "$SSM_PREFIX" --with-decryption --recursive --output json >"$tmp/params.json"
 python3 - "$tmp/params.json" <<'PY'
@@ -55,6 +53,7 @@ with target.open('w') as f:
 target.chmod(0o600)
 os.replace(target, '/etc/brodie/env')
 PY
+python3 /opt/brodie/infra/backup_env.py
 install -m 0644 /opt/brodie/infra/systemd/* /etc/systemd/system/
 domain=${DOMAIN:-${PUBLIC_IP}.sslip.io}
 [[ $domain =~ ^[a-zA-Z0-9.-]+$ ]] || { echo 'Invalid DOMAIN' >&2; exit 2; }

@@ -8,13 +8,13 @@ OnFailure=brodie-alert@%n.service
 [Service]
 Type=simple
 User=root
-WorkingDirectory=/opt/brodie
+WorkingDirectory=/opt/brodie/current
 Environment=AWS_DEFAULT_REGION=us-east-1
 EnvironmentFile=/etc/brodie/env
 Environment=PYTHONPATH=src:.
-Environment=PATH=/opt/brodie/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/opt/brodie/current/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/root
-ExecStart=/bin/bash /opt/brodie/infra/heartbeat.sh
+ExecStart=/bin/bash /opt/brodie/current/infra/heartbeat.sh
 Restart=always
 RestartSec=3
 StandardOutput=journal
