@@ -1,18 +1,22 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
 import { AddClient } from "@/components/coach/add-client";
 import type { ClientStatus, ClientSummary } from "@/lib/coach-status";
+import { moveSelection } from "@/lib/client-nav";
 
-const GROUPS: { status: ClientStatus; label: string; dot: string }[] = [
-  { status: "review", label: "Needs review", dot: "#ef4444" },
-  { status: "on_track", label: "On track", dot: "#22c55e" },
-  { status: "inactive", label: "Inactive", dot: "#52525b" },
+const TABS: { key: ClientStatus | "all"; label: string }[] = [
+  { key: "review", label: "Needs review" },
+  { key: "all", label: "All" },
+  { key: "inactive", label: "Inactive" },
 ];
+const DOT: Record<ClientStatus, string> = { review: "bg-bad", on_track: "bg-good", inactive: "bg-idle" };
+const COLS = "grid grid-cols-[minmax(0,1fr)_56px_44px_10px] items-center gap-2";
 
-// The coach's roster: search, a filter per status, and clients grouped so the ones that need the coach come first.
+// The coach's roster as a compact table: search ("/" focuses), status tabs, ↑/↓ to move, Enter to open.
 export function ClientList({
   clients,
   base,
@@ -24,90 +28,113 @@ export function ClientList({
   selectedId: string | null;
   addToken?: string; // the coach link, when this coach may add clients (never on the public demo)
 }) {
+  const router = useRouter();
+  const search = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<ClientStatus | "all">("all");
+  const reviewCount = clients.filter((c) => c.status === "review").length;
+  const [tab, setTab] = useState<ClientStatus | "all">(reviewCount ? "review" : "all");
+  const [cursor, setCursor] = useState<string | null>(selectedId);
   const q = query.trim().toLowerCase();
-  const shown = clients.filter((c) => (filter === "all" || c.status === filter) && (!q || c.name.toLowerCase().includes(q)));
-  const count = (s: ClientStatus) => clients.filter((c) => c.status === s).length;
+  const shown = clients.filter((c) => (tab === "all" || c.status === tab) && (!q || c.name.toLowerCase().includes(q)));
+  const href = (id: string) => `${base}?c=${encodeURIComponent(id)}`;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target;
+      const typing = t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement;
+      if (e.key === "/" && !typing) {
+        e.preventDefault();
+        search.current?.focus();
+        return;
+      }
+      if (typing && t !== search.current) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        setCursor((c) => moveSelection(shown.map((s) => s.id), c, e.key));
+      } else if (e.key === "Enter" && cursor && shown.some((s) => s.id === cursor)) {
+        e.preventDefault();
+        router.push(href(cursor));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
 
   return (
-    <nav aria-label="Clients" className="rounded-2xl border border-zinc-800 bg-zinc-900 p-3">
-      {addToken ? (
-        <div className="mb-2">
-          <AddClient token={addToken} base={base} />
+    <nav aria-label="Clients" className="rounded-[14px] border border-line bg-sunken/60">
+      <div className="space-y-2 p-3">
+        {addToken ? <AddClient token={addToken} base={base} /> : null}
+        <label className="flex items-center justify-between gap-2 rounded-[10px] border border-line-strong bg-surface px-3 py-2">
+          <input
+            ref={search}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={`Search ${clients.length} ${clients.length === 1 ? "client" : "clients"}`}
+            aria-label="Search clients"
+            className="min-w-0 flex-1 bg-transparent text-sm text-ink placeholder:text-ink-3 focus:outline-none"
+          />
+          <kbd className="hidden rounded-[5px] border border-line-strong px-1.5 text-[11px] text-ink-3 sm:inline">/</kbd>
+        </label>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Filter clients">
+          {TABS.map((t) => {
+            const n = t.key === "all" ? clients.length : clients.filter((c) => c.status === t.key).length;
+            const active = tab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setTab(t.key)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${active ? "bg-surface text-ink" : "text-ink-3 hover:text-ink"}`}
+              >
+                {t.label} · {n}
+              </button>
+            );
+          })}
         </div>
-      ) : null}
-      {clients.length > 3 ? (
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search clients"
-          aria-label="Search clients"
-          className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-500 focus:border-zinc-600 focus:outline-none"
-        />
-      ) : null}
-      <div className="mt-2 flex flex-wrap gap-1 text-xs" role="group" aria-label="Filter clients">
-        <Chip active={filter === "all"} onClick={() => setFilter("all")}>
-          All {clients.length}
-        </Chip>
-        {GROUPS.map((g) =>
-          count(g.status) ? (
-            <Chip key={g.status} active={filter === g.status} onClick={() => setFilter(g.status)}>
-              {g.label} {count(g.status)}
-            </Chip>
-          ) : null,
-        )}
       </div>
 
-      {shown.length === 0 ? <p className="px-2 py-6 text-center text-sm text-zinc-500">No clients match.</p> : null}
-      {GROUPS.map((g) => {
-        const list = shown.filter((c) => c.status === g.status);
-        if (!list.length) return null;
-        return (
-          <div key={g.status} className="mt-4">
-            <p className="px-2 text-xs text-zinc-500">{g.label}</p>
-            <ul className="mt-1 space-y-0.5">
-              {list.map((c) => {
-                const active = c.id === selectedId;
-                return (
-                  <li key={c.id}>
-                    <Link
-                      href={`${base}?c=${encodeURIComponent(c.id)}`}
-                      aria-current={active ? "page" : undefined}
-                      className={`flex items-center gap-3 rounded-lg px-2 py-2 transition-colors ${
-                        active ? "bg-zinc-800" : "hover:bg-zinc-800/50"
-                      } ${c.status === "inactive" && !active ? "opacity-60" : ""}`}
-                    >
-                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-zinc-800 text-sm font-medium text-zinc-200">
-                        {c.name.charAt(0).toUpperCase()}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium text-zinc-100">{c.name}</span>
-                        <span className="block truncate text-xs text-zinc-400">{c.detail}</span>
-                      </span>
-                      <span className="size-2 shrink-0 rounded-full" style={{ background: g.dot }} aria-hidden />
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        );
-      })}
+      <div className={`${COLS} px-5 pb-1 text-[12px] font-medium text-ink-3`}>
+        <span>Client · last session</span>
+        <span className="text-right">Reps</span>
+        <span className="text-right">Clean</span>
+        <span />
+      </div>
+      {shown.length === 0 ? (
+        <p className="px-5 py-8 text-center text-sm text-ink-3">{q ? "No clients match." : "Nobody here right now."}</p>
+      ) : null}
+      <ul className="max-h-[70vh] overflow-y-auto px-2 pb-2">
+        {shown.map((c) => {
+          const active = c.id === selectedId;
+          const focused = c.id === cursor && !active;
+          return (
+            <li key={c.id}>
+              <Link
+                href={href(c.id)}
+                aria-current={active ? "page" : undefined}
+                onFocus={() => setCursor(c.id)}
+                className={`${COLS} rounded-[10px] px-3 py-2.5 transition-colors ${
+                  active ? "bg-surface shadow-[0_0_0_1px_var(--color-line)]" : focused ? "bg-surface/70" : "hover:bg-surface/60"
+                } ${c.status === "inactive" && !active ? "opacity-60" : ""}`}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-semibold text-ink">{c.name}</span>
+                  <span className="block truncate text-xs text-ink-3">{c.detail}</span>
+                </span>
+                <span className="text-right text-[13.5px] font-semibold tabular-nums text-ink">{c.reps ?? "–"}</span>
+                <span className="text-right text-[13.5px] font-semibold tabular-nums text-ink">{c.cleanPct === null ? "–" : `${c.cleanPct}%`}</span>
+                <span
+                  className={`size-[7px] rounded-full ${DOT[c.status]}`}
+                  role="img"
+                  aria-label={c.status === "on_track" ? "on track" : c.status === "review" ? "needs review" : "inactive"}
+                />
+              </Link>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="hidden border-t border-line px-5 py-2 text-[12px] text-ink-3 lg:block">↑ ↓ to move · Enter to open · / to search</p>
     </nav>
-  );
-}
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`rounded-full px-2.5 py-1 transition-colors ${active ? "bg-zinc-800 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
-    >
-      {children}
-    </button>
   );
 }

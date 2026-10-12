@@ -14,6 +14,8 @@ export type ClientSummary = {
   detail: string; // one line under the name: "Today · 4 sets flagged"
   thisWeek: number; // sessions in the last 7 days
   lastAt: number | null; // ms, newest session
+  reps: string | null; // latest session "90/110", for the client table
+  cleanPct: number | null; // latest session clean reps, 0–100
 };
 
 export function relativeDay(iso: string, now = Date.now()): string {
@@ -35,25 +37,28 @@ function startOfDay(t: number): number {
 export function summarizeClient(c: { id: string; name: string; sessions: SessionView[] }, now = Date.now()): ClientSummary {
   const latest = c.sessions[0];
   const lastAt = latest ? Date.parse(latest.session.started_at) : null;
+  const latestStats = latest ? sessionStats(latest) : null;
+  const reps = latestStats ? `${latestStats.completed}/${latestStats.planned}` : null;
+  const cleanPct = latestStats?.cleanRate == null ? null : Math.round(latestStats.cleanRate * 100);
   const thisWeek = c.sessions.filter((s) => now - Date.parse(s.session.started_at) <= INACTIVE_DAYS * DAY_MS).length;
   if (!latest || lastAt === null || !Number.isFinite(lastAt))
-    return { id: c.id, name: c.name, status: "inactive", detail: "No sessions yet", thisWeek, lastAt: null };
+    return { id: c.id, name: c.name, status: "inactive", detail: "No sessions yet", thisWeek, lastAt: null, reps, cleanPct };
   const idleDays = Math.floor((now - lastAt) / DAY_MS);
   if (idleDays >= INACTIVE_DAYS)
-    return { id: c.id, name: c.name, status: "inactive", detail: `No session in ${idleDays} days`, thisWeek, lastAt };
+    return { id: c.id, name: c.name, status: "inactive", detail: `No session in ${idleDays} days`, thisWeek, lastAt, reps, cleanPct };
   const when = relativeDay(latest.session.started_at, now);
   const flagged = flaggedSets(latest).length;
   if (flagged > 0)
-    return { id: c.id, name: c.name, status: "review", detail: `${when} · ${flagged} ${flagged === 1 ? "set" : "sets"} to review`, thisWeek, lastAt };
+    return { id: c.id, name: c.name, status: "review", detail: `${when} · ${flagged} ${flagged === 1 ? "set" : "sets"} to review`, thisWeek, lastAt, reps, cleanPct };
   const st = sessionStats(latest);
   if (st.completed === 0 || st.endedEarly || st.completed < st.planned)
     return {
       id: c.id, name: c.name, status: "review",
       detail: `${when} · ${st.completed === 0 ? "No reps counted" : "Incomplete session"}`,
-      thisWeek, lastAt,
+      thisWeek, lastAt, reps, cleanPct,
     };
   const clean = st.cleanRate === null ? "" : ` · ${Math.round(st.cleanRate * 100)}% clean`;
-  return { id: c.id, name: c.name, status: "on_track", detail: `${when}${clean}`, thisWeek, lastAt };
+  return { id: c.id, name: c.name, status: "on_track", detail: `${when}${clean}`, thisWeek, lastAt, reps, cleanPct };
 }
 
 const ORDER: Record<ClientStatus, number> = { review: 0, on_track: 1, inactive: 2 };
