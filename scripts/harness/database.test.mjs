@@ -50,6 +50,15 @@ test('real PostgreSQL enforces upload transactions, ownership, RLS and assignmen
       await service.end();
     }
     assert.equal((await db.query("select public from storage.buckets where id='programs'")).rows[0].public, false);
+    const pullupService = await db.connect({ role: 'service_role' });
+    try {
+      const pullupProgram = { title: 'Pullup day', days: [{ day_number: 1, title: 'Pullups', exercises: [{ exercise_key: 'pullup', name: 'Pullups', supported: true, sets: 3, reps: 5, notes: '' }] }] };
+      const pullupId = (await pullupService.query('select save_coach_program($1,$2,$3) as id', ['database-harness-coach-token', `${coach}/pullups.pdf`, pullupProgram])).rows[0].id;
+      const pullupDay = (await db.query('select id from program_days where program_id=$1', [pullupId])).rows[0].id;
+      await pullupService.query('select assign_coach_program_day($1,$2,$3)', ['database-harness-coach-token', client, pullupDay]);
+      assert.deepEqual((await db.query('select program_day_id from assignments where client_id=$1 and active', [client])).rows, [{ program_day_id: pullupDay }]);
+    } finally { await pullupService.end(); }
+
   } finally { await db.stop(); }
 });
 
@@ -64,4 +73,53 @@ test('cleanup finishes after PostgreSQL was externally terminated', { timeout: 1
 
 test('failed schema setup preserves the original error and cleans up', { timeout: 10000 }, async () => {
   await assert.rejects(createDatabaseHarness({ repoRoot: '/nonexistent-brodie-harness-fixture' }), /ENOENT/);
+});
+
+
+test('durable program budgets deny anonymous access and cap concurrent service requests across connections', async () => {
+  const db = await createDatabaseHarness({ repoRoot: root });
+  const connections = [];
+  try {
+    for (const role of ['anon', 'authenticated']) {
+      const client = await db.connect({ role }); connections.push(client);
+      await assert.rejects(client.query('select consume_program_budget($1)', ['workspace']), /permission denied/);
+      await assert.rejects(client.query("insert into program_request_budget(action,started_at) values('workspace',clock_timestamp())"), /permission denied/);
+    }
+    const first = await db.connect({ role: 'service_role' }); connections.push(first);
+    const second = await db.connect({ role: 'service_role' }); connections.push(second);
+    await assert.rejects(first.query('select consume_program_budget($1)', ['unknown-action']));
+    for (const [action, limit] of [['workspace', 30], ['parser', 60]]) {
+      await db.query('delete from program_request_budget');
+      // An expired window must not consume current capacity.
+      await db.query("insert into program_request_budget(action,started_at) select $1,clock_timestamp()-interval '61 minutes' from generate_series(1,$2)", [action, limit]);
+      await db.query('insert into program_request_budget(action,started_at) select $1,clock_timestamp() from generate_series(1,$2)', [action, limit - 1]);
+      const consume = client => client.query('select consume_program_budget($1) as allowed', [action]);
+      const secondPid = (await second.query('select pg_backend_pid() as pid')).rows[0].pid;
+      await first.query('begin');
+      let pending;
+      try {
+        assert.equal((await consume(first)).rows[0].allowed, true);
+        pending = consume(second);
+        let blocked = false;
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const state = await db.query('select wait_event_type from pg_stat_activity where pid=$1', [secondPid]);
+          if (state.rows[0]?.wait_event_type === 'Lock') { blocked = true; break; }
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.ok(blocked, `${action}: concurrent requests must serialize even before the first transaction commits`);
+      } finally {
+        await first.query('commit');
+      }
+      assert.equal((await pending).rows[0].allowed, false, `${action}: concurrent request cannot consume the final slot twice`);
+      assert.equal((await consume(second)).rows[0].allowed, false, `${action}: budget persists across connections`);
+      assert.equal((await db.query("select count(*)::int n from program_request_budget where action=$1 and started_at>clock_timestamp()-interval '60 minutes'", [action])).rows[0].n, limit);
+    }
+    await db.query("update program_request_budget set started_at=clock_timestamp()-interval '61 minutes'");
+    assert.equal((await first.query("select consume_program_budget('parser') as allowed")).rows[0].allowed, true, 'expired requests restore capacity');
+    assert.equal((await second.query("select consume_program_budget('workspace') as allowed")).rows[0].allowed, true, 'workspace and parser limits are independent');
+  } finally {
+    await db.query('delete from program_request_budget');
+    await Promise.all(connections.map(client => client.end()));
+    await db.stop();
+  }
 });

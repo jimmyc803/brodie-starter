@@ -1,5 +1,5 @@
 'use client';
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { assignAction, uploadAction } from './actions';
 import { MAX_UPLOAD_BYTES } from '@/lib/programWorkflow';
 const initial = { ok: false, message: '' };
@@ -10,11 +10,14 @@ function Status({ state }: { state: typeof initial }) {
 }
 export function UploadForm({ token }: { token: string }) {
   const [state, action, pending] = useActionState(uploadAction.bind(null, token), initial);
-  return <form action={action}>
+  const [selection, setSelection] = useState('');
+  return <form action={action} aria-busy={pending} onReset={() => setSelection('')}>
     <label className="text-sm font-medium text-zinc-200" htmlFor="program-pdf">Program PDF</label>
-    <input className={control} id="program-pdf" name="pdf" type="file" accept="application/pdf,.pdf" required disabled={pending} onChange={event => { const file = event.currentTarget.files?.[0]; event.currentTarget.setCustomValidity(file && file.size > MAX_UPLOAD_BYTES ? 'Choose a PDF no larger than 3 MB.' : ''); event.currentTarget.reportValidity(); }} />
-    <p className="mt-2 text-xs text-zinc-500">Up to 3 MB. Your PDF stays private. Parsing usually takes a few seconds.</p>
-    <button className={button} disabled={pending}>{pending ? 'Reading your program…' : 'Upload & parse program'}</button>
+    <input className={control} id="program-pdf" name="pdf" type="file" accept="application/pdf,.pdf" required disabled={pending} onChange={event => { const file = event.currentTarget.files?.[0]; setSelection(file ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(2)} MB` : ''); event.currentTarget.setCustomValidity(file && file.size > MAX_UPLOAD_BYTES ? 'Choose a PDF no larger than 3 MB.' : ''); event.currentTarget.reportValidity(); }} />
+    <p className="mt-2 text-xs text-zinc-500">Up to 3 MB. Your PDF stays private. Reading complex PDFs may take up to a minute. Scanned pages should be clear and upright.</p>
+    {selection && <p className="mt-2 break-words text-xs text-zinc-300">Selected: {selection}</p>}
+    {pending && <p role="status" className="mt-3 text-sm text-zinc-300">Uploading and reading your PDF. Keep this page open; your saved days will appear below.</p>}
+    <button className={button} disabled={pending || !selection}>{pending ? 'Reading your program…' : 'Upload & parse program'}</button>
     <Status state={state} />
   </form>;
 }
@@ -30,8 +33,8 @@ export function AssignForm({ token, clients, days, hasPrograms }: { hasPrograms:
     <select id="day-id" className={control} name="day_id" defaultValue="" required disabled={pending || unavailable}>
       <option value="" disabled>Choose a day</option>{days.map(day => <option key={day.id} value={day.id}>{day.label}</option>)}
     </select>
-    <p className="mt-2 text-xs text-zinc-500">Replaces the client&apos;s active assignment for their next call.</p>
-    {unavailable && <p className="mt-3 text-sm text-zinc-400">{!clients.length ? 'Add a client to this coach account to assign a day.' : hasPrograms ? 'Your programs have no countable training days. Upload a program with squats, pushups, lunges, jumping jacks, bicep curls, or pull-ups with sets and reps.' : 'Upload a program to make training days available.'}</p>}
+    <p className="mt-2 text-xs text-zinc-500">Replaces the client&apos;s active assignment for their next call. Only video-tracked exercises run during that call; other exercises remain in the program for coach-led work.</p>
+    {unavailable && <p className="mt-3 text-sm text-zinc-400">{!clients.length ? 'Add a client to this coach account to assign a day.' : hasPrograms ? 'Your programs are saved, but no days have video-tracked exercises. Discuss adding exercise support with the Brodie team using the review brief below, or upload a day with squats, pushups, lunges, jumping jacks, bicep curls, or pull-ups with sets and reps.' : 'Upload a program to make training days available.'}</p>}
     <button className={button} disabled={pending || unavailable}>{pending ? 'Assigning…' : 'Assign training day'}</button><Status state={state} />
   </form>;
 }
