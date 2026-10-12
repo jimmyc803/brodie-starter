@@ -11,8 +11,6 @@ import contextlib
 import hmac
 import logging
 import os
-import time
-from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
@@ -20,11 +18,12 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from challenge.config import Config
-from challenge.dispatcher import postcall
+from challenge.dispatcher import admin, postcall
 from challenge.dispatcher.flags import Flags
 from challenge.dispatcher.postcall import Outbox, StoreOutbox
 from challenge.dispatcher.jobs import Jobs, run_loop
 from challenge.dispatcher.powerhour import require_secret
+from challenge.dispatcher.ratelimit import DEFAULT_PER_MIN, RateLimiter, rate_limit
 from challenge.messaging.outbox import Outbox as SendOutbox
 from challenge.messaging.providers import provider_from_env
 from challenge.store import Json, Store, StoreError, store_from_env
@@ -46,20 +45,6 @@ class EventIn(BaseModel):
     payload: dict[str, Any] = {}
 
 
-class _RateLimiter:
-    def __init__(self, per_min: int, now: Callable[[], float] = time.monotonic):
-        self.per_min, self.now, self.hits = per_min, now, defaultdict(deque)
-
-    def check(self, key: str) -> bool:
-        t, q = self.now(), self.hits[key]
-        while q and t - q[0] >= 60:
-            q.popleft()
-        if len(q) >= self.per_min:
-            return False
-        q.append(t)
-        return True
-
-
 def create_app(store: Store | None = None, outbox: Outbox | None = None,
                clock: Callable[[], datetime] | None = None, flags: Flags | None = None,
                token: str | None = None, rate_per_min: int | None = None,
@@ -71,7 +56,6 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
     token = token if token is not None else os.environ.get("DISPATCHER_TOKEN", "")
     if not token:
         logger.warning("DISPATCHER_TOKEN unset: all worker endpoints will reject requests")
-    limiter = _RateLimiter(rate_per_min or int(os.environ.get("DISPATCHER_RATE_PER_MIN", "600")))
     jobs_enabled = os.environ.get("JOBS_ENABLED", "1") != "0"
 
     @contextlib.asynccontextmanager
@@ -96,6 +80,10 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
                     await task
 
     app = FastAPI(title="brodie-dispatcher", lifespan=lifespan)
+    app.state.rate_limiter = RateLimiter(
+        rate_per_min or int(os.environ.get("DISPATCHER_RATE_PER_MIN", str(DEFAULT_PER_MIN))))
+    app.state.token = token
+    app.state.clock = clock
     app.state.flags = flags
     app.state.store = store
     app.state.outbox = outbox
@@ -110,9 +98,10 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
             app.state.outbox = StoreOutbox(get_store(), clock)
         return app.state.outbox
 
-    def auth(request: Request, x_brodie_token: str | None = Header(default=None)) -> None:
-        if not limiter.check(request.client.host if request.client else "?"):
-            raise HTTPException(429, "rate limited")
+    app.state.get_store = get_store
+
+    def auth(request: Request, x_brodie_token: str | None = Header(default=None),
+             _: None = Depends(rate_limit("worker"))) -> None:
         if not token or x_brodie_token is None or not hmac.compare_digest(
                 x_brodie_token.encode(), token.encode()):
             raise HTTPException(401, "bad token")
@@ -160,7 +149,7 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
                 resp["postcall"] = "pending"
         return resp
 
-    @app.get("/health")
+    @app.get("/health", dependencies=[Depends(rate_limit("public"))])
     def health() -> dict:
         db, lines = False, []
         try:
@@ -172,6 +161,8 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
                 "fallbacks": flags.fallbacks(), "line_states": lines}
 
     app.include_router(__import__("challenge.dispatcher.webhooks", fromlist=["create_router"]).create_router(get_store, get_outbox, clock))
+    app.include_router(admin.router)
+    app.include_router(admin.internal_router)
     return app
 
 
