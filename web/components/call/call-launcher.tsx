@@ -148,7 +148,7 @@ export function CallLauncher({ token, firstName }: { token: string; firstName: s
           <button
             type="button"
             onClick={unlockAudio}
-            className="absolute inset-x-6 top-1/2 -translate-y-1/2 rounded-2xl bg-white px-5 py-4 text-base font-semibold text-zinc-950 shadow-xl"
+            className="absolute inset-x-6 top-1/2 -translate-y-1/2 rounded-[14px] bg-white px-5 py-4 text-base font-semibold text-ink shadow-xl"
           >
             Tap to hear Brodie
           </button>
