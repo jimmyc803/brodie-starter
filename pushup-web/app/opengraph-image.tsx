@@ -1,10 +1,14 @@
 import { ImageResponse } from "next/og";
+import { getCompetition } from "@/lib/data";
 
 export const alt = "Brodie Push-Up Challenge: strict reps, live board";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-export default function OpengraphImage() {
+export const revalidate = 300;
+
+export default async function OpengraphImage() {
+  const firstPrize = await getCompetition().then((c) => c?.firstPrize ?? "$100").catch(() => "$100");
   return new ImageResponse(
     (
       <div
@@ -35,7 +39,7 @@ export default function OpengraphImage() {
         <div style={{ display: "flex", gap: 40, fontSize: 30, color: "#b9b9b3" }}>
           <span>One week</span>
           <span>Judged live on FaceTime</span>
-          <span style={{ color: "#d4ff3a" }}>$100 to 1st</span>
+          <span style={{ color: "#d4ff3a" }}>{`${firstPrize} to 1st`}</span>
         </div>
       </div>
     ),
