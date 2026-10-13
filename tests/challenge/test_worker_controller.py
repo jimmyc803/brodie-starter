@@ -17,6 +17,7 @@ import numpy as np
 import pytest
 
 from challenge.judge.cues import CUES
+from challenge.judge.gates import JUDGE_VERSION
 from challenge.judge.metrics import FrameObs
 from challenge.worker import controller as ctl
 from challenge.worker.client import DispatcherClient, DispatcherError
@@ -321,7 +322,7 @@ def test_reps_after_count_end_ignored_and_checkpoint_per_rep(tmp_path):
     assert rep["n"] == 1 and rep["valid"] is True and rep["top_elbow_deg"] is None and rep["persons_in_frame"] == 1
     assert rep["torso_ok"] is True and "cadence_rpm" not in rep
     assert datetime.fromisoformat(rep["at"]) == datetime.fromtimestamp(T0 + 10, tz=timezone.utc)
-    assert payload["liveness_result"] == "pass" and payload["judge_version"] == "j1"
+    assert payload["liveness_result"] == "pass" and payload["judge_version"] == JUDGE_VERSION
 
 
 def test_judge_cues_rate_limited_and_silent_in_challenge(tmp_path):
