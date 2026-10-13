@@ -33,9 +33,10 @@ Selection (at each check time; a type is eligible only if a replay cannot have l
   retry: the retry check moves). Eligibility never flips at a predictable moment (no expiring look-back), so a replay
   cannot use the postponement to time its motion. A first cue postponed past the end of the call -> 'skipped' (the
   call ended before the - postponed - fire_t); a retry postponed past the end -> 'fail' (the person was seen).
-Known residual (tests: strict xfail): a replay of push-ups with long pauses (period-3 s pause, 3 s of push-ups,
-period 8-10 s) still answers FREEZE+go 6-15 % of the time when a pause both starts right after "Freeze!" and ends
-just after the random go cue (period 6: 0 %; period 12: 2.5 %). A wider liveness_go_delay_s ([2, 8]) measured <= 7 %.
+Known residual (D-30, accepted; tests: strict xfail): a replay of push-ups with long pauses (period-3 s pause,
+3 s of push-ups) still answers FREEZE+go when a pause both starts right after "Freeze!" and ends just after the
+random go cue: measured 5.5 % (period 9) and 7 % (period 10) with go delay 2-8 s (period 6: 0 %, 8: 2 %).
+Mitigated by admin re-judge of top finishers.
 Driving (judge frame clock, seconds; worker wiring is task 30):
     lc = LivenessChallenge(random.Random(seed), thr); fire_t = lc.schedule(call_t0)
     every counted frame: lc.on_frame(f); if lc.due(t): say(lc.start(t)) elif lc.active: st, cue = lc.poll(t); say(cue)

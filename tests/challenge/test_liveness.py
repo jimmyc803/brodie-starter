@@ -259,10 +259,16 @@ def test_replay_pause_pattern_vs_freeze(family):
     assert replay_rate(family, 6) <= 0.05
 
 
-@pytest.mark.xfail(strict=True, reason="D-29 residual: long adaptive pauses beat FREEZE+go 6-15% with go delay 2.0-4.5 s")
-@pytest.mark.parametrize("period", [8, 9, 10])
+@pytest.mark.parametrize("period", [8, 12])
 def test_replay_long_pauses_vs_freeze_go(period):
     """Adaptive variant: pauses long enough to outlast confirm + go delay (period-3 s pause, 3 s of push-ups)."""
+    assert replay_rate("push_long_pause", period) <= 0.05
+
+
+@pytest.mark.xfail(strict=True, reason="D-30 accepted residual: period 9/10 long pauses beat FREEZE+go 5.5%/7% "
+                                       "(go delay 2-8 s); mitigated by admin re-judge of top finishers")
+@pytest.mark.parametrize("period", [9, 10])
+def test_replay_long_pauses_residual(period):
     assert replay_rate("push_long_pause", period) <= 0.05
 
 
@@ -292,16 +298,17 @@ def test_lift_hold_and_double_tap_detected(side, far_vis):
 
 
 def test_freeze_needs_stop_then_resume_after_go():
-    lc, _ = drive(pushups(secs=24.0, pauses=[(5.0, 12.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    lc, _ = drive(pushups(secs=34.0, pauses=[(5.0, 20.0)]), 4.2, force=[FREEZE], stop_on_result=True)
     a = lc.attempts[0]
     assert a.confirm_t is not None and a.go_said and a.outcome == "no_resume"     # never resumed
     go = a.go_t
-    assert 2.0 <= go - a.confirm_t <= 4.5 + 0.11
-    lc, log = drive(pushups(secs=24.0, pauses=[(5.0, go + 0.5 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    go0, go1 = DEFAULT_THRESHOLDS["liveness_go_delay_s"]
+    assert go0 <= go - a.confirm_t <= go1 + 0.11
+    lc, log = drive(pushups(secs=34.0, pauses=[(5.0, go + 0.5 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
     assert statuses(log) == ["start", "go", "pass"] and log[1][2] == "challenge_go", log
-    lc, _ = drive(pushups(secs=24.0, pauses=[(5.0, go - 0.6 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    lc, _ = drive(pushups(secs=34.0, pauses=[(5.0, go - 0.6 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
     assert lc.attempts[0].outcome == "early"                                      # moved before the go cue
-    lc, _ = drive(pushups(secs=24.0, pauses=[(5.0, go + 2.6 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    lc, _ = drive(pushups(secs=34.0, pauses=[(5.0, go + 2.6 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
     assert lc.attempts[0].outcome == "no_resume"                                  # resumed too late
     _, log = drive(pushups(), 4.2, force=[FREEZE], stop_on_result=True)
     assert "pass" not in statuses(log)                                            # never stopped
