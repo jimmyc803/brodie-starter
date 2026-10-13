@@ -53,3 +53,9 @@ https://3.13.177.157.sslip.io, EC2 `i-0d098dcf3948886ce`, region us-east-2, AWS 
 - [ ] Rejudge dry run, review, apply only if approved (RUNBOOK "Live configuration and moderation")
 - [ ] Top 3 verification call completed before payout
 - [ ] Final backup taken and restore-tested; export the audit log; delete tester data; shut down EC2 or keep per your decision
+
+## Pre-launch tester reset: KEEP these participants (owner instruction, 2026-10-13)
+Any reset or wipe of tester data must exclude these users (their clients row, challenge stats, calls, queue and messages):
+- `7dea8571-7a70-40a9-a95b-1c3088b8e822` (display name Benjamin_Friedman)
+- `db6678e1-44c7-479f-ad4d-17a708f06207` (display name ethan)
+The reset itself still needs the owner's explicit go-ahead.
