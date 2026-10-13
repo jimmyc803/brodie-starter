@@ -30,28 +30,34 @@ Selection (at each check time; a type is eligible only if a replay cannot have l
   nothing     before reps were earned (no push-up motion - 3-frame-median shoulder height range >=
               liveness_freeze_motion_min within liveness_quiet_s - and no on_rep() since counting started): nothing
               to guard, and a still plank / static replay is never challenged.
-  LIFT_HOLD, DOUBLE_TAP  if no hand lift was seen since counting started (an unprompted lift, or one inside a failed
-              attempt): a video that lifts hands, periodically or not, never gets a hand challenge. These work at
-              rest (plank, kneeling): a person who stopped doing push-ups is still challenged (review P1).
+  LIFT_HOLD, DOUBLE_TAP  if no hand lift began in the last liveness_hand_cooldown_s (15 s; any lift - unprompted
+              or inside an attempt): a video lifting hands at least that often never gets a hand challenge, while a
+              person who adjusted the phone once gets them back. These work at rest (plank, kneeling): a person who
+              stopped doing push-ups is still challenged (review P1).
   FREEZE      while push-ups are in progress (shoulder range as above in the liveness_quiet_s before the check):
               a still body would satisfy the stop for free, so FREEZE is never cued at rest.
   The retry excludes the first attempt's type (unless that attempt was void) - except when that leaves nothing
   eligible, then the same type is drawn again (fresh go delay; e.g. FREEZE after FREEZE once a lift ruled out the hand
   types). If nothing is eligible the check moves to a fresh random time liveness_postpone_s later (first cue: fire_t
-  moves; retry: the retry check moves). Eligibility never flips at a predictable moment (no expiring look-back), so a
-  replay cannot use the postponement to time its motion.
+  moves; retry: the retry check moves). Checks are therefore never more than p1 apart: every stretch of >= p1 s in
+  which a type is eligible (e.g. after a lift's cooldown, before the last moment an attempt fits) gets a cue. The
+  cooldown end is not itself a check time (the check is random), so a replay cannot time a lift to the cue.
 Terminal result (finish / poll):
   'pass'     an attempt passed.
   'skipped'  only when no rep was earned (no push-up motion seen, on_rep never called) and nobody was in frame in any
              attempt - e.g. the person left before doing any push-up, or the call ended before fire_t without reps.
   'fail'     everything else: reps were earned but no challenge passed - including a cue postponed past the end of
-             the call (at rest after a hand lift), the call ending before fire_t, ending during an open attempt or a
+             the call (e.g. hand lifts at least every liveness_hand_cooldown_s while at rest), the call ending before fire_t, ending during an open attempt or a
              pending retry, or being out of frame / unverifiable during the attempts. Earned reps never count
              without a pass.
 Known residual (D-30, accepted; tests: strict xfail): a replay of push-ups with long pauses (period-3 s pause,
 3 s of push-ups) still answers FREEZE+go when a pause both starts right after "Freeze!" and ends just after the
 random go cue: measured 6.0 % (period 10) and 8.5 % (period 12) at 200 seeds with go delay 2-8 s (period 6: 0 %,
 8: 2.0 %, 9: 4.5 %). Mitigated by admin re-judge of top finishers.
+Known residual (hand cooldown; tests: strict xfail): a replay lifting a hand every ~20-35 s (just beyond the
+cooldown) gets a hand challenge in the clear gaps and answers LIFT_HOLD when its next lift lands 0.5-2.5 s after
+the cue: measured 7.5-9.5 % at rest (bank_lifts; 1.5-2 % with the old 'no lift since counting started' rule).
+Closing it needs a timing-coupled hand challenge (e.g. a random-time "and down" cue, like FREEZE's go).
 Driving (judge frame clock, seconds; worker wiring is task 30):
     lc = LivenessChallenge(random.Random(seed), thr); fire_t = lc.schedule(call_t0)
     every counted frame: lc.on_frame(f); if lc.due(t): say(lc.start(t)) elif lc.active: st, cue = lc.poll(t); say(cue)
@@ -239,6 +245,9 @@ class LivenessChallenge:
         self.resume_min = float(t["liveness_resume_min"])
         if not 0 <= self.go_min_react < self.go_react:
             raise ValueError("need 0 <= liveness_go_min_react_s < liveness_go_react_s")
+        self.hand_cooldown = float(t["liveness_hand_cooldown_s"])
+        if not self.hand_cooldown >= 0:
+            raise ValueError(f"bad liveness_hand_cooldown_s: {t['liveness_hand_cooldown_s']!r}")
         self.p0, self.p1 = (float(x) for x in t["liveness_postpone_s"])
         if not 0 < self.p0 <= self.p1:
             raise ValueError(f"bad liveness_postpone_s: {t['liveness_postpone_s']!r}")
@@ -250,6 +259,13 @@ class LivenessChallenge:
         self.fire_t = float(call_t0) + self.rng.uniform(self.w0, self.w1)
         return self.fire_t
 
+    def _postpone(self, t: float) -> float:
+        """Next check after an ineligible check at t: t + U(liveness_postpone_s). Checks are never more than p1 apart,
+        so every stretch of >= p1 seconds in which a type is eligible (e.g. after a hand lift's cooldown) gets one;
+        a guaranteed check in a shorter stretch would make the cue time predictable for a replay."""
+        self.postponed += 1
+        return t + self.rng.uniform(self.p0, self.p1)
+
     def due(self, t: float) -> bool:
         """True when the first cue should be played now. Past fire_t with no eligible challenge type (see
         _eligible) the cue is postponed by a random liveness_postpone_s instead (fire_t moves; returns False)."""
@@ -257,8 +273,7 @@ class LivenessChallenge:
             return False
         if self._eligible(t, None):
             return True
-        self.postponed += 1
-        self.fire_t = t + self.rng.uniform(self.p0, self.p1)
+        self.fire_t = self._postpone(t)
         return False
 
     def on_rep(self, t: float) -> None:
@@ -315,11 +330,11 @@ class LivenessChallenge:
 
     def _eligible(self, t: float, exclude: str | None) -> list[str]:
         """Challenge types that a replay cannot answer by luck at time t (module docstring, Selection): nothing before
-        reps were earned; the hand types if no unprompted hand lift was seen (outside every attempt window); FREEZE if
+        reps were earned; the hand types if no hand lift began in the last liveness_hand_cooldown_s; FREEZE if
         push-ups are in progress. Minus `exclude` (the retry is a different type) unless that leaves nothing."""
         if not self._earned:
             return []
-        base = [LIFT_HOLD, DOUBLE_TAP] if not any(x <= t for x in self._all_lifts) else []
+        base = [LIFT_HOLD, DOUBLE_TAP] if not any(t - self.hand_cooldown < x <= t for x in self._all_lifts) else []
         if self._moving_before(t):
             base.append(FREEZE)
         return [c for c in base if c != exclude] or base
@@ -362,8 +377,7 @@ class LivenessChallenge:
             a1 = self.attempts[0]
             types = self._eligible(t, None if a1.invalid else a1.cue)   # a void attempt was never a fair try
             if not types:
-                self.postponed += 1
-                self._retry_at = t + self.rng.uniform(self.p0, self.p1)
+                self._retry_at = self._postpone(t)
                 return "pending", None
             self._retry_at = None
             return "retry", self._open(t, types)
