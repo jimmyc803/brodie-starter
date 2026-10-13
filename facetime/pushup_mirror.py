@@ -113,7 +113,7 @@ LS_SAFE_X = 260                            # a live call (2026-10-13, image of t
 LS_SAFE_TOP = LS_CROP_Y + 15               # 80
 LS_SAFE_BOTTOM = LH - LS_CROP_Y - 15       # 640
 LS_PIP_W, LS_PIP_H = 220, 170              # self-view keep-out: x < LS_PIP_W or x > LW - LS_PIP_W, y > LH - LS_CROP_Y - LS_PIP_H
-LS_ZOOM_MAX = 1.75                         # full-bleed: cover the canvas, zooming at most this far past the plain fit
+LS_BLEED_MAX = 1.2                         # full-bleed only when covering crops less than this past the fit; else whole
 LS_MASCOT_H = 180
 LS_MASCOT_CX = 870                         # bottom centre-right, inside the trimmed band (and clear of the self-view)
 LS_MASCOT_FEET = LS_SAFE_BOTTOM
@@ -766,11 +766,13 @@ class PushupMirror:
 
     # -- landscape (sideways-only: the live layout of every competition call) ----------------------------------------
     def _ls_fill(self, rgb):
-        """The source -> output affine that makes the picture the screen: cover the whole canvas (centred), zooming at
-        most LS_ZOOM_MAX past the plain fit (a portrait picture - the orientation lock has not turned it yet - gets a
-        big centred band with ink bars instead of a 3x zoom), and the picture's output box clipped to the canvas."""
+        """The source -> output affine for the picture: a near-16:9 picture covers the whole canvas edge to edge; any
+        other shape (an upright phone's tall picture) is shown WHOLE at the plain fit, centred with ink bars - the
+        caller must see their whole body with the skeleton, like their own camera preview (live feedback 2026-10-13:
+        the cover zoom cut half the body off). Returns the affine and the picture's output box clipped to the canvas."""
         h, w = rgb.shape[:2]
-        s = min(max(LW / w, LH / h), LS_ZOOM_MAX * min(LW / w, LH / h))
+        fit, cover = min(LW / w, LH / h), max(LW / w, LH / h)
+        s = cover if cover <= LS_BLEED_MAX * fit else fit
         pw, ph = w * s, h * s
         x0 = (LW - pw) / 2; y0 = (LH - ph) / 2
         M = np.array([[s, 0.0, x0], [0.0, s, y0]], np.float64)
@@ -812,7 +814,12 @@ class PushupMirror:
         pcx = (wm_right + LW - LS_SAFE_X - LS_COUNT_W) // 2              # centred between the wordmark and the count ticket
         py = LS_SAFE_TOP + 10; px = pcx - pw // 2
         self._label_y0 = py + ph + 8
-        if self.ls_mascot is not None: self._mascot(img, state, now, self.ls_mascot, LS_MASCOT_CX, LS_MASCOT_FEET)
+        # Brodie stands clear of a narrow (whole, barred) picture when the ink bar has room for him
+        mcx = LS_MASCOT_CX
+        if self.ls_mascot is not None:
+            half = self.ls_mascot.art_w // 2 + 6
+            mcx = min(LW - LS_SAFE_X - half, max(LS_MASCOT_CX, pic[2] + half))
+            self._mascot(img, state, now, self.ls_mascot, mcx, LS_MASCOT_FEET)
         s = self._stamp_sprite(state, now)
         if s is not None:
             srgb, sa, op = s; h, w_ = sa.shape[:2]
@@ -823,7 +830,7 @@ class PushupMirror:
             maxw = 440
             rgb_, a = brand.bubble(self._cue_lines(state, 28, maxw - 44), 28, maxw, tail='right', radius=4)
             h, w_ = a.shape[:2]
-            x = LS_MASCOT_CX - int(0.42 * self.ls_mascot.art_w) - w_
+            x = mcx - int(0.42 * self.ls_mascot.art_w) - w_
             y = min(LS_SAFE_BOTTOM - h, LS_MASCOT_FEET - int(0.62 * LS_MASCOT_H) - int(0.62 * h))
             self._blit(img, 'bubble', rgb_, a, max(LS_SAFE_X, x), max(LS_SAFE_TOP, y))
         return img

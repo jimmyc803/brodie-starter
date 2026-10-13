@@ -130,16 +130,18 @@ def test_landscape_full_bleed_fills_the_canvas_and_holds_still():
     assert m[3, 3] and m[pmod.LH - 4, 3] and m[pmod.LH // 2, pmod.LW - 4] # video out to the canvas corners
 
 
-def test_landscape_full_bleed_caps_the_zoom_for_a_portrait_picture():
-    """Before the orientation lock turns a portrait picture, it shows as a big centred band (never a 3x zoom strip)."""
+def test_landscape_shows_a_tall_picture_whole_like_the_self_view():
+    """An upright phone's tall picture is never cover-zoomed (live feedback 2026-10-13: half the body was cut off):
+    the whole picture, centred, ink bars at the sides."""
     pm = PushupMirror(mascot=False)
     rgb = np.zeros((486, 274, 3), np.uint8); rgb[:] = (0, 255, 255)
     img = _render(pm, rgb, True)
     x0, y0, x1, y1 = pm.boxes['picture']
-    fit_w = 274 * (pmod.LH / 486)
     assert y0 == 0 and y1 == pmod.LH                                      # full height
+    assert abs((x1 - x0) - 274 * pmod.LH / 486) <= 1                      # the plain fit: the WHOLE picture
     assert abs((x0 + x1) / 2 - pmod.LW / 2) <= 1                          # centred
-    assert fit_w * 1.6 <= (x1 - x0) <= fit_w * 1.8                        # bigger than the fit, far from a cover strip
+    m = np.all(img == (0, 255, 255), axis=2)
+    assert m[2, x0 + 2] and m[pmod.LH - 3, x1 - 3]                        # its corners are on the canvas
     assert np.all(img[pmod.LH // 2, :x0 - 1] != (0, 255, 255)) and np.all(img[pmod.LH // 2, x1 + 1:] != (0, 255, 255))
 
 
