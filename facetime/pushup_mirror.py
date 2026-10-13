@@ -38,11 +38,13 @@ Landscape (render(..., landscape=True); the worker's choice when the caller's ph
 turning, see frameprep's orientation lock / OrientationGate): a 1280x720 canvas. The worker never ships it as a
 landscape track any more: live calls (2026-10-13) showed FaceTime mangling a track whose size changes mid-call, and a
 phone on the floor never rotates its screen, so the card goes pre-turned (frameprep.unrotate, the inverse of the
-caller's rotation) on the constant 720x1280 track, which FaceTime fills; the physical turn of the phone reads it upright. The caller's whole
-picture, upright, fitted large on an ink panel on the left (no zoom, no pan, whatever follow is), the status pill / stamp
-at its top centre; on paper in a right column the BRODIE wordmark + timer, the overprinted count, Brodie small at the
-bottom left of the column with his bubble over the picture's corner. Safe area: the LS_* constants (fill crop ~65 px top
-and bottom, the island on a short edge, the self-view in a bottom corner). The idle card is always portrait.
+caller's rotation) on the constant 720x1280 track, which FaceTime fills; the physical turn of the phone reads it
+upright. Competition calls are sideways-only (owner decision 2026-10-13): the live layout is ALWAYS this card.
+Full-bleed: the caller's picture covers the whole canvas (centred, zoomed at most LS_ZOOM_MAX past the fit; ink bars
+only while the orientation lock has not yet turned a portrait picture), with everything floating on it: the BRODIE
+wordmark ticket + timer top left, the status pill / verdict stamp top centre, the big overprint count on a paper
+ticket top right, Brodie small bottom centre-right with his bubble to his left. Safe area: the LS_* constants (fill
+crop ~65 px top and bottom, the island on a short edge, the self-view in a bottom corner). The idle card is portrait.
 
 Framing (Framer): live (follow=False, the default) the caller's whole picture, never zoomed or moved. With follow=True: the person's keypoint box (head to knees = "core"; with the feet = "full") is collected per pose over
 the last WINDOW_S seconds and reduced per edge to its 10th / 90th percentile, so a rep or a jittery landmark does not
@@ -94,9 +96,9 @@ SUSTAIN_S = 0.8                            # ... must want a move this long befo
 EASE_S = 1.0                               # ... which then takes this long
 SAFE_IN = 0.05                             # the inner safe area: the crop shrunk by this fraction per side
 LOCK_SAMPLES = 3                           # poses before the first framing (a cut; the zoom then never changes)
-# Landscape (render(..., landscape=True)): the caller holds the phone sideways, so FaceTime shows our track upright on a
-# landscape screen and fills it. A 1280x720 (16:9) track on a ~19.5:9 iPhone screen keeps the full width and loses
-# LS_CROP_Y = (720 - 1280 * 9 / 19.5) / 2 ~ 65 px top and bottom. The camera island sits mid-way along one short edge
+# Landscape (render(..., landscape=True)): the one live layout (sideways-only). The 1280x720 card rides pre-turned on
+# the constant 720x1280 track; FaceTime fills the (never-rotating) portrait screen with it, so on the ~19.5:9 iPhone
+# the card loses LS_CROP_Y = (720 - 1280 * 9 / 19.5) / 2 ~ 65 px top and bottom to the fill crop. The camera island sits mid-way along one short edge
 # (left or right, by the way the phone is turned; rounded corners there too) -> LS_SAFE_X on both sides. FaceTime's
 # self-view tile sits in a bottom corner of the visible area (~120 x 90 pt + inset on a ~900 x 420 pt screen) ->
 # LS_PIP_W x LS_PIP_H keep-out boxes in both bottom corners. All text and key UI (count, status pill, stamp, Brodie,
@@ -108,13 +110,13 @@ LS_SAFE_X = 72
 LS_SAFE_TOP = LS_CROP_Y + 15               # 80
 LS_SAFE_BOTTOM = LH - LS_CROP_Y - 15       # 640
 LS_PIP_W, LS_PIP_H = 220, 170              # self-view keep-out: x < LS_PIP_W or x > LW - LS_PIP_W, y > LH - LS_CROP_Y - LS_PIP_H
-LS_PANEL_X1 = 852                          # the ink video panel: x 0..LS_PANEL_X1, full height
-LS_PIC_BOX = (24, LS_SAFE_TOP, LS_PANEL_X1 - 16, LS_SAFE_BOTTOM)   # the picture, whole and upright, fitted (no zoom, no pan)
-LS_COL_X0, LS_COL_X1 = LS_PANEL_X1 + 16, LW - LS_SAFE_X             # the right column: header, count, Brodie
+LS_ZOOM_MAX = 1.75                         # full-bleed: cover the canvas, zooming at most this far past the plain fit
 LS_MASCOT_H = 180
-LS_MASCOT_CX = LS_COL_X0 + 92              # bottom left of the column (his art + shadow end before the self-view keep-out)
+LS_MASCOT_CX = 940                         # bottom centre-right (his art + shadow end before the right self-view keep-out)
 LS_MASCOT_FEET = LS_SAFE_BOTTOM
-LS_COUNT_PX = (110, 220)
+LS_COUNT_PX = (110, 230)
+LS_COUNT_W = 264                           # the count ticket, top right: x LW-LS_SAFE_X-LS_COUNT_W .. LW-LS_SAFE_X
+LS_COUNT_Y1 = 396                          # ... ends above the self-view keep-out band
 CORE = [i for i in range(0, 17)] + [23, 24, 25, 26]       # head, arms, hips, knees
 FULL = CORE + [27, 28, 29, 30, 31, 32]                   # + ankles, heels, toes
 
@@ -370,7 +372,6 @@ class PushupMirror:
             self.mascot = Mascot(MASCOT_H); self.idle_mascot = Mascot(IDLE_MASCOT_H); self.ls_mascot = Mascot(LS_MASCOT_H)
             self.mascot.warm(); self.idle_mascot.warm(reactions=False); self.ls_mascot.warm()
         self._idle = None; self._react_t = None; self._paper = None; self._head = None; self.vid_y1 = VID_Y0 + PANEL_MAX
-        self._ls_base = None                                         # landscape: (picture box, cached static canvas)
         self.boxes = {}                                              # the last frame's element boxes (x0, y0, x1, y1), output px
         self._clip = (0, VID_Y0, W, self.vid_y1); self._xlim = (SAFE_X, W - SAFE_X); self._label_y0 = PILL_Y + 80
         self.thr = merged_thresholds(None)
@@ -760,68 +761,60 @@ class PushupMirror:
     def _mascot_feet(self):
         return min(MASCOT_FEET, self.vid_y1 + MASCOT_H - MASCOT_POP)
 
-    # -- landscape (the caller's phone held sideways) ----------------------------------------------------------------
-    def _ls_fit(self, rgb):
-        """The source -> output affine that fits the whole picture, upright, into LS_PIC_BOX (centred; no zoom past the
-        box, no pan), and the picture's output box."""
-        h, w = rgb.shape[:2]; bx0, by0, bx1, by1 = LS_PIC_BOX
-        s = min((bx1 - bx0) / w, (by1 - by0) / h)
-        pw, ph = int(round(w * s)), int(round(h * s))
-        x0 = bx0 + (bx1 - bx0 - pw) // 2; y0 = by0 + (by1 - by0 - ph) // 2
-        M = np.array([[s, 0.0, float(x0)], [0.0, s, float(y0)]], np.float64)
-        return M, (x0, y0, x0 + pw, y0 + ph)
+    # -- landscape (sideways-only: the live layout of every competition call) ----------------------------------------
+    def _ls_fill(self, rgb):
+        """The source -> output affine that makes the picture the screen: cover the whole canvas (centred), zooming at
+        most LS_ZOOM_MAX past the plain fit (a portrait picture - the orientation lock has not turned it yet - gets a
+        big centred band with ink bars instead of a 3x zoom), and the picture's output box clipped to the canvas."""
+        h, w = rgb.shape[:2]
+        s = min(max(LW / w, LH / h), LS_ZOOM_MAX * min(LW / w, LH / h))
+        pw, ph = w * s, h * s
+        x0 = (LW - pw) / 2; y0 = (LH - ph) / 2
+        M = np.array([[s, 0.0, x0], [0.0, s, y0]], np.float64)
+        pic = (max(0, int(round(x0))), max(0, int(round(y0))), min(LW, int(round(x0 + pw))), min(LH, int(round(y0 + ph))))
+        return M, pic
 
-    def _ls_make_base(self, pic):
-        """The static landscape canvas for a picture box: paper (the site's bleeds + halftone), the ink video panel with a
-        pink rule, the column's wordmark + eyebrow and an ink rule under them."""
-        img = np.empty((LH, LW, 3), np.uint8); img[:] = CANVAS
-        z = np.empty((LH, LW - LS_PANEL_X1, 3), np.float32); z[:] = CANVAS
-        yy, xx = np.mgrid[0:LH, 0:LW - LS_PANEL_X1].astype(np.float32)
-        for cx, cy, rx, ry, col, k in ((LW - LS_PANEL_X1 + 60, -20, 560, 520, PINK, 0.16), (-60, LH + 40, 520, 460, BLUE, 0.09)):
-            d = np.sqrt(((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2)
-            al = (np.clip(1 - d / 0.62, 0, 1) * k)[..., None]; z = z * (1 - al) + np.array(col, np.float32) * al
-        dots = np.zeros(z.shape[:2], np.uint8)
-        for y in range(5, LH, 10):
-            for x in range(((y // 10) % 2) * 5, z.shape[1], 10): cv2.circle(dots, (x, y), 1, 255, -1, AA)
-        dd = dots[..., None].astype(np.float32) / 255.0 * 0.07
-        img[:, LS_PANEL_X1:] = np.clip(z * (1 - dd) + np.array(INK, np.float32) * dd, 0, 255).astype(np.uint8)
-        img[:, :LS_PANEL_X1] = INK
-        img[:, LS_PANEL_X1:LS_PANEL_X1 + 5] = PINK
-        rgb, a = brand.text('BRODIE', 56, INK, offset=(2.5, 2.0), offset_color=PINK)
-        brand.blit(img, rgb, a, LS_COL_X0 - 2, LS_SAFE_TOP + 4)
-        ey = LS_SAFE_TOP + 8 + a.shape[0]
-        rgb, a = brand.text('PUSH-UP CHALLENGE', 13, PINK, face='mono')
-        brand.blit(img, rgb, a, LS_COL_X0, ey + 4)
-        self._ls_rule_y = ey + 4 + a.shape[0] + 12
-        img[self._ls_rule_y:self._ls_rule_y + 4, LS_COL_X0:LS_COL_X1] = INK
-        return img
+    def _ls_ticket(self, img, x0, y0, x1, y1):
+        """A paper ticket (hard ink shadow, ink border) for overlays that must read over any video."""
+        cv2.rectangle(img, (x0 + 5, y0 + 6), (x1 + 5, y1 + 6), INK, -1)
+        cv2.rectangle(img, (x0, y0), (x1, y1), CANVAS, -1)
+        cv2.rectangle(img, (x0, y0), (x1, y1), INK, 3)
 
     def _render_landscape(self, rgb, lm, state, now):
-        M, pic = self._ls_fit(rgb)
-        if self._ls_base is None or self._ls_base[0] != pic: self._ls_base = (pic, self._ls_make_base(pic))
-        img = self._ls_base[1].copy()
-        self._clip = pic; self._xlim = (pic[0] + 8, pic[2] - 8)
+        """Full-bleed: the caller's picture is the whole 1280x720 canvas (ink bars only where a not-yet-turned portrait
+        picture cannot reach), everything else floating on it: the wordmark ticket top left with the timer under it,
+        the status pill / verdict stamp top centre, the count ticket top right, Brodie bottom centre-right with his
+        bubble to his left. All inside LS_SAFE_* and out of the self-view keep-outs; the picture may run under the
+        fill crop, the island and the self-view (it is only video)."""
+        M, pic = self._ls_fill(rgb)
+        img = np.empty((LH, LW, 3), np.uint8); img[:] = INK
+        self._clip = pic; self._xlim = (LS_SAFE_X, LW - LS_SAFE_X)
         self._picture(img, rgb, M, pic)
         self.boxes['picture'] = pic
-        # the status pill / stamp: top centre of the picture (away from every corner)
-        pill = self._pill_sprite(); ph, pw = pill[1].shape[:2]
-        py = max(LS_SAFE_TOP, pic[1] + 14); px = (pic[0] + pic[2]) // 2 - pw // 2
-        self._label_y0 = py + ph + 8
         if self._draw_lm is not None and lm is not None: self._skeleton(img, M)
-        # the column: timer at the top right, the count under the rule, Brodie bottom left
-        chip = self._timer_chip(state); h, w_ = chip[1].shape[:2]
-        self._blit(img, 'timer', *chip, LS_COL_X1 - w_, LS_SAFE_TOP + 4)
-        cy = self._ls_rule_y + 16
-        fit = (LS_MASCOT_FEET - LS_MASCOT_H - 10 - cy - 26) / 0.9
-        self._count_at(img, state, now, LS_COL_X0 - 4, cy, fit, LS_COUNT_PX, LS_COL_X1 - LS_COL_X0 - 20)
+        # top left: the wordmark ticket, the timer under it
+        wm = brand.pill((('BRODIE', 36, INK), ('PUSH-UP CHALLENGE', 11, PINK, 'mono')), CANVAS, radius=4, pad=(14, 8), border=3, shadow=5, gap=3)
+        self._blit(img, 'wordmark', *wm, LS_SAFE_X, LS_SAFE_TOP + 2)
+        chip = self._timer_chip(state)
+        self._blit(img, 'timer', *chip, LS_SAFE_X + 2, LS_SAFE_TOP + 2 + wm[1].shape[0] + 14)
+        # top right: the count ticket (the hero)
+        cx0, cx1 = LW - LS_SAFE_X - LS_COUNT_W, LW - LS_SAFE_X
+        self._ls_ticket(img, cx0, LS_SAFE_TOP + 2, cx1, LS_COUNT_Y1)
+        cy = LS_SAFE_TOP + 16
+        fit = (LS_COUNT_Y1 - 14 - (cy + 26) - 26) / 0.9
+        self._count_at(img, state, now, cx0 + 18, cy, fit, LS_COUNT_PX, LS_COUNT_W - 64)
+        # top centre: the status pill / verdict stamp (between the tickets, over the picture)
+        pill = self._pill_sprite(); ph, pw = pill[1].shape[:2]
+        py = LS_SAFE_TOP + 10; px = LW // 2 - pw // 2
+        self._label_y0 = py + ph + 8
         if self.ls_mascot is not None: self._mascot(img, state, now, self.ls_mascot, LS_MASCOT_CX, LS_MASCOT_FEET)
         s = self._stamp_sprite(state, now)
         if s is not None:
             srgb, sa, op = s; h, w_ = sa.shape[:2]
-            self._blit(img, 'stamp', srgb, sa, (pic[0] + pic[2]) // 2 - w_ // 2, py + ph // 2 - h // 2 + 16, opacity=op)
+            self._blit(img, 'stamp', srgb, sa, LW // 2 - w_ // 2, py + ph // 2 - h // 2 + 16, opacity=op)
         else:
             self._blit(img, 'pill', *pill, px, py)
-        if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: left of him, over the picture's corner
+        if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: left of him, over the picture
             maxw = 440
             rgb_, a = brand.bubble(self._cue_lines(state, 28, maxw - 44), 28, maxw, tail='right', radius=4)
             h, w_ = a.shape[:2]
@@ -847,7 +840,8 @@ class PushupMirror:
             self.idle_mascot.draw(img, W // 2, IDLE_FEET, now, speaking=speaking)
         rgb, a = brand.bubble(('STRICT REPS', 'ONLY, BRO.'), 34, 260, tail='none')
         brand.blit(img, *brand.transform(rgb, a, 1.0, 3.0), SAFE_X - 4, IDLE_BAND_Y1 + 26)
-        rgb, a = brand.pill((('PROP YOUR PHONE. HANDS TO KNEES IN VIEW.', 26, INK),), CANVAS, radius=4, pad=(18, 10))
+        rgb, a = brand.pill((('PHONE SIDEWAYS ON THE FLOOR.', 26, INK), ('HANDS TO KNEES IN VIEW.', 26, INK)), CANVAS,
+                            radius=4, pad=(18, 10), gap=6, align='center')
         brand.blit(img, rgb, a, (W - a.shape[1]) // 2, IDLE_FEET + 26)
         return img
 

@@ -613,7 +613,8 @@ class CoachJob:
             while not self.stop.is_set():
                 speaking = self.player is not None and self.player.playing is not None
                 rf = getattr(self, 'reveal_frames', None)
-                rot = int(getattr(self, 'mirror_rot', 0) or 0)                 # sideways portrait-locked phone (update_layout)
+                rot = int(getattr(self, 'mirror_rot', 0) or 0) or 90           # the card's pre-turn (update_layout); never 0:
+                                                                               # the track must stay portrait (no size switch)
                 rv_land = (rf is not None and renderer is not None and getattr(rf, 'landscape_size', None) is not None
                            and bool(getattr(self, 'mirror_landscape', False)))       # sideways phone: landscape card
                 rv_img = rf.current_frame(rv_land) if rf is not None else None
@@ -1251,27 +1252,22 @@ class CoachJob:
             return raw
 
     def update_layout(self, raw, now):
-        """Feed thread: the coach-video layout follows the caller's MEASURED picture rotation (frameprep's orientation
-        lock, the signal the rep judge itself depends on) through an OrientationGate (~2 s sustained, no flapping) ->
-        self.mirror_landscape + self.mirror_rot, read by the avatar loop. rotation 90/270 = sideways phone: the
-        landscape card goes pre-turned by `rot` on the SAME portrait track (_mirror_frame). The track size never
-        changes mid-call: live calls (2026-10-13) showed FaceTime dropping to a small fitted box for the rest of the
-        call after any mid-stream size switch, and a phone lying on the floor (or rotation-locked) never rotates its
-        screen, so a landscape (1280x720) track is never the right answer for a competition call. The picture's SHAPE
-        is deliberately not a signal (it flips the track size on bad evidence; the rotation is pose-verified).
-        Cosmetic: a failure is logged and the layout stays as it was."""
+        """Feed thread: competition calls are sideways-only (owner decision 2026-10-13): the live mirror is ALWAYS the
+        landscape card, pre-turned by self.mirror_rot on the constant 720x1280 track (_mirror_frame; FaceTime fills
+        the never-rotating phone screen with it, and the sideways phone reads it upright). mirror_rot follows the
+        caller's MEASURED picture rotation (frameprep's orientation lock, the signal the rep judge itself depends
+        on), 90 until measured; the picture's shape is deliberately not a signal, and the track size never changes
+        mid-call: live calls (2026-10-13) showed FaceTime dropping to a small fitted box for the rest of the call
+        after any mid-stream size switch. Cosmetic: a failure is logged and the layout stays as it was."""
         try:
-            from facetime.frameprep import OrientationGate
-            gate = getattr(self, 'orient_gate', None)
-            if gate is None: gate = self.orient_gate = OrientationGate()
-            was, was_rot = gate.landscape, getattr(self, 'mirror_rot', 0)
+            was_rot = getattr(self, 'mirror_rot', 0)
             prep = getattr(self, 'prep', None)
             rot_now = int(getattr(prep, 'rotation', 0) or 0)
-            self.mirror_landscape = gate.update(None if prep is None else rot_now in (90, 270), now)
-            self.mirror_rot = (rot_now or was_rot or 90) if self.mirror_landscape else 0
-            if self.mirror_landscape != was or self.mirror_rot != was_rot:
-                print(f"[worker] caller's picture rotation {rot_now} deg: coach-video "
-                      + (f'landscape pre-turned {self.mirror_rot} deg on the portrait track' if self.mirror_rot else 'portrait'), flush=True)
+            self.mirror_landscape = True                               # sideways-only (owner decision 2026-10-13)
+            self.mirror_rot = rot_now if rot_now in (90, 270) else (was_rot or 90)
+            if self.mirror_rot != was_rot:
+                print(f"[worker] caller's picture rotation {rot_now} deg: coach-video landscape "
+                      f'pre-turned {self.mirror_rot} deg on the portrait track', flush=True)
         except Exception as e:
             self.layout_fails = getattr(self, 'layout_fails', 0) + 1
             if self.layout_fails == 1 or self.layout_fails % 100 == 0:

@@ -115,7 +115,7 @@ def test_landscape_render_shape_and_idle_card_stays_portrait():
         assert _render(PushupMirror(mascot=False), np.full(src, 90, np.uint8), True).shape == (720, 1280, 3)
 
 
-def test_landscape_shows_the_whole_picture_unzoomed_and_unmoved():
+def test_landscape_full_bleed_fills_the_canvas_and_holds_still():
     pm = PushupMirror(mascot=False)
     rgb = np.zeros(SRC, np.uint8); rgb[:] = (0, 255, 255)                 # a colour nothing else on the canvas uses
     boxes = set()
@@ -123,13 +123,23 @@ def test_landscape_shows_the_whole_picture_unzoomed_and_unmoved():
         lm = plank(); lm[:, 0] -= 0.006 * k                               # the person moves
         img = pm.render(rgb, lm, DEFAULT_THRESHOLDS, MirrorState(), now=0.066 * k, seq=k, landscape=True)
         boxes.add(pm.boxes['picture'])
-    assert len(boxes) == 1
+    assert len(boxes) == 1                                                # the framing never twitches
     x0, y0, x1, y1 = boxes.pop()
-    assert abs((x1 - x0) / (y1 - y0) - SRC[1] / SRC[0]) < 0.01           # the source's aspect: nothing cropped off
-    assert x1 - x0 >= 0.6 * pmod.LW                                       # large: most of the canvas width
-    m = np.all(img == (0, 255, 255), axis=2); ys, xs = np.nonzero(m)
-    assert xs.min() >= x0 and xs.max() < x1 and ys.min() >= y0 and ys.max() < y1
-    assert m[y0 + 2, x0 + 2] and m[y1 - 3, x1 - 3]                        # the corners of the picture are on screen
+    assert (x0, y0, x1, y1) == (0, 0, pmod.LW, pmod.LH)                   # a 16:9-ish picture IS the screen
+    m = np.all(img == (0, 255, 255), axis=2)
+    assert m[3, 3] and m[pmod.LH - 4, 3] and m[pmod.LH // 2, pmod.LW - 4] # video out to the canvas corners
+
+
+def test_landscape_full_bleed_caps_the_zoom_for_a_portrait_picture():
+    """Before the orientation lock turns a portrait picture, it shows as a big centred band (never a 3x zoom strip)."""
+    pm = PushupMirror(mascot=False)
+    rgb = np.zeros((486, 274, 3), np.uint8); rgb[:] = (0, 255, 255)
+    img = _render(pm, rgb, True)
+    x0, y0, x1, y1 = pm.boxes['picture']
+    fit_w = 274 * (pmod.LH / 486)
+    assert y0 == 0 and y1 == pmod.LH                                      # full height
+    assert fit_w * 1.6 <= (x1 - x0) <= fit_w * 1.8                        # bigger than the fit, far from a cover strip
+    assert np.all(img[pmod.LH // 2, :x0 - 1] != (0, 255, 255)) and np.all(img[pmod.LH // 2, x1 + 1:] != (0, 255, 255))
 
 
 def test_landscape_render_costs_no_more_than_portrait():
@@ -200,7 +210,11 @@ def test_facetime_fill_keeps_count_status_brodie_and_picture_on_screen(landscape
     for k in ('count', 'pill', 'mascot', 'timer'):
         assert inside(boxes[k], safe), (k, boxes[k], safe)
         assert not any(overlaps(boxes[k], z) for z in keep_out), (k, boxes[k])
-    assert inside(boxes['picture'], vis)
+    if landscape:                                                         # full-bleed: the picture COVERS the visible area
+        px = boxes['picture']
+        assert px[0] <= vis[0] and px[2] >= vis[2] and px[1] <= vis[1] and px[3] >= vis[3], (px, vis)
+    else:
+        assert inside(boxes['picture'], vis)
     # what the pixels say: the count (3 vs 188) and Brodie (with vs without) change only on screen
     cb = diff_box(a, b); assert inside(cb, vis) and overlaps(cb, boxes['count'])
     mb = diff_box(a, c); assert inside(mb, vis), (mb, vis)
@@ -272,26 +286,27 @@ def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     assert (f.width, f.height) == (1280, 720)
 
 
-def test_feed_layout_follows_the_measured_rotation_not_the_picture_shape(capsys):
+def test_feed_layout_is_always_landscape_and_follows_the_measured_rotation(capsys):
     job = worker.CoachJob.__new__(worker.CoachJob)
     job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
     up, side = bridge(PORTRAIT_PIC), bridge(LANDSCAPE_PIC)
-    t, seen = 0.0, []
+    t = 0.0
     def step(raw):
         nonlocal t
-        job.prep_frame(raw, t); job.update_layout(raw, t); seen.append((t, job.mirror_landscape)); t += 0.1
-    for _ in range(30): step(up)
-    assert job.mirror_landscape is False
-    for _ in range(100): step(side)                                       # a landscape-shaped picture alone: no evidence
-    assert job.mirror_landscape is False and job.mirror_rot == 0          # (shape flips flipped the track size mid-call)
-    job.prep.rotation = 90                                                # the lock measured the turn: sideways for real
-    t_turn = t
-    for _ in range(100): step(up)
-    assert job.mirror_landscape is True and job.mirror_rot == 90
-    first = min(tt for tt, v in seen if v)
-    assert first - t_turn >= ORIENT_SUSTAIN_S - 1e-6                      # not before the sustain
-    assert sum(1 for i in range(1, len(seen)) if seen[i][1] != seen[i - 1][1]) == 1   # one switch, no flapping
-    assert 'landscape pre-turned 90 deg on the portrait track' in capsys.readouterr().out
+        job.prep_frame(raw, t); job.update_layout(raw, t); t += 0.1
+    step(up)
+    assert job.mirror_landscape is True and job.mirror_rot == 90          # sideways-only, from the first frame
+    assert 'pre-turned 90 deg on the portrait track' in capsys.readouterr().out
+    for _ in range(30): step(side)
+    assert job.mirror_landscape is True and job.mirror_rot == 90          # the picture's shape changes nothing
+    job.prep.rotation = 270                                               # the lock measured the other turn
+    step(up)
+    assert job.mirror_landscape is True and job.mirror_rot == 270
+    assert 'pre-turned 270 deg on the portrait track' in capsys.readouterr().out
+    job.prep.rotation = 0                                                 # lost again: the last measured turn holds
+    for _ in range(5): step(up)
+    assert job.mirror_landscape is True and job.mirror_rot == 270
+    assert capsys.readouterr().out == ''                                  # no churn in the log
 
 
 def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys):
@@ -345,20 +360,3 @@ def test_locked_sideways_phone_gets_the_card_pre_turned_on_the_portrait_track():
     assert (f.width, f.height) == (1280, 720)                             # no lock (screen rotates): landscape track as before
 
 
-def test_feed_layout_tracks_the_locked_phone_rotation(capsys):
-    job = worker.CoachJob.__new__(worker.CoachJob)
-    job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
-    raw = bridge(PORTRAIT_PIC)                                            # the lock turns the picture upright again
-    t = 0.0
-    def step():
-        nonlocal t
-        job.prep_frame(raw, t); job.update_layout(raw, t); t += 0.1
-    for _ in range(5): step()
-    assert job.mirror_landscape is False and job.mirror_rot == 0
-    job.prep.rotation = 270                                               # the phone goes sideways (portrait-locked)
-    for _ in range(40): step()
-    assert job.mirror_landscape is True and job.mirror_rot == 270
-    assert 'pre-turned 270 deg on the portrait track' in capsys.readouterr().out
-    job.prep.rotation = 0                                                 # upright again (sustain + the 8 s hold)
-    for _ in range(140): step()
-    assert job.mirror_landscape is False and job.mirror_rot == 0

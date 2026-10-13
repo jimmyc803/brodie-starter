@@ -135,7 +135,7 @@ export default async function HowItWorksPage() {
                 <strong>Side, diagonal or front view all work.</strong> The judge is lenient on camera angle. Side-on is still the easiest to read.
               </>,
               <>
-                <strong>Sideways or upright, either is fine.</strong> Turn your phone sideways and Brodie&apos;s video switches to a landscape layout on its own; upright gets the portrait layout. Portrait lock is OK. No zooming or panning needed.
+                <strong>Phone sideways.</strong> Lay your phone sideways (landscape) on the floor or a prop. Brodie&apos;s video is a sideways full-screen layout, so it reads upright on a sideways phone. Portrait lock is OK. No zooming or panning needed.
               </>,
               <>
                 <strong>Upper body and knees in frame.</strong> Shoulders, elbows and wrists must be visible. Feet can be cut off.
@@ -166,7 +166,7 @@ export default async function HowItWorksPage() {
         </SectionHeading>
         <P>
           On the FaceTime call you see <strong>your own live video</strong> with a skeleton drawn on your body: green lines where you&apos;re
-          doing it right, red where something is off (sagging hips, bent legs). It switches between a portrait and a landscape layout by itself, depending on how you hold your phone. On the video:
+          doing it right, red where something is off (sagging hips, bent legs). Your own camera picture fills the whole screen. On the video:
         </P>
         <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {[

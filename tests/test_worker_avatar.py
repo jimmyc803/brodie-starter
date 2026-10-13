@@ -135,10 +135,11 @@ def test_reveal_follows_a_sideways_phone_to_the_landscape_layout(monkeypatch):
         asked.append(landscape)
         return land if landscape else port
     job.reveal_frames = SimpleNamespace(current_frame=current_frame, landscape_size=(1280, 720))
-    job.mirror_landscape = True
+    job.mirror_landscape = True; job.mirror_rot = 90
     from facetime import pushup_mirror
     def no_mirror(*a, **k): raise AssertionError('mirror rendered during the reveal')
     monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', no_mirror)
     _run(job, lambda: len(captured) >= 2)
-    assert captured[:2] == [(1280, 720)] * 2 and asked[:2] == [True, True]       # same track, landscape frames
+    assert asked[:2] == [True, True]                                             # the landscape reveal card...
+    assert captured[:2] == [(720, 1280)] * 2                                     # ...pre-turned on the portrait track
 
