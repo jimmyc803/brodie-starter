@@ -170,3 +170,13 @@ def test_events_after_close_ignored(env):
         return before, (len(env.db.inserts), len(env.db.updates))
     before, after = asyncio.run(go())
     assert before == after and env.shown == []
+
+
+@pytest.mark.parametrize('identity, gatekept', [('chert-bridge-call-9', True), ('doctor-probe', False)])
+def test_warm_job_gatekeeps_a_chert_bridge_caller(identity, gatekept, monkeypatch):
+    """Chert routes real calls into prewarmed rooms: a chert-bridge caller in a warm job is a call; other publishers are not."""
+    job = make_job(warm=True)
+    job.competition, started = True, []
+    monkeypatch.setattr(job, 'start_competition', lambda: started.append(job.call_id))
+    job.bind(SimpleNamespace(identity=identity), 'test')
+    assert started == (['call-9'] if gatekept else [])

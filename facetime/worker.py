@@ -541,7 +541,10 @@ class CoachJob:
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
         if self.competition:
-            if self.warm: print('[competition] warm job (chert_warm): no call to gatekeep; nothing is counted or recorded here', flush=True)
+            # Chert routes a real call into a prewarmed room: a chert-bridge-<call_id> caller in a warm job IS a call. Only a
+            # warm job's other publishers (chert doctor's test participant) are not gatekept.
+            if self.warm and not participant.identity.startswith(BRIDGE_PREFIX):
+                print('[competition] warm job (chert_warm): no call to gatekeep; nothing is counted or recorded here', flush=True)
             elif self.comp is None and not self.closed: self.start_competition()
         elif self.recap is None and not self.warm and not self.voice_mode and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
             from facetime.call_recap import CallRecap
