@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import hashlib
 import hmac
 import json
+import time
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -143,13 +144,17 @@ def test_webhook_auth(env, monkeypatch):
     monkeypatch.setenv("CHERT_MSG_URL", "https://example.test")
     monkeypatch.setenv("CHERT_MSG_TOKEN", "test")
     monkeypatch.setenv("CHERT_WEBHOOK_SECRET", "test-secret")
-    raw = json.dumps({"messages": [{"id": "signed", "handle": HANDLE, "body": "HELP", "received_at": T0.isoformat()}]}).encode()
-    signature = hmac.new(b"test-secret", raw, hashlib.sha256).hexdigest()
+    raw = json.dumps({"event": "message.received", "event_id": "e1", "data": {
+        "chat": {"id": "c1", "is_group": False},
+        "message": {"id": "signed", "direction": "inbound", "sent_at": T0.isoformat(),
+                    "sender_handle": {"handle": HANDLE}, "parts": [{"type": "text", "value": "HELP"}]}}}).encode()
+    ts = str(int(time.time()))
+    signature = f"t={ts},v1=" + hmac.new(b"test-secret", ts.encode() + b"." + raw, hashlib.sha256).hexdigest()
     with TestClient(create_app(store, outbox, clock=lambda: T0, flags=Flags(MESSAGING_PROVIDER="chert"), token="test")) as client:
         assert client.post("/webhooks/mock", content=raw).status_code == 404
         assert client.post("/webhooks/chert", content=raw).status_code == 401
-        assert client.post("/webhooks/chert", content=raw, headers={"X-Chert-Signature": signature}).json()["handled"] == 1
-        assert client.post("/webhooks/chert", content=raw + b" ", headers={"X-Chert-Signature": signature}).status_code == 401
+        assert client.post("/webhooks/chert", content=raw, headers={"X-Webhook-Signature": signature}).json()["handled"] == 1
+        assert client.post("/webhooks/chert", content=raw + b" ", headers={"X-Webhook-Signature": signature}).status_code == 401
 
 
 def test_quiet_boundary_release_and_bypass(env):

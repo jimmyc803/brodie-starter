@@ -1,10 +1,9 @@
 """Synchronous messaging adapters; retrying and deduplication belong to the outbox.
 
-ASSUMED pending Chert docs: POST /messages with {handle, body} for text or
-{handle, image_url, caption} for images returns {id: str}. Inbound JSON is
-{messages: [{id, handle, body, received_at}]} with ISO-8601 aware timestamps.
-X-Chert-Signature is the HMAC-SHA256 hex digest of the exact request bytes.
-MockProvider uses the same inbound envelope for local round-trip testing.
+ChertProvider follows the Chert Messaging API (console.trychert.com/documentation, webhook version 2026-05-04):
+POST /send {phone, body, idempotency_key} for text; images go register -> upload -> chat message with a media part.
+Inbound is a signed `message.received` event; see ChertProvider.parse_inbound.
+MockProvider keeps the simple envelope {messages: [{id, handle, body, received_at}]} for local round-trip testing.
 """
 
 from dataclasses import dataclass
@@ -15,7 +14,8 @@ import json
 import logging
 import os
 import re
-from typing import Protocol
+import time
+from typing import Callable, Protocol
 from uuid import uuid4
 
 import httpx
@@ -146,59 +146,160 @@ class WebOnlyProvider:
         return []
 
 
+CHERT_API = "https://console.trychert.com/api/v1"
+CHERT_WEBHOOK_VERSION = "2026-05-04"
+SIGNATURE_TOLERANCE_S = 300
+
+
 class ChertProvider:
+    """Chert iMessage line. Env: CHERT_MSG_TOKEN (the project's signing secret, sent as Bearer),
+    CHERT_WEBHOOK_SECRET (the webhook subscription secret), optional CHERT_MSG_URL (API base),
+    CHERT_TENANT (x-chert-tenant, multi-tenant projects only)."""
     name = "chert"
 
-    def __init__(self, *, client: httpx.Client | None = None) -> None:
-        self.base_url = os.environ.get("CHERT_MSG_URL", "").strip().rstrip("/")
+    def __init__(self, *, client: httpx.Client | None = None, now: Callable[[], float] | None = None) -> None:
+        self.base_url = (os.environ.get("CHERT_MSG_URL", "").strip() or CHERT_API).rstrip("/")
         self._token = os.environ.get("CHERT_MSG_TOKEN", "").strip()
         self._secret = os.environ.get("CHERT_WEBHOOK_SECRET", "").strip()
-        if not all((self.base_url, self._token, self._secret)):
-            raise NotConfigured("Chert requires CHERT_MSG_URL, CHERT_MSG_TOKEN, CHERT_WEBHOOK_SECRET")
+        self._tenant = os.environ.get("CHERT_TENANT", "").strip()
+        if not all((self._token, self._secret)):
+            raise NotConfigured("Chert requires CHERT_MSG_TOKEN and CHERT_WEBHOOK_SECRET")
         self._client = client
+        self._now = now or time.time
 
-    def _send(self, payload: dict[str, str]) -> str:
-        request = self._client.post if self._client is not None else httpx.post
-        response = request(
-            f"{self.base_url}/messages",
-            headers={"Authorization": f"Bearer {self._token}"},
-            json=payload,
-            timeout=10.0,
-        )
+    def _headers(self, content_type: str = "application/json") -> dict[str, str]:
+        headers = {"Authorization": f"Bearer {self._token}", "Content-Type": content_type}
+        if self._tenant:
+            headers["x-chert-tenant"] = self._tenant
+        return headers
+
+    def _call(self, method: str, path: str, *, json_body: dict | None = None, content: bytes | None = None,
+              content_type: str = "application/json") -> dict:
+        client = self._client or httpx.Client()
+        try:
+            response = client.request(method, f"{self.base_url}{path}", headers=self._headers(content_type),
+                                      json=json_body, content=content, timeout=15.0)
+        finally:
+            if self._client is None:
+                client.close()
         response.raise_for_status()
         result = response.json()
-        if (
-            not isinstance(result, dict)
-            or not isinstance(result.get("id"), str)
-            or not result["id"].strip()
-        ):
-            raise ValueError("Chert response must contain a nonempty message id")
-        logger.info("Messaging outbound provider=chert")
-        return result["id"]
+        if not isinstance(result, dict) or result.get("success") is False:
+            error = result.get("error") if isinstance(result, dict) else None
+            raise ValueError(f"Chert error: {error.get('code') if isinstance(error, dict) else 'bad response'}")
+        return result
+
+    @staticmethod
+    def _id(result: dict, *keys: str) -> str:
+        for key in keys:
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        data = result.get("data")
+        if isinstance(data, dict):
+            return ChertProvider._id(data, *keys)
+        raise ValueError(f"Chert response must contain one of {keys}")
+
+    def _send(self, handle: str, body: str) -> dict:
+        result = self._call("POST", "/send", json_body={"phone": handle, "body": body, "idempotency_key": uuid4().hex})
+        logger.info("Messaging outbound provider=chert kind=text")
+        return result
 
     def send_text(self, handle: str, body: str) -> str:
-        return self._send({"handle": handle, "body": body})
+        return self._id(self._send(handle, body), "message_id", "id")
 
     def send_image(self, handle: str, image_url: str, caption: str) -> str:
-        return self._send({"handle": handle, "image_url": image_url, "caption": caption})
+        """Caption first (via /send, which also yields the chat id), then the image as a media part."""
+        fetch = self._client or httpx.Client()
+        try:
+            image = fetch.get(image_url, timeout=15.0, follow_redirects=True)
+        finally:
+            if self._client is None:
+                fetch.close()
+        image.raise_for_status()
+        content_type = image.headers.get("content-type", "image/png").split(";")[0].strip() or "image/png"
+        data = image.content
+        attachment = self._id(self._call("POST", "/attachments", json_body={
+            "filename": "brodie-result." + (content_type.split("/")[-1] or "png"),
+            "content_type": content_type, "size_bytes": len(data)}), "attachment_id", "id")
+        self._call("PUT", f"/attachments/{attachment}/upload", content=data, content_type=content_type)
+        chat = self._id(self._send(handle, caption), "lead_id", "chat_id", "convo_id")
+        result = self._call("POST", f"/chats/{chat}/messages",
+                            json_body={"message": {"parts": [{"type": "media", "attachment_id": attachment}]}})
+        logger.info("Messaging outbound provider=chert kind=image")
+        return self._id(result, "message_id", "id")
 
     def verify(self, headers: dict, body: bytes) -> bool:
-        signatures = [
-            value for key, value in headers.items()
-            if key.lower() == "x-chert-signature"
-        ]
-        if len(signatures) != 1 or not isinstance(signatures[0], str):
+        """HMAC-SHA256(secret, "<ts>.<raw body>") from `X-Webhook-Signature: t=<ts>,v1=<hex>`, or the legacy
+        `x-chert-signature: v1,<ts>,<hex>`. Rejects stale timestamps (replay) and ambiguous duplicate headers."""
+        def one(name: str) -> str | None:
+            values = [v for k, v in headers.items() if k.lower() == name]
+            return values[0] if len(values) == 1 and isinstance(values[0], str) else None
+
+        ts = digest = None
+        modern = one("x-webhook-signature")
+        if modern is not None:
+            fields = dict(part.split("=", 1) for part in modern.split(",") if "=" in part)
+            ts, digest = fields.get("t"), fields.get("v1")
+        else:
+            legacy = one("x-chert-signature")
+            parts = legacy.split(",") if legacy else []
+            if len(parts) == 3 and parts[0] == "v1":
+                ts, digest = parts[1], parts[2]
+        if not ts or not digest or not re.fullmatch(r"[0-9]{1,13}", ts) or not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
             return False
-        signature = signatures[0]
-        if not re.fullmatch(r"[0-9a-fA-F]{64}", signature):
+        stamp = int(ts) / (1000 if len(ts) > 11 else 1)
+        if abs(self._now() - stamp) > SIGNATURE_TOLERANCE_S:
             return False
-        expected = hmac.new(self._secret.encode(), body, hashlib.sha256).hexdigest()
-        return hmac.compare_digest(expected, signature.lower())
+        expected = hmac.new(self._secret.encode(), ts.encode() + b"." + body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, digest.lower())
 
     def parse_inbound(self, headers: dict, body: bytes) -> list[Inbound]:
+        """One `message.received` event -> at most one Inbound. Other events (incl. legacy `lead_reply`),
+        group chats and our own outbound echoes are acknowledged and ignored."""
         if not self.verify(headers, body):
             raise ValueError("Invalid Chert webhook signature")
-        return _parse_messages(body, self.name)
+        payload = json.loads(body)
+        if not isinstance(payload, dict):
+            raise ValueError("Expected a JSON object")
+        event = payload.get("event") or payload.get("event_type") or payload.get("type")
+        if event != "message.received":
+            return []
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        chat = data.get("chat") if isinstance(data.get("chat"), dict) else {}
+        message = data.get("message") if isinstance(data.get("message"), dict) else {}
+        if chat.get("is_group") is True:
+            return []
+        if str(message.get("direction", "inbound")).lower() in ("outbound", "outgoing", "sent"):
+            return []
+        sender = message.get("sender_handle")
+        handle_raw = (sender.get("handle") if isinstance(sender, dict) else None) or payload.get("from")
+        message_id = message.get("id") or payload.get("message_guid") or payload.get("event_id")
+        if not isinstance(message_id, str) or not message_id.strip():
+            raise ValueError("Invalid inbound message id")
+        if not isinstance(handle_raw, str):
+            raise InvalidHandle("Missing inbound sender handle")
+        handle = normalize_handle(handle_raw)
+        if handle is None:
+            raise InvalidHandle("Invalid inbound message handle")
+        parts = message.get("parts") if isinstance(message.get("parts"), list) else []
+        texts = [p["value"] for p in parts if isinstance(p, dict) and p.get("type") == "text" and isinstance(p.get("value"), str)]
+        text = " ".join(texts) if texts else (payload.get("text") if isinstance(payload.get("text"), str) else "")
+        received_at = _when(message.get("sent_at")) or _when(payload.get("timestamp")) or datetime.now(timezone.utc)
+        logger.info("Messaging inbound provider=chert")
+        return [Inbound(message_id, handle, text, received_at)]
+
+
+def _when(value: object) -> datetime | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return datetime.fromtimestamp(value / (1000 if value > 1e11 else 1), timezone.utc)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return None
 
 
 def provider_from_env() -> MessagingProvider:

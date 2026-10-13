@@ -82,6 +82,11 @@ Send James these questions (answers decide the flags; until answered the safe de
 1. Does `chert_call` (the metadata at call start) include the caller's handle/phone/email? -> `CALLER_ID_SOURCE=chert_meta` if yes, else `claim_window`.
 2. Is there an iMessage API (send text, inbound webhook) on Brodie's number? Does an existing agent already handle inbound texts?
    If yes: need `CHERT_MSG_URL`, `CHERT_MSG_TOKEN`, `CHERT_WEBHOOK_SECRET` -> `MESSAGING_PROVIDER=chert`; otherwise `web_only` or `mock`.
+   ANSWERED 2026-10-12: yes, Chert Messaging API (console.trychert.com/documentation, iMessage project
+   3a00424c-c597-4f08-9b3b-4a6b3d3519f5; FaceTime project 2c765f80-02fb-4b0c-91ac-723ffece9006). Setup:
+   put the project's signing secret in SSM `/brodie/challenge/CHERT_MSG_TOKEN` (SecureString), then
+   `python3 scripts/chert_setup.py --subscribe` registers the webhook and stores `CHERT_WEBHOOK_SECRET`.
+   `CHERT_MSG_URL` now defaults to the public API; `CHERT_TENANT` only for multi-tenant projects.
 3. Does FaceTime hang up when the agent leaves the room? Is there an API to end a call? -> `HANGUP_MODE=leave_room|chert_api|unverified`.
 4. How long is the line offline after a call? -> `LINE_OFFLINE_GAP_S` (default 180).
 5. Can `chert dev --agent` run 24/7 on EC2? Token expiry? Is there a production mode?

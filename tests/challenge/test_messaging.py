@@ -8,7 +8,7 @@ import pytest
 
 from challenge.messaging.commands import parse, validate_display_name
 from challenge.messaging.providers import (
-    ChertProvider, MockProvider, NotConfigured, WebOnlyProvider,
+    ChertProvider, InvalidHandle, MockProvider, NotConfigured, WebOnlyProvider,
     normalize_handle, provider_from_env,
 )
 from challenge.messaging.templates import render
@@ -146,56 +146,114 @@ def test_malformed_inbound_rejected(payload):
 
 @pytest.fixture
 def chert_env(monkeypatch):
-    monkeypatch.setenv("CHERT_MSG_URL", "https://chert.example/api/")
+    monkeypatch.setenv("CHERT_MSG_URL", "https://chert.example/api/v1/")
     monkeypatch.setenv("CHERT_MSG_TOKEN", "test-token")
     monkeypatch.setenv("CHERT_WEBHOOK_SECRET", "test-secret")
+    monkeypatch.delenv("CHERT_TENANT", raising=False)
 
 
-def signature(body):
-    return hmac.new(b"test-secret", body, hashlib.sha256).hexdigest()
+NOW = 1_760_300_000
 
 
-def test_chert_hmac(chert_env):
-    provider = ChertProvider()
-    body = envelope()
-    headers = {"x-chert-signature": signature(body)}
-    assert provider.verify(headers, body)
-    assert provider.verify({"X-Chert-Signature": signature(body).upper()}, body)
-    assert provider.parse_inbound(headers, body)[0].body == "QUEUE"
-    for invalid in ({}, {"X-Chert-Signature": "0" * 64}, {"X-Chert-Signature": "é" * 64},
-                    {"X-Chert-Signature": None}, {"X-Chert-Signature": "sha256=" + signature(body)},
-                    {**headers, "X-Chert-Signature": signature(body)}):
-        assert not provider.verify(invalid, body)
+def signed(body, ts=NOW, secret=b"test-secret"):
+    return f"t={ts},v1=" + hmac.new(secret, f"{ts}.".encode() + body, hashlib.sha256).hexdigest()
+
+
+def chert_event(text="QUEUE", **over):
+    event = {"event": "message.received", "event_id": "evt-1", "timestamp": "2026-10-12T16:00:01Z",
+             "data": {"chat": {"id": "chat-9", "is_group": False, "owner_handle": {"handle": "+14155550000"}},
+                      "message": {"id": "msg-1", "direction": "inbound", "sent_at": "2026-10-12T16:00:00Z",
+                                  "sender_handle": {"handle": "(415) 555-2671"},
+                                  "parts": [{"type": "text", "value": text}]}}}
+    for key, value in over.items():
+        event["data"]["message"][key] = value
+    return json.dumps(event).encode()
+
+
+def provider(**kw):
+    return ChertProvider(now=lambda: NOW, **kw)
+
+
+def test_chert_signature(chert_env):
+    p, body = provider(), chert_event()
+    assert p.verify({"X-Webhook-Signature": signed(body)}, body)
+    assert p.verify({"x-webhook-signature": signed(body, NOW * 1000)}, body)  # ms timestamps
+    legacy = "v1,%s,%s" % (NOW, signed(body).split("v1=")[1])
+    assert p.verify({"x-chert-signature": legacy}, body)
+    for bad in ({}, {"X-Webhook-Signature": signed(body, NOW - 301)}, {"X-Webhook-Signature": signed(body, secret=b"x")},
+                {"X-Webhook-Signature": "t=%s" % NOW}, {"X-Webhook-Signature": None},
+                {"X-Webhook-Signature": signed(body), "x-webhook-signature": signed(body)}):
+        assert not p.verify(bad, body)
         with pytest.raises(ValueError, match="signature"):
-            provider.parse_inbound(invalid, body)
-    assert not provider.verify(headers, body + b" ")
+            p.parse_inbound(bad, body)
+    assert not p.verify({"X-Webhook-Signature": signed(body)}, body + b" ")
 
 
-def test_chert_sends(chert_env):
+def test_chert_parse_message_received(chert_env):
+    p, body = provider(), chert_event()
+    [m] = p.parse_inbound({"X-Webhook-Signature": signed(body)}, body)
+    assert (m.provider_message_id, m.handle, m.body) == ("msg-1", "+14155552671", "QUEUE")
+    assert m.received_at == datetime(2026, 10, 12, 16, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("body", [
+    json.dumps({"event": "lead_reply", "from": "+14155552671", "text": "hi"}).encode(),
+    chert_event(direction="outbound"),
+    json.dumps({**json.loads(chert_event()), "data": {**json.loads(chert_event())["data"], "chat": {"is_group": True}}}).encode(),
+])
+def test_chert_ignores_other_events(chert_env, body):
+    assert provider().parse_inbound({"X-Webhook-Signature": signed(body)}, body) == []
+
+
+def test_chert_bad_sender(chert_env):
+    body = chert_event(sender_handle={"handle": "not a handle"})
+    with pytest.raises(InvalidHandle):
+        provider().parse_inbound({"X-Webhook-Signature": signed(body)}, body)
+
+
+def test_chert_sends(chert_env, monkeypatch):
+    monkeypatch.setenv("CHERT_TENANT", "brodie")
     requests = []
 
     def transport(request):
         requests.append(request)
-        return httpx.Response(200, json={"id": f"out-{len(requests)}"})
+        path = request.url.path
+        if request.url.host == "cards.example":
+            return httpx.Response(200, content=b"PNGDATA", headers={"content-type": "image/png"})
+        if path.endswith("/send"):
+            return httpx.Response(200, json={"status": "sent", "message_id": f"m-{len(requests)}", "lead_id": "lead-7"})
+        if path.endswith("/attachments"):
+            return httpx.Response(200, json={"id": "att-1"})
+        if path.endswith("/upload"):
+            return httpx.Response(200, json={"uploaded": True, "size_bytes": 7})
+        return httpx.Response(200, json={"message_id": "m-media"})
 
     with httpx.Client(transport=httpx.MockTransport(transport)) as client:
-        provider = ChertProvider(client=client)
-        assert provider.send_text("+14155552671", "Go!") == "out-1"
-        assert provider.send_image("+14155552671", "https://example.com/card.png", "Nice!") == "out-2"
-    assert all(str(request.url) == "https://chert.example/api/messages" for request in requests)
-    assert all(request.headers["Authorization"] == "Bearer test-token" for request in requests)
-    assert json.loads(requests[0].content) == {"handle": "+14155552671", "body": "Go!"}
-    assert json.loads(requests[1].content) == {"handle": "+14155552671", "image_url": "https://example.com/card.png", "caption": "Nice!"}
+        p = provider(client=client)
+        assert p.send_text("+14155552671", "Go!") == "m-1"
+        assert p.send_image("+14155552671", "https://cards.example/c.png", "Nice!") == "m-media"
+    send = requests[0]
+    assert str(send.url) == "https://chert.example/api/v1/send"
+    assert send.headers["Authorization"] == "Bearer test-token" and send.headers["x-chert-tenant"] == "brodie"
+    body = json.loads(send.content)
+    assert body["phone"] == "+14155552671" and body["body"] == "Go!" and body["idempotency_key"]
+    paths = [(r.method, r.url.path) for r in requests[1:]]
+    assert paths == [("GET", "/c.png"), ("POST", "/api/v1/attachments"), ("PUT", "/api/v1/attachments/att-1/upload"),
+                     ("POST", "/api/v1/send"), ("POST", "/api/v1/chats/lead-7/messages")]
+    assert json.loads(requests[2].content) == {"filename": "brodie-result.png", "content_type": "image/png", "size_bytes": 7}
+    assert requests[3].content == b"PNGDATA"
+    assert json.loads(requests[5].content) == {"message": {"parts": [{"type": "media", "attachment_id": "att-1"}]}}
 
 
 @pytest.mark.parametrize(("status", "payload", "error"), [
     (429, {"error": "rate limited"}, httpx.HTTPStatusError),
-    (500, {}, httpx.HTTPStatusError), (200, {}, ValueError), (200, {"id": ""}, ValueError),
+    (500, {}, httpx.HTTPStatusError), (200, {}, ValueError), (200, {"message_id": ""}, ValueError),
+    (200, {"success": False, "error": {"status": 400, "code": 1003, "message": "bad phone"}}, ValueError),
 ])
 def test_chert_send_errors_propagate(chert_env, status, payload, error):
     with httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=payload))) as client:
         with pytest.raises(error):
-            ChertProvider(client=client).send_text("+14155552671", "Go!")
+            provider(client=client).send_text("+14155552671", "Go!")
 
 
 def test_chert_transport_failure_propagates(chert_env):
@@ -204,7 +262,12 @@ def test_chert_transport_failure_propagates(chert_env):
 
     with httpx.Client(transport=httpx.MockTransport(transport)) as client:
         with pytest.raises(httpx.ConnectError, match="Connection failed"):
-            ChertProvider(client=client).send_text("+14155552671", "Go!")
+            provider(client=client).send_text("+14155552671", "Go!")
+
+
+def test_chert_default_base_url(chert_env, monkeypatch):
+    monkeypatch.delenv("CHERT_MSG_URL")
+    assert ChertProvider().base_url == "https://console.trychert.com/api/v1"
 
 
 def test_inbound_batch_and_empty_envelope():
@@ -217,7 +280,7 @@ def test_inbound_batch_and_empty_envelope():
     assert provider.parse_inbound({}, b'{"messages": []}') == []
 
 
-@pytest.mark.parametrize("key", ["CHERT_MSG_URL", "CHERT_MSG_TOKEN", "CHERT_WEBHOOK_SECRET"])
+@pytest.mark.parametrize("key", ["CHERT_MSG_TOKEN", "CHERT_WEBHOOK_SECRET"])
 def test_missing_chert_config(chert_env, monkeypatch, key):
     monkeypatch.delenv(key)
     with pytest.raises(NotConfigured):
