@@ -1,7 +1,10 @@
 """Ship-gate regression check on the real labelled clips (task 15, docs/challenge/CALIBRATION.md).
 
-Runs only where the gitignored footage exists: judge_eval/clips + judge_eval/labels.yaml in this checkout, or the
-paths in JUDGE_EVAL_CLIPS / JUDGE_EVAL_LABELS. Each clip goes through judge_eval.run.run_video_clip (decode, pose,
+Ship-gate step, run explicitly (not collected by the unit suite, because the footage is gitignored and local only):
+    PYTHONPATH=src:. .venv/bin/python -m pytest -q -p no:cacheprovider judge_eval/check_real_clips.py
+Needs judge_eval/clips + judge_eval/labels.yaml in this checkout, or the paths in JUDGE_EVAL_CLIPS / JUDGE_EVAL_LABELS;
+it FAILS (does not skip) when they are missing, so a gate run can never pass vacuously.
+Each clip goes through judge_eval.run.run_video_clip (decode, pose,
 RepCounter2, judge: the live code path). Slow (about 2 min for ~5k frames), so it is one module-scoped run.
 
 Pinned values are what j2 achieves (clean 86% accepted, worst clean count error 2), so a regression fails. The
@@ -17,12 +20,10 @@ import pytest
 
 from judge_eval.run import CHEAT, parse_labels, run_video_clip, ship_gate
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 CLIPS = Path(os.environ.get("JUDGE_EVAL_CLIPS", ROOT / "judge_eval" / "clips"))
 LABELS = Path(os.environ.get("JUDGE_EVAL_LABELS", ROOT / "judge_eval" / "labels.yaml"))
 
-pytestmark = pytest.mark.skipif(not (CLIPS.is_dir() and LABELS.is_file()),
-                                reason="real judge_eval clips / labels not present (gitignored, local only)")
 
 # Categories in which no rep may ever be accepted (CHEAT + not_horizontal: incline / decline / wall push-ups).
 NEVER_ACCEPT = tuple(CHEAT) + ("not_horizontal",)
@@ -33,9 +34,9 @@ ZERO_REP_OK = {"px_6970183.mp4": "ankles outside the frame (x ~1.13): the counte
 
 @pytest.fixture(scope="module")
 def results():
+    assert CLIPS.is_dir() and LABELS.is_file(), f"real clips/labels missing: {CLIPS}, {LABELS}"
     labels = [x for x in parse_labels(LABELS.read_text()) if (CLIPS / x.clip).is_file()]
-    if not labels:
-        pytest.skip("no labelled clip files present")
+    assert labels, "no labelled clip files present"
     return [run_video_clip(x, CLIPS / x.clip, None) for x in labels]
 
 

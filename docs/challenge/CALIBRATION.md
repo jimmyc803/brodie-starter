@@ -9,7 +9,7 @@ Method: pose landmarks of every clip were cached once (scratchpad) and replayed 
 `FramePipeline.process_landmarks` (same post-pose path as `judge_eval.run`). Every disagreement with a label was
 checked on extracted frames with a skeleton overlay before deciding judge error vs label error. Final numbers come
 from the real path: `python -m judge_eval.run --labels ... --clips-dir ... --bench`.
-`tests/challenge/test_calibration_real.py` re-runs it wherever the clips exist and pins the achieved values.
+`judge_eval/check_real_clips.py` (run explicitly as a ship-gate step; fails if the clips are missing) re-runs it and pins the achieved values.
 
 ## Result
 
@@ -26,7 +26,7 @@ Clean per clip (expected / accepted / counted): 4964650 4/5/5, 4964649 4/3/3, 60
 8456661 4/2/4 (2 x no_lockout), 4945123 8/7/8 (1 x no_lockout).
 
 The 90% / <= 1 goal stays the target (judge_eval.run SHIP GATE). The six clean clips are too few to tune further
-without overfitting; more clean side-view footage is needed. test_calibration_real pins 86% / 2 so a regression fails.
+without overfitting; more clean side-view footage is needed. check_real_clips pins 86% / 2 so a regression fails.
 The gate numbers above are unchanged by the fix round (sag/pike independence, knee pivot).
 
 ### Count errors: judge, counter or label
