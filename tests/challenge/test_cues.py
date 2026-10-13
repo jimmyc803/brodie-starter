@@ -11,10 +11,22 @@ time_up check_texts power_hour hang_up welcome""".split()
 
 def test_keys_and_exact_phrases():
     assert set(CUES) == set(KEYS)
-    assert CUES['competition_over'] == 'The competition is over — thanks for playing.'
+    assert CUES['competition_over'] == "The challenge isn't open right now. Watch your texts!"
     assert CUES['time_up'] == 'Time!'
-    assert CUES['hang_up'] == "Time's up — you can hang up now."
-    assert CUES['welcome'] == "You're on — side view, whole body in frame. Go!"
+    assert CUES['hang_up'] == "That's a wrap! You can hang up now."
+    assert CUES['welcome'] == "You're on! Side view, head to toe in frame. Let's go!"
+    assert CUES['not_your_turn'] == "Not your turn! Text this number JOIN, then QUEUE. I'll text you when you're up."
+    assert CUES['queued'] == "Line's busy, but you're in line now! I'll text you when you're up."
+    assert CUES['not_signed_up'] == "You're not signed up! Text this number JOIN and your name."
+
+
+def test_pickup_lines_tell_the_caller_what_to_text():
+    # The FaceTime line and the texting number are the same, so the reject lines say "this number", never a name to text.
+    for key in ('not_your_turn', 'not_signed_up'):
+        assert 'Text this number JOIN' in CUES[key]
+    assert 'QUEUE' in CUES['not_your_turn'] and "I'll text you when you're up" in CUES['not_your_turn']
+    assert "I'll text you when you're up" in CUES['queued']
+    assert not any('Brodie' in CUES[k] for k in ('not_your_turn', 'not_signed_up', 'queued'))
 
 
 def test_every_phrase_in_rendered_vocabulary():

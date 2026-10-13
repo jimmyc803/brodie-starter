@@ -16,6 +16,7 @@ DATA = os.environ.get('RTCOACH_DATA', os.path.join(ROOT, 'data'))
 CUES_DIR = os.path.join(DATA, 'cues_audio')                 # openai voice bank
 CUES_DIR_GEMINI = os.path.join(DATA, 'cues_audio_gemini')   # gemini voice bank (never mixed)
 CUES_DIR_GEMINI_AU = os.path.join(DATA, 'cues_audio_gemini_au')   # the same Puck voice with an Australian-accent stage direction
+CUES_DIR_V2 = os.path.join(DATA, 'cues_audio_v2')           # mastered gemini bank (cues_tts --bank v2): new voice + style direction, normalized
 SAMPLE_RATE = 24000
 FRAME_SAMPLES = 480          # 20 ms at 24 kHz
 BRIDGE_IDENTITY = os.environ.get('BRIDGE_IDENTITY', 'chert-bridge')

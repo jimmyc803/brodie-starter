@@ -288,6 +288,7 @@ export GEMINI_API_KEY='...team token...'
 export GEMINI_BASE_URL='https://james-72765--rtcoach-gemini.modal.run'
 PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini --dry-run   # list strings to render, no API call
 PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini             # render missing clips into data/cues_audio_gemini
+PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --bank v2                    # the default voice: Puck + coach direction, mastered, verified by ear, best of 2 takes -> data/cues_audio_v2
 ```
 `data/` is gitignored, so the rendered audio is NOT deployed by git. Copy it to the EC2 host and point the worker at it with
 `CUE_AUDIO_DIR` (an SSM parameter; the worker falls back to its bundled banks and reports missing strings if the folder is wrong):

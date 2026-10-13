@@ -26,7 +26,7 @@ under it at duck_db (about -10 dB, 20 ms ramps), and the duck holds hold_ms afte
 """
 import asyncio, collections, json, logging, os, time
 import numpy as np
-from facetime import CUES_DIR, CUES_DIR_GEMINI, CUES_DIR_GEMINI_AU, SAMPLE_RATE, FRAME_SAMPLES, AUDIO_TRACK_NAME
+from facetime import CUES_DIR, CUES_DIR_GEMINI, CUES_DIR_GEMINI_AU, CUES_DIR_V2, SAMPLE_RATE, FRAME_SAMPLES, AUDIO_TRACK_NAME
 
 log = logging.getLogger('audio_out')
 PRIORITY = {'count': 0, 'positive': 1, 'start': 1, 'other': 1, 'correction': 2, 'announce': 3, 'milestone': 3, 'visibility': 3}
@@ -40,10 +40,14 @@ def bank_coverage(cues_dir):
     v = vocabulary()
     return sum(1 for t in v if t in m and os.path.exists(os.path.join(cues_dir, m[t]['file']))), len(v)
 
+# Which bank the coach plays when CUE_AUDIO_DIR is unset: the one covering the most of the vocabulary, ties broken by this order.
+# Switching the default voice = reordering this tuple (or one env var, CUE_AUDIO_DIR=<bank dir>).
+DEFAULT_BANKS = (CUES_DIR_V2, CUES_DIR_GEMINI, CUES_DIR_GEMINI_AU, CUES_DIR)
+
 def default_cues_dir():
     """env CUE_AUDIO_DIR (when it exists and covers at least one string; a missing or empty directory is reported and the
     ranked banks are used instead, so a wrong mount never makes the coach mute), else the bank that covers the most of the
-    current vocabulary: Puck first (the plain Puck bank is the default voice), then the
+    current vocabulary: the mastered v2 bank first (cues_tts --bank v2, the default voice), then plain Puck, then the
     Australian Puck bank, then the OpenAI bank. The vocabulary grows with cues.json, so a bank is never required to be
     complete; missing strings are reported at load."""
     d = os.environ.get('CUE_AUDIO_DIR')
@@ -54,11 +58,12 @@ def default_cues_dir():
         log.error('CUE_AUDIO_DIR %s is missing or covers no string; falling back to the ranked banks', d)
         print(f'[cues] WARNING: CUE_AUDIO_DIR {d} is missing or covers no string; using the best bank found instead', flush=True)
     try:
-        banks = (CUES_DIR_GEMINI, CUES_DIR_GEMINI_AU, CUES_DIR)          # preference order among equally complete banks
+        banks = DEFAULT_BANKS                                            # preference order among equally complete banks
         cov = [(bank_coverage(x), x) for x in banks if os.path.isdir(x)]
         (c, n), best = max(cov, key=lambda t: (t[0][0], -banks.index(t[1])))
         for (ci, ni), x in cov:
-            if ci < ni: log.warning('cue bank %s covers %d/%d strings; run facetime.cues_tts --backend %s', x, ci, ni, 'gemini' if x == CUES_DIR_GEMINI else 'openai')
+            if ci < ni: log.warning('cue bank %s covers %d/%d strings; run facetime.cues_tts %s', x, ci, ni,
+                                    '--bank v2' if x == CUES_DIR_V2 else '--backend gemini' if x in (CUES_DIR_GEMINI, CUES_DIR_GEMINI_AU) else '--backend openai')
         return best
     except Exception as e:
         log.warning('bank check failed: %s', e)
