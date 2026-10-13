@@ -257,7 +257,7 @@ class FramePrep:
 
 # -- the caller's physical phone orientation (for the coach-video layout) ------------------------------------------------
 ORIENT_SUSTAIN_S = 2.0      # the other orientation must be seen this long, without a contrary sample, before a switch
-ORIENT_HOLD_S = 3.0         # ... and never sooner than this after the last switch (no flapping)
+ORIENT_HOLD_S = 8.0         # ... and never sooner than this after the last switch (no flapping)
 ORIENT_RATIO = 1.15         # a content box is landscape / portrait when one side is this much longer (else: no evidence)
 
 

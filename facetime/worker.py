@@ -1244,12 +1244,7 @@ class CoachJob:
     def update_layout(self, raw, now):
         """Feed thread: the coach-video's orientation follows the caller's physical phone (frameprep.phone_sideways through
         an OrientationGate: ~2 s sustained, no flapping) -> self.mirror_landscape, read by the avatar loop. Cosmetic: a
-        failure is logged and the layout stays as it was.
-        Off unless MIRROR_LANDSCAPE=1: on a live call (2026-10-13) the iPhone showed the 1280x720 landscape card turned
-        sideways and cropped left/right, so the coach-video stays portrait (the whole picture letterboxed) by default."""
-        if os.environ.get('MIRROR_LANDSCAPE', '0').strip() != '1':
-            self.mirror_landscape = False
-            return
+        failure is logged and the layout stays as it was."""
         try:
             from facetime.frameprep import OrientationGate, phone_sideways
             gate = getattr(self, 'orient_gate', None)

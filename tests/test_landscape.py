@@ -88,7 +88,7 @@ def test_gate_none_neither_confirms_nor_cancels_and_holds_after_a_switch():
     g.update(True, 0.0); g.update(None, 1.0); g.update(None, 1.9)
     assert g.update(True, 2.05) is True                                   # black frames in between did not cancel it
     t = 2.05
-    for k in range(1, 40):                                                # upright again right away: held ORIENT_HOLD_S
+    for k in range(1, 140):                                               # upright again right away: held ORIENT_HOLD_S
         g.update(False, t + 0.1 * k)
         if g.landscape is False: break
     assert g.switch_t - 2.05 >= ORIENT_HOLD_S - 1e-6
@@ -270,8 +270,7 @@ def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     assert (f.width, f.height) == (1280, 720)
 
 
-def test_feed_layout_follows_the_phone_with_hysteresis(capsys, monkeypatch):
-    monkeypatch.setenv('MIRROR_LANDSCAPE', '1')                     # opt-in (default off since the 2026-10-13 call)
+def test_feed_layout_follows_the_phone_with_hysteresis(capsys):
     job = worker.CoachJob.__new__(worker.CoachJob)
     job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
     up, side = bridge(PORTRAIT_PIC), bridge(LANDSCAPE_PIC)
@@ -293,8 +292,7 @@ def test_feed_layout_follows_the_phone_with_hysteresis(capsys, monkeypatch):
     assert job.mirror_landscape is True
 
 
-def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys, monkeypatch):
-    monkeypatch.setenv("MIRROR_LANDSCAPE", "1")
+def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys):
     job = worker.CoachJob.__new__(worker.CoachJob)
     class Boom:
         rotation = 0
@@ -312,13 +310,3 @@ def test_rotated_portrait_picture_turned_upright_reads_as_sideways():
     raw = bridge(rotate(content, 270))
     for k in range(4): up = prep(raw, 0.25 * k)
     assert up.shape[:2] == (360, 640) and phone_sideways(prep, raw) is True
-
-
-def test_feed_layout_is_portrait_by_default_even_for_a_sideways_picture(monkeypatch):
-    """Default (MIRROR_LANDSCAPE unset): the coach-video never switches to landscape, whatever the caller's picture is."""
-    monkeypatch.delenv('MIRROR_LANDSCAPE', raising=False)
-    job = worker.CoachJob.__new__(worker.CoachJob)
-    wide = np.full((720, 1280, 3), 120, np.uint8)
-    for k in range(60):
-        job.update_layout(wide, k / 15)
-    assert job.mirror_landscape is False
