@@ -295,7 +295,7 @@ class Sim:
         self.waits: list[float] = []
         self.youre_up_latency: list[float] = []
         self.claim_log: list[dict] = []  # every claim ch_tick made: {queue_id, user_id, line_id, at, until}
-        self.youre_up_at: dict[int, datetime] = {}  # queue_id -> first 'you're up' delivery
+        self.youre_up_at: dict[tuple[int, datetime], datetime] = {}  # (queue_id, claimed_until) -> first delivery
         self.line_time: dict[str, Counter] = {ln: Counter() for ln in self.lines}
         self.violations: dict[str, list[str]] = defaultdict(list)
         self.vcount: Counter = Counter()
@@ -527,14 +527,13 @@ class Sim:
 
     def on_delivered(self, agent: Agent, tpl: str, ctx: dict, sent_at: datetime) -> None:
         self.metrics["delivered:" + tpl] += 1
-        if tpl == "youre_up" and ctx.get("queue_id") is not None:
-            self.youre_up_at.setdefault(int(ctx["queue_id"]), self.now)
+        if tpl == "youre_up" and ctx.get("queue_id") is not None and ctx.get("claimed_until"):
+            # per claim ATTEMPT: a re-popped entry keeps its queue id but gets a new claimed_until
+            self.youre_up_at.setdefault((int(ctx["queue_id"]), datetime.fromisoformat(ctx["claimed_until"])), self.now)
         if tpl == "youre_up" and ctx.get("claimed_until"):
             until = datetime.fromisoformat(ctx["claimed_until"])
             self.youre_up_latency.append((self.now - (until - timedelta(seconds=CLAIM_S))).total_seconds())
-            if self.now >= until:
-                self.fail("youre_up_latency", f"{agent.name} got 'you're up' {self.fmt(self.now)} after the claim "
-                          f"expired at {self.fmt(until)}")
+            # on-time / late is judged per claim attempt in verify_youre_up
         if tpl == "join_confirm_prompt" and agent.kind != "pending":
             self.at(self.now + timedelta(seconds=self.rng.uniform(5, 60)), self.text, agent, "YES")
         elif tpl in ("join_bad_name", "join_taken"):
@@ -1135,10 +1134,15 @@ class Sim:
                                              " where template = 'youre_up'")}
         for c in self.claim_log:
             qid = c["queue_id"]
-            got = self.youre_up_at.get(qid)
+            got = self.youre_up_at.get((qid, c["until"]))
             if got is not None:
-                self.metrics["youre_up_on_time" if got < c["until"] else "youre_up_late"] += 1
-                continue  # a late one was already reported at delivery
+                if c["at"] <= got < c["until"]:
+                    self.metrics["youre_up_on_time"] += 1
+                    continue
+                self.metrics["youre_up_late"] += 1
+                self.fail("youre_up_latency", f"claim q{qid} on {c['line_id']} ({self.fmt(c['at'])}..{self.fmt(c['until'])})"
+                          f" got its 'you're up' at {self.fmt(got)}, outside the claim")
+                continue
             m_status, m_err = msg.get(f"youre_up:{qid}", (None, None))
             if status.get(qid) in ("connected", "left") or qid in opted or m_err == "opted_out_or_banned":
                 self.metrics["youre_up_excused"] += 1
@@ -1310,7 +1314,9 @@ class Sim:
         for r in sent:
             uid, tpl, ctx, key, at = r[1], r[3], r[4] or {}, r[5] or "", r[6]
             who = str(uid) if uid else r[2]
-            if tpl in ("youre_up", "missed_slot"):
+            if tpl == "youre_up":
+                ev = (ctx.get("queue_id"), ctx.get("claimed_until"))  # one per claim attempt
+            elif tpl == "missed_slot":
                 ev = ctx.get("queue_id")
             elif tpl == "post_call":
                 ev = ctx.get("call_id")
@@ -1515,11 +1521,13 @@ tests in `tests/challenge/test_scheduler_properties.py` and `tests/challenge/tes
    `test_admin_pause_keeps_queue_window_end_closes_it_without_missed_slot`, stateful pause/close invariants).
 2. **'You're up' starved behind bulk texts.** `ch_outbox_claim` was strict FIFO. A pop during a bulk send (power-hour
    start + ending-soon to every user at `outbound_rate_per_min` 20) delivered 'you're up' 158 s late, after the
-   90 s claim had expired. Claims are now earliest-deadline-first (youre_up: its claimed_until; other rows: due
-   time + 300 s), so 'you're up' overtakes fresh bulk rows but cannot starve ordinary texts, and a 'you're up'
-   whose claim is gone is suppressed instead of sent late (`test_youre_up_not_starved_by_bulk_texts`,
-   `test_youre_up_churn_cannot_starve_ordinary_texts`). The run reconciles every claim against a delivered
-   'you're up' before its deadline.
+   90 s claim had expired. The outbox now reserves capacity: live 'you're up' rows go first, but while ordinary
+   texts are due no two 'you're up' are claimed back to back, so a claim waits for at most one ordinary send and
+   ordinary texts keep at least half the rate. A 'you're up' whose claim attempt is gone, and queue-flow texts once
+   frozen, are suppressed instead of sent late; each claim attempt has its own 'you're up'
+   (`test_youre_up_not_starved_by_bulk_texts`, `test_youre_up_beats_a_120_text_backlog`,
+   `test_sustained_claims_never_starve_ordinary_texts`). The run reconciles every claim attempt against a
+   'you're up' delivered inside that claim.
 3. **'You're up' did not say which line to call.** The text now names the line's FaceTime number
    (`lines.facetime_handle`; with one line `brodie_number`). Simulated users FaceTime the number in the text.
 4. **A claim that expired at the freeze still sent missed_slot** ("Text QUEUE…") when QUEUE is refused. No longer.

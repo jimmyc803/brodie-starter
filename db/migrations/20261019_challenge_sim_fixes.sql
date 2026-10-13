@@ -13,12 +13,16 @@
 --
 -- 2. ch_outbox_claim (from 20261013_challenge_misc.sql): 'you're up' must not wait FIFO behind bulk proactive texts
 --    (at 20/min a ~60-row burst delayed it past the 90 s claim window), yet must not starve other texts either.
---    a. due youre_up rows whose claim is no longer active (queue row not 'notified' or claim_expires_at <= p_now)
---       are marked 'suppressed' (last_error 'claim_inactive') instead of being sent late;
---    b. claim order is earliest-deadline-first: a youre_up's deadline is its claimed_until, every other row's is
---       due time + 300 s. A youre_up therefore overtakes rows younger than ~210 s, but a row that has waited
---       ~210 s goes before any newly created youre_up, and live youre_up rows are bounded by active claims (<= one
---       per line), so ordinary texts cannot be starved by LEAVE/QUEUE cycling.
+--    a. due youre_up rows whose claim ATTEMPT is no longer live (queue row not 'notified', claim_expires_at <= p_now,
+--       or a different claimed_until) are marked 'suppressed' (last_error 'claim_inactive') instead of sent late;
+--    b. while frozen (window_end or admin pause) due youre_up / missed_slot / queue_update rows are suppressed
+--       (last_error 'frozen'): calls and QUEUE are refused, so they are meaningless;
+--    c. reserved capacity: live youre_up rows go first (ordered by claimed_until), but when ordinary texts are due
+--       at least one slot per batch is theirs; with p_limit = 1 the slot alternates (messages.claimed_at records the
+--       last claim), so a claim waits for at most one ordinary send and ordinary texts keep >= half the rate.
+--    ch_tick also gives each youre_up ctx.expires_at = claimed_until, each missed_slot ctx.expires_at =
+--    least(p_now + 30 min, window_end), and a distinct dedupe key per claim attempt ('youre_up:<queue_id>' for the
+--    first, 'youre_up:<queue_id>:<epoch ms>' for an entry re-popped after an admin pause).
 --
 -- 3. ch_set_opt and ch_admin_queue_remove (from 20261013_challenge_misc.sql) free a claimed line through
 --    ch_calls_line_set, which writes the usual 'line:claimed->idle' audit row (they updated line_state directly).
@@ -28,6 +32,9 @@
 begin;
 
 alter table lines add column if not exists facetime_handle text;
+alter table messages add column if not exists claimed_at timestamptz;  -- p_now of the last ch_outbox_claim (fairness)
+create index if not exists messages_out_claimed_idx on messages (claimed_at desc, id desc)
+  where direction = 'out' and claimed_at is not null;
 
 create or replace function ch_tick(p_now timestamptz) returns jsonb
 language plpgsql security definer set search_path = public as $$
@@ -79,8 +86,12 @@ begin
         else
           perform ch_calls_queue_set(v_q.id, 'no_show', p_now, 'claim expired');
           v_no_shows := v_no_shows || jsonb_build_object('user_id', v_q.user_id, 'queue_id', v_q.id);
+          -- expires_at: a "text QUEUE" nudge is stale after 30 min (e.g. deferred by quiet hours) and never valid
+          -- after window_end; the outbox suppresses it instead of sending late (ch_outbox_claim + Outbox._deliver)
           perform ch_calls_notify(v_q.user_id, 'missed_slot',
-                                  jsonb_build_object('queue_id', v_q.id, 'line_id', v_ls.line_id),
+                                  jsonb_build_object('queue_id', v_q.id, 'line_id', v_ls.line_id,
+                                                     'expires_at', case when v_we is null then p_now + interval '30 minutes'
+                                                                        else least(p_now + interval '30 minutes', v_we) end),
                                   'missed_slot:' || v_q.id, p_now);
         end if;
       end if;
@@ -157,11 +168,17 @@ begin
                            then nullif(btrim(ch_cfg('brodie_number') #>> '{}'), '') end,
                       l.chert_agent_name)
         into v_line_handle from lines l where l.id = v_ls.line_id;
+      -- one notification per claim ATTEMPT: an entry re-popped after an admin pause keeps its queue id (and place),
+      -- so later attempts get 'youre_up:<queue_id>:<epoch ms>' (the first keeps 'youre_up:<queue_id>')
       perform ch_calls_notify(v_cand.user_id, 'youre_up',
                               jsonb_build_object('queue_id', v_cand.queue_id, 'line_id', v_ls.line_id,
-                                                 'line_handle', v_line_handle,
-                                                 'claimed_until', v_until, 'claim_window_s', v_claim_s),
-                              'youre_up:' || v_cand.queue_id, p_now);
+                                                 'line_handle', v_line_handle, 'claimed_until', v_until,
+                                                 'expires_at', v_until, 'claim_window_s', v_claim_s),
+                              case when exists (select 1 from messages where dedupe_key = 'youre_up:' || v_cand.queue_id)
+                                   then 'youre_up:' || v_cand.queue_id || ':'
+                                        || (extract(epoch from p_now) * 1000)::bigint
+                                   else 'youre_up:' || v_cand.queue_id end,
+                              p_now);
       v_claims := v_claims || jsonb_build_object('line_id', v_ls.line_id, 'user_id', v_cand.user_id,
                                                  'queue_id', v_cand.queue_id, 'claimed_until', v_until);
     end loop;
@@ -175,48 +192,89 @@ $$;
 create or replace function ch_outbox_claim(p_limit int, p_now timestamptz) returns jsonb
 language plpgsql volatile security definer set search_path = public as $$
 declare
-  v_max int := coalesce((ch_cfg('outbox_max_attempts') #>> '{}')::int, 5);
-  v_claim_s int := ch_calls_cfg_int('claim_window_s', 90);
-  v_fifo_deadline constant interval := interval '300 seconds';  -- non-youre_up rows: deadline = due + 300 s
-  v_ts_re constant text := '^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(\.\d+)?([+-]\d\d(:?\d\d)?|Z)$';
-  v_out jsonb;
+  v_max     int := coalesce((ch_cfg('outbox_max_attempts') #>> '{}')::int, 5);
+  v_limit   int := greatest(coalesce(p_limit, 0), 0);
+  v_ts_re   constant text := '^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(\.\d+)?([+-]\d\d(:?\d\d)?|Z)$';
+  v_ord_due bool;
+  v_last_up bool;
+  v_up_cap  int;
+  v_up      bigint[];
+  v_ids     bigint[];
+  v_out     jsonb;
 begin
   -- Expired leases that already used every attempt: give up (at-most-once after lease, C7).
   update messages m set status = 'failed', lease_until = null, last_error = coalesce(m.last_error, 'lease_expired')
   where m.id in (select id from messages
                  where direction = 'out' and status = 'sending' and lease_until <= p_now and attempts >= v_max
                  for update skip locked);
-  -- A due 'you're up' whose claim is gone (user left / STOP / ban / claim expired / already connected) is obsolete:
-  -- suppress it rather than tell the user to FaceTime for a turn they no longer hold.
+  -- Frozen (window_end reached or admin pause): queue-flow texts are meaningless (calls and QUEUE are refused).
+  if ch_calls_frozen(p_now) then
+    update messages m set status = 'suppressed', lease_until = null, last_error = coalesce(m.last_error, 'frozen')
+    where m.id in (select id from messages
+                   where direction = 'out' and template in ('youre_up', 'missed_slot', 'queue_update')
+                     and ((status = 'queued' and coalesce(not_before, created_at) <= p_now)
+                          or (status = 'sending' and lease_until <= p_now and attempts < v_max))
+                   for update skip locked);
+  end if;
+  -- A due 'you're up' whose claim ATTEMPT is gone (user left / STOP / ban / claim expired / connected / re-popped
+  -- later with a new deadline) is obsolete: suppress it rather than tell the user to FaceTime for a turn they no
+  -- longer hold. Rows without a queue_id (hand-written) are not judged.
   update messages m set status = 'suppressed', lease_until = null, last_error = coalesce(m.last_error, 'claim_inactive')
   where m.id in (
     select x.id from messages x
     where x.direction = 'out' and x.template = 'youre_up' and x.ctx ->> 'queue_id' ~ '^[0-9]{1,18}$'
       and ((x.status = 'queued' and coalesce(x.not_before, x.created_at) <= p_now)
            or (x.status = 'sending' and x.lease_until <= p_now and x.attempts < v_max))
-      and not exists (select 1 from queue q
-                       where q.id = case when x.ctx ->> 'queue_id' ~ '^[0-9]{1,18}$'
-                                         then (x.ctx ->> 'queue_id')::bigint end
-                         and q.status = 'notified' and q.claim_expires_at > p_now)
+      and not exists (
+        select 1 from queue q
+         where q.id = case when x.ctx ->> 'queue_id' ~ '^[0-9]{1,18}$' then (x.ctx ->> 'queue_id')::bigint end
+           and q.status = 'notified' and q.claim_expires_at > p_now
+           and (x.ctx ->> 'claimed_until' is null
+                or q.claim_expires_at = case when x.ctx ->> 'claimed_until' ~ v_ts_re
+                                             then (x.ctx ->> 'claimed_until')::timestamptz end))
     for update of x skip locked);
-  with picked as (
+  if v_limit = 0 then
+    return '[]'::jsonb;
+  end if;
+
+  -- Reserved capacity: live 'you're up' rows (bounded by active claims) go first, but whenever ordinary texts are
+  -- due at least one slot per batch is theirs; with p_limit = 1 (the Outbox) the slot alternates: no 'you're up'
+  -- right after a 'you're up' while an ordinary text waits. So a claim waits for at most one ordinary send per
+  -- 'you're up' ahead of it, and ordinary texts get >= half the send rate under any claim churn.
+  select exists (select 1 from messages
+                  where direction = 'out' and template is distinct from 'youre_up'
+                    and ((status = 'queued' and coalesce(not_before, created_at) <= p_now)
+                         or (status = 'sending' and lease_until <= p_now and attempts < v_max)))
+    into v_ord_due;
+  select template is not distinct from 'youre_up' into v_last_up
+    from messages where direction = 'out' and claimed_at is not null
+   order by claimed_at desc, id desc limit 1;
+  v_up_cap := case when not v_ord_due then v_limit
+                   when v_limit > 1 then v_limit - 1
+                   when coalesce(v_last_up, false) then 0
+                   else 1 end;
+  select coalesce(array_agg(id), '{}') into v_up from (
     select id from messages
-    where direction = 'out'
-      and ((status = 'queued' and coalesce(not_before, created_at) <= p_now)
-           or (status = 'sending' and lease_until <= p_now and attempts < v_max))
-    -- earliest deadline first (see header): youre_up by its claim deadline, everything else due + 300 s
-    order by case when template is not distinct from 'youre_up' and ctx ->> 'claimed_until' ~ v_ts_re
-                    then (ctx ->> 'claimed_until')::timestamptz
-                  when template is not distinct from 'youre_up'
-                    then coalesce(not_before, created_at) + make_interval(secs => v_claim_s)
-                  else coalesce(not_before, created_at) + v_fifo_deadline end,
-             coalesce(not_before, created_at), id
-    limit greatest(coalesce(p_limit, 0), 0)
-    for update skip locked
-  ), upd as (
+     where direction = 'out' and template = 'youre_up'
+       and ((status = 'queued' and coalesce(not_before, created_at) <= p_now)
+            or (status = 'sending' and lease_until <= p_now and attempts < v_max))
+     order by case when ctx ->> 'claimed_until' ~ v_ts_re then (ctx ->> 'claimed_until')::timestamptz end nulls last,
+              coalesce(not_before, created_at), id
+     limit v_up_cap
+     for update skip locked) u;
+  select v_up || coalesce(array_agg(id), '{}') into v_ids from (
+    select id from messages
+     where direction = 'out' and template is distinct from 'youre_up'
+       and ((status = 'queued' and coalesce(not_before, created_at) <= p_now)
+            or (status = 'sending' and lease_until <= p_now and attempts < v_max))
+     order by coalesce(not_before, created_at), id
+     limit v_limit - cardinality(v_up)
+     for update skip locked) o;
+
+  with upd as (
     update messages m set status = 'sending', attempts = coalesce(m.attempts, 0) + 1,
-                          lease_until = p_now + interval '60 seconds'
-    from picked where m.id = picked.id
+                          lease_until = p_now + interval '60 seconds', claimed_at = p_now
+    where m.id = any(v_ids)
     returning m.*
   )
   select coalesce(jsonb_agg(jsonb_build_object(

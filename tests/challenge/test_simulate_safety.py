@@ -93,3 +93,34 @@ def test_refuses_database_it_did_not_create_or_with_clients(sim, pg_cluster, db)
         assert c.execute("select count(*) from pg_database where datname = %s", (name,)).fetchone()[0] == 0
     with pytest.raises(sim.UnsafeTarget):
         sim.drop_sim_database(pg_cluster.dsn(), "postgres")
+
+
+def test_youre_up_reconciled_per_claim_attempt(sim):
+    """Review 24b: a re-popped entry keeps its queue id. The first attempt's delivery must not count for the second
+    attempt, and a delivery outside [claim.at, claim.until) is a failure."""
+    from collections import Counter, defaultdict
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    class NoRows:
+        def q(self, sql, params=None):
+            return []
+
+    et = ZoneInfo("America/New_York")
+    t1 = datetime(2026, 10, 17, 12, 0, tzinfo=et)
+    t2 = t1 + timedelta(minutes=10)
+    s = sim.Sim.__new__(sim.Sim)
+    s.st, s.ET, s.now, s.by_uid = NoRows(), et, t2, {}
+    s.metrics, s.vcount, s.violations = Counter(), Counter(), defaultdict(list)
+    s.claim_log = [{"queue_id": 7, "user_id": "u", "line_id": "line-1", "at": t, "until": t + timedelta(seconds=90)}
+                   for t in (t1, t2)]
+    s.youre_up_at = {(7, t1 + timedelta(seconds=90)): t1 + timedelta(seconds=3)}
+    s.verify_youre_up()
+    assert s.metrics["youre_up_on_time"] == 1 and s.metrics["youre_up_missing"] == 1, s.metrics
+    assert s.vcount["youre_up_latency"] == 1
+    # a delivery keyed to the second attempt but sent before that claim began is not on time
+    s.metrics, s.vcount = Counter(), Counter()
+    s.youre_up_at[(7, t2 + timedelta(seconds=90))] = t2 - timedelta(seconds=1)
+    s.verify_youre_up()
+    assert s.metrics["youre_up_on_time"] == 1 and s.metrics["youre_up_late"] == 1, s.metrics
+    assert s.vcount["youre_up_latency"] == 1

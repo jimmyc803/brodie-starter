@@ -140,7 +140,12 @@ def enqueue(c, key: str, template: str, due: datetime, ctx: dict | None = None, 
 
 
 def claim(c, now: datetime) -> list[str]:
-    return [r["dedupe_key"] for r in rpc(c, "ch_outbox_claim", p_limit=1, p_now=now)]
+    """One Outbox iteration (p_limit 1); the claimed row is marked sent like a successful provider call."""
+    rows = rpc(c, "ch_outbox_claim", p_limit=1, p_now=now)
+    for r in rows:
+        assert rpc(c, "ch_outbox_mark", p_id=r["id"], p_status="sent", p_provider_message_id=f"pm-{r['id']}",
+                   p_error=None, p_retry_at=None, p_attempt=r["attempts"])["ok"]
+    return [r["dedupe_key"] for r in rows]
 
 
 def active_claim(c, uid: str, at: datetime) -> dict:
@@ -178,34 +183,123 @@ def qstatus_id(c, uid: str) -> int:
     return c.execute("select max(id) from queue where user_id = %s", (uid,)).fetchone()[0]
 
 
-def test_youre_up_overtakes_fresh_bulk_but_not_old_rows(c):
+def test_youre_up_beats_a_120_text_backlog(c):
+    """Review 24b: 120 texts due at t=0 at 20/min (one claim per 3 s). Earliest-deadline-first let the aged backlog
+    delay a claim made at t=211 past its t=301 expiry. With reserved capacity it waits for at most one ordinary send."""
     a = user(c, 1)
-    enqueue(c, "bulk", "ph_start", T0, {"power_hour": "x"})
-    enqueue(c, "up1", "youre_up", T0 + timedelta(seconds=10), active_claim(c, a, T0 + timedelta(seconds=10)), a)
-    assert claim(c, T0 + timedelta(seconds=11)) == ["up1"]           # deadline T0+100 < bulk's T0+300
-    c.execute("update queue set status = 'connected'")
-    enqueue(c, "up2", "youre_up", T0 + timedelta(seconds=250), active_claim(c, a, T0 + timedelta(seconds=250)), a)
-    assert claim(c, T0 + timedelta(seconds=251)) == ["bulk"]         # bulk (T0+300) now beats up2 (T0+340)
-    assert claim(c, T0 + timedelta(seconds=252)) == ["up2"]
+    for k in range(120):
+        enqueue(c, f"bulk:{k}", "ph_start", T0, {"power_hour": "x"})
+    got = None
+    for step in range(0, 400, 3):
+        t = T0 + timedelta(seconds=step)
+        if step == 210:
+            enqueue(c, "up", "youre_up", t + timedelta(seconds=1), active_claim(c, a, t + timedelta(seconds=1)), a)
+        if "up" in claim(c, t):
+            got = t
+            break
+    assert got is not None and got < T0 + timedelta(seconds=211 + CLAIM_S), got
+    assert got <= T0 + timedelta(seconds=211 + 6), f"'you're up' waited {(got - T0).total_seconds() - 211} s"
 
 
-def test_youre_up_churn_cannot_starve_ordinary_texts(c):
-    """LEAVE/QUEUE cycling: a fresh live youre_up every 2 s (30/min) against a 20/min sender. Strict youre_up
-    priority would never send the ordinary row; earliest-deadline-first sends it within ~210 s of its due time."""
+def test_sustained_claims_never_starve_ordinary_texts(c):
+    """LEAVE/QUEUE cycling: a fresh live youre_up every 2 s (30/min) against a 20/min sender (one claim per 3 s)
+    with 60 ordinary texts due. While ordinary texts wait, no two 'you're up' are claimed back to back."""
     users = [user(c, i) for i in range(1, 4)]
-    enqueue(c, "status-reply", "ph_start", T0, {"power_hour": "x"})
-    sent_at = None
-    t, n = T0, 0
-    while t < T0 + timedelta(minutes=10):
-        if (t - T0).total_seconds() % 2 == 0:
+    for k in range(60):
+        enqueue(c, f"ord:{k}", "ph_start", T0, {"power_hour": "x"})
+    order: list[str] = []
+    n = 0
+    for sec in range(0, 600):
+        t = T0 + timedelta(seconds=sec)
+        if sec % 2 == 0:
             n += 1
             c.execute("update queue set status = 'left' where status = 'notified'")  # previous claimer LEAVEs
             enqueue(c, f"up{n}", "youre_up", t, active_claim(c, users[n % 3], t), users[n % 3])
-        if (t - T0).total_seconds() % 3 == 0 and claim(c, t) == ["status-reply"]:
-            sent_at = t
-            break
-        t += timedelta(seconds=1)
-    assert sent_at is not None and sent_at - T0 <= timedelta(seconds=300), sent_at
+        if sec % 3 == 0:
+            order += claim(c, t)
+    ords = [i for i, k in enumerate(order) if k.startswith("ord:")]
+    assert len(ords) == 60, f"only {len(ords)} of 60 ordinary texts sent in 10 min"
+    for i in range(1, ords[-1]):
+        assert not (order[i].startswith("up") and order[i - 1].startswith("up")), order[max(0, i - 3):i + 2]
+    assert ords[-1] < 121, "ordinary texts got less than half the send rate"
+    assert sum(1 for k in order if k.startswith("up")) >= 60  # 'you're up' still flows
+
+
+def test_batch_reserves_a_slot_for_ordinary_texts(c):
+    a, b = user(c, 1), user(c, 2)
+    enqueue(c, "ord", "ph_start", T0, {"power_hour": "x"})
+    enqueue(c, "up-a", "youre_up", T0, active_claim(c, a, T0), a)
+    enqueue(c, "up-b", "youre_up", T0, active_claim(c, b, T0), b)
+    keys = [r["dedupe_key"] for r in rpc(c, "ch_outbox_claim", p_limit=2, p_now=T0 + timedelta(seconds=1))]
+    assert sorted(keys) == ["ord", "up-a"]
+
+
+def test_resumed_claim_gets_its_own_youre_up(c):
+    """Review 24b: an entry re-popped after an admin pause keeps its queue id; the new claim must still queue a
+    fresh 'you're up' (the old dedupe key 'youre_up:<queue_id>' silently dropped it), and the first attempt's text
+    is obsolete."""
+    a = user(c, 1)
+    rpc(c, "ch_queue_join", p_user_id=a, p_now=T0)
+    rpc(c, "ch_tick", p_now=T0)
+    qid = qstatus_id(c, a)
+    cfg(c, "competition_frozen", True)
+    rpc(c, "ch_tick", p_now=T0 + timedelta(seconds=CLAIM_S + 1))  # claim expires during the pause -> waiting
+    cfg(c, "competition_frozen", False)
+    t2 = T0 + timedelta(seconds=CLAIM_S + 2)
+    assert rpc(c, "ch_tick", p_now=t2)["claims"][0]["queue_id"] == qid
+    rows = msgs(c, "youre_up")
+    assert len(rows) == 2 and rows[0][0] == f"youre_up:{qid}" and rows[1][0] != rows[0][0], rows
+    assert rows[1][1] == "queued" and rows[1][2]["claimed_until"] != rows[0][2]["claimed_until"]
+    # the first attempt's text is obsolete even though the queue entry is 'notified' again
+    c.execute("update messages set status = 'queued' where dedupe_key = %s", (f"youre_up:{qid}",))
+    assert claim(c, t2 + timedelta(seconds=1)) == [rows[1][0]]
+    assert c.execute("select status, last_error from messages where dedupe_key = %s",
+                     (f"youre_up:{qid}",)).fetchone() == ("suppressed", "claim_inactive")
+
+
+def test_queue_flow_texts_are_suppressed_once_frozen(c):
+    """Review 24b: a missed_slot queued before the freeze must not arrive after it (quiet hours could defer it to
+    the morning after window_end); same for 'you're up' / queue updates during an admin pause."""
+    a = user(c, 1)
+    rpc(c, "ch_queue_join", p_user_id=a, p_now=T0)
+    rpc(c, "ch_tick", p_now=T0)
+    r = rpc(c, "ch_tick", p_now=T0 + timedelta(seconds=CLAIM_S))  # no-show -> missed_slot queued
+    assert len(r["no_shows"]) == 1
+    ms = msgs(c, "missed_slot")[0]
+    assert ms[1] == "queued"
+    assert datetime.fromisoformat(ms[2]["expires_at"]) == T0 + timedelta(seconds=CLAIM_S, minutes=30)
+    enqueue(c, "qu", "queue_update", T0, {"position": 2, "eta": "~0–5 min"})
+    enqueue(c, "other", "ph_start", T0, {"power_hour": "x"})
+    c.execute("update messages set status = 'suppressed' where template = 'youre_up'")
+    end = T0 + timedelta(minutes=5)
+    cfg(c, "window_end", end.isoformat())
+    assert claim(c, end) == ["other"]
+    st = dict(c.execute("select template, status || '/' || coalesce(last_error, '') from messages"
+                        " where template in ('missed_slot', 'queue_update')").fetchall())
+    assert st == {"missed_slot": "suppressed/frozen", "queue_update": "suppressed/frozen"}
+
+
+def test_missed_slot_deferred_by_quiet_hours_is_dropped(c, db):
+    from challenge.config import Config
+    from challenge.messaging.outbox import Outbox
+    from challenge.messaging.providers import MockProvider
+    from challenge.store import PgStore
+
+    cfg(c, "quiet_hours", [23, 9])
+    night = datetime(2026, 10, 14, 23, 10, tzinfo=ET)
+    a = user(c, 1)
+    rpc(c, "ch_queue_join", p_user_id=a, p_now=night)
+    rpc(c, "ch_tick", p_now=night)
+    rpc(c, "ch_tick", p_now=night + timedelta(seconds=CLAIM_S))
+    clock = {"t": night + timedelta(seconds=CLAIM_S)}
+    provider = MockProvider()
+    ob = Outbox(PgStore(db), Config(PgStore(db), ttl_s=0), provider, clock=lambda: clock["t"])
+    ob.run_once(clock["t"])
+    morning = datetime(2026, 10, 15, 9, 0, 1, tzinfo=ET)
+    clock["t"] = morning
+    ob.run_once(morning)
+    assert not any("Missed your slot" in s["body"] for s in provider.sent), provider.sent
+    assert c.execute("select status from messages where template = 'missed_slot'").fetchone()[0] == "suppressed"
 
 
 # ---------------------------------------------------------------- line audit on opt-out / admin remove (bug c)
