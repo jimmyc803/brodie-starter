@@ -96,6 +96,34 @@ def test_registered_commands_and_queue(env):
     assert len(provider.sent) == 11
 
 
+def test_join_with_invite_code_records_referral_and_welcome_link(env):
+    conn, store, _, provider, outbox, _ = env
+    conn.execute("delete from join_attribution")
+    referrer = register(env)
+    code = conn.execute("select ref_code from clients where id = %s", (referrer,)).fetchone()[0]
+    assert code
+    welcome = conn.execute("select ctx from messages where template = 'welcome'").fetchone()[0]
+    assert welcome["invite_url"] == f"https://brodie-pushups.vercel.app/join?ref={code}"
+    friend = "+15555550777"
+    # The site pre-fills "JOIN ref-CODE src-tag "; a texter who forgets the name keeps the invite on the retry.
+    assert command(env, f"JOIN ref-{code.lower()} src-tiktok", handle=friend)[0] == "join_bad_name"
+    assert command(env, "JOIN Friend_1", handle=friend)[0] == "join_confirm_prompt"
+    assert command(env, "YES", handle=friend)[0] == "welcome"
+    row = conn.execute("select referred_by, acquisition_source, ref_code from clients where display_name = 'Friend_1'"
+                       ).fetchone()
+    assert (str(row[0]), row[1]) == (referrer, "tiktok") and row[2] and row[2] != code
+    # Plain JOIN is unchanged and an unknown code is ignored without failing the join.
+    assert command(env, "JOIN Plain_1 ref-QQQQQQ", handle="+15555550778")[0] == "join_confirm_prompt"
+    assert command(env, "YES", handle="+15555550778")[0] == "welcome"
+    assert conn.execute("select referred_by, acquisition_source from clients where display_name = 'Plain_1'"
+                        ).fetchone() == (None, None)
+    # Registered users texting a tagged JOIN get the old reply and record nothing.
+    assert command(env, f"JOIN ref-{code} Again")[0] == "help"
+    assert conn.execute("select count(*) from join_attribution").fetchone()[0] == 0
+    assert outbox.run_once(T0) == 8
+    assert any(f"/join?ref={code} Text STOP" in item["body"] for item in provider.sent)
+
+
 def test_stop_removes_claim_and_suppresses_existing_intents(env):
     conn, store, _, provider, outbox, _ = env
     user_id = register(env)

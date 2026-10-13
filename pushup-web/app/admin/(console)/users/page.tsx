@@ -1,5 +1,5 @@
 import { requireAdmin } from "@/lib/admin";
-import { adjustScore, setBan } from "../../actions";
+import { adjustScore, setBan, setTeam } from "../../actions";
 import { ActionForm, btnCls, inputCls } from "../../_components/forms";
 import { Mono, Pill, Section, Show, Table, Time } from "../../_components/ui";
 import { load, searchUsers } from "../../_lib/data";
@@ -20,7 +20,10 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
       </form>
       <Show loaded={users}>
         {(list) => (
-          <Table head={["User", "Rank / points", "Joined", "Status", "Ban / unban", "Adjust score"]} empty={!list.length}>
+          <Table
+            head={["User", "Rank / points", "Joined", "Status", "Ban / unban", "Adjust score", "Team / test account"]}
+            empty={!list.length}
+          >
             {list.map((u) => (
               <tr key={u.id}>
                 <td>
@@ -34,6 +37,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                 <td className="space-x-1">
                   {u.banned_at ? <Pill tone="bad">banned</Pill> : <Pill tone="good">active</Pill>}
                   {u.opted_out_at && <Pill>opted out</Pill>}
+                  {u.is_team && <Pill>team</Pill>}
                   {u.ban_reason && <p className="mt-1 text-[11px] text-ink-2">{u.ban_reason}</p>}
                 </td>
                 <td className="min-w-64">
@@ -63,6 +67,16 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                       className={`${inputCls} w-20`}
                       aria-label="Points delta"
                     />
+                  </ActionForm>
+                </td>
+                <td className="min-w-64">
+                  <ActionForm
+                    action={setTeam}
+                    submitLabel={u.is_team ? "Unmark team" : "Mark team"}
+                    confirm={`${u.is_team ? "Count" : "Exclude"} ${u.display_name ?? u.id} ${u.is_team ? "in" : "from"} metrics?`}
+                  >
+                    <input type="hidden" name="user_id" value={u.id} />
+                    <input type="hidden" name="team" value={u.is_team ? "0" : "1"} />
                   </ActionForm>
                 </td>
               </tr>

@@ -6,7 +6,7 @@ and opt-out enforcement belong to the outbox, not this pure renderer.
 
 
 TEMPLATES: dict[str, str] = {
-    "welcome": "You're in, {display_name}! Let's stack clean reps. Text QUEUE to get in line, STATUS for your stats.",
+    "welcome": "You're in, {display_name}! Let's stack clean reps. Text QUEUE to get in line, STATUS for your stats. Bring a friend with your invite link:",
     "join_confirm_prompt": "Clean push-ups earn points; power hour reps earn 2×. Daily call cap applies. One person, one account; 18+, US, iPhone. Reply YES to confirm you're 18+, in the US, and agree to the rules.",
     "join_bad_name": "Let's pick a clean name: 3–20 letters, numbers, or underscores. Text JOIN your_name.",
     "join_taken": "That name's already on the board. Pick another and text JOIN your_name. Your spot is waiting!",
@@ -53,11 +53,13 @@ PROACTIVE_TEMPLATES = frozenset({
     "ending_soon", "final_results", "broadcast",  # broadcast: admin body, never rendered
 })
 LINK_FIELDS = {
-    "welcome": "site_url", "join_confirm_prompt": "rules_url", "top": "site_url",
+    "welcome": "invite_url", "join_confirm_prompt": "rules_url", "top": "site_url",
     "rules": "rules_url", "post_call": "result_url", "daily_recap": "site_url",
     "link_bad_code": "me_url", "link_expired": "me_url", "link_owned": "me_url",
     "final_results": "site_url",
 }
+# A link key that may be absent from older queued rows (enqueued before it existed) and the key to use instead.
+LINK_FALLBACKS = {"invite_url": "site_url"}
 _STOP_HINT = " Text STOP to opt out."
 
 
@@ -73,7 +75,10 @@ budget raise ValueError rather than silently delivering an unusable URL.
         prose = "Hell yeah! " + prose
     suffix = ""
     if template_key in LINK_FIELDS:
-        suffix += " " + str(ctx[LINK_FIELDS[template_key]])
+        link_key = LINK_FIELDS[template_key]
+        if link_key not in ctx and link_key in LINK_FALLBACKS:
+            link_key = LINK_FALLBACKS[link_key]
+        suffix += " " + str(ctx[link_key])
     if template_key in PROACTIVE_TEMPLATES:
         suffix += _STOP_HINT
     budget = 320 - len(suffix)

@@ -3,6 +3,7 @@ import { Anton, Archivo, Space_Mono } from "next/font/google";
 import Link from "next/link";
 import { Logo, MobileJoinBar, SiteNav, Ticker } from "@/components/site-chrome";
 import { Brodie } from "@/components/mascot";
+import { VisitBeacon } from "@/components/visit-beacon";
 import { getCompetition } from "@/lib/data";
 import { smsLink } from "@/lib/format";
 import "./globals.css";
@@ -16,7 +17,7 @@ const mono = Space_Mono({
   display: "swap",
 });
 
-const description = "One week. Strict push-ups on FaceTime, judged live. Climb the board, grow your Brodie.";
+const description = "Through Oct 20. Strict push-ups on FaceTime, judged live. Climb the board, grow your Brodie.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),
@@ -99,6 +100,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           </div>
         </footer>
         <MobileJoinBar joinHref={joinHref} />
+        <VisitBeacon />
       </body>
     </html>
   );

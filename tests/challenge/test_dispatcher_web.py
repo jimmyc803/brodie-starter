@@ -183,6 +183,7 @@ def test_join_queue_status_happy_path(env):
     body = r.json()
     assert body["ok"] and body["reason"] == "ok" and body["me"]["registered"] is True
     assert body["me"]["display_name"] == "Ana_W"
+    assert re.fullmatch(r"[23456789BCDFGHJKLMNPQRSTVWXZ]{6}", body["me"]["ref_code"])  # invite code for /join?ref=
     # D-25: the typed handle is only a pending claim with a LINK code; nothing is bound yet.
     assert body["me"]["handle"] is None
     pending = body["me"]["pending_claim"]

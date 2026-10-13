@@ -7,6 +7,7 @@ export const metadata: Metadata = { title: "Admin · Brodie Push-Ups", robots: {
 
 const sections = [
   { href: "/admin", label: "Line & queue" },
+  { href: "/admin/metrics", label: "Metrics" },
   { href: "/admin/users", label: "Users & scores" },
   { href: "/admin/calls", label: "Calls" },
   { href: "/admin/config", label: "Config" },

@@ -54,7 +54,7 @@ export default async function Home() {
                 Live now
               </span>
             )}
-            <span className="text-ink-2">{dates ? `Vol. 1 · ${dates}` : "Vol. 1 · One week"}</span>
+            <span className="text-ink-2">{dates ? `Vol. 1 · ${dates}` : "Vol. 1 · Oct 12 – Oct 20"}</span>
           </div>
 
           <div className="relative mt-5">
@@ -176,7 +176,7 @@ export default async function Home() {
   );
 }
 
-/** "Oct 12 – Oct 18" in Eastern time, for the poster's volume line. */
+/** "Oct 12 – Oct 20" in Eastern time, for the poster's volume line. */
 function billDates(start: string | null, end: string | null): string | null {
   if (!start || !end) return null;
   const f = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: "America/New_York" });

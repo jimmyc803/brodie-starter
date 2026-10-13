@@ -4,13 +4,13 @@ Verbatim-in-substance copy of the team's build prompt. Every task file refers to
 Reliability and cheat-resistance matter more than speed. Ship in phases.
 
 ## 0. Mission
-Public 7-day push-up competition on Brodie (AI fitness coach on FaceTime + iMessage via the Chert SDK).
+Public push-up competition on Brodie (AI fitness coach on FaceTime + iMessage via the Chert SDK).
 - Users FaceTime Brodie's number. A strict AI judge counts valid push-ups only. Points go to a live leaderboard website.
 - Users text Brodie commands over iMessage: join, queue, status, leaderboard.
 - One shared FaceTime line, one call at a time → a priority queue decides who calls next.
 - Context: virality push for IvyHacks: Beat Muse (Penn). Demo of "Brodie for Coaches" (per-rep form data → coach dashboards + muscle heat map). The Brodie avatar on the leaderboard is the heat map turned into a game.
 - Failure modes: a judge that lets cheaters through (kneeling, half reps, replayed video); a judge that rejects legit reps. Judge is the most important component.
-- Window: launch Mon Oct 12 2026 → Sun Oct 18 2026 23:59:59 America/New_York. Day boundaries = midnight ET. tz-aware datetimes everywhere; test midnight rollover.
+- Window: launch Mon Oct 12 2026 → Tue Oct 20 2026 23:59:59 (extended from Sun Oct 18 on 2026-10-13) America/New_York. Day boundaries = midnight ET. tz-aware datetimes everywhere; test midnight rollover.
 
 ## 1. Ground truth (prior audit; verify; record diffs in DECISIONS)
 Rep counting: RepCounter2.update() src/rtcoach/repcount2.py (~l330); built in facetime/pipeline.py (~l36); facetime/perception.py turns counted reps into rep events. Push-ups track 5 signals (MASK ~l68): both elbow angles, elbow angle 3D, shoulder height, shoulder height 3D, wrist height; rest→down→up; rep counts when 2 of best 3 agree. Elbow signal = sum of elbow angles /90. Start threshold 0.3 first rep then 60% of own avg rep size. Count lands at 15% back from bottom (40% first rep). Min 0.8s between reps. Torso must be ~horizontal. No fixed depth/form gate (relative to own average; only filter drops reps <50% usual size). Fault classifier labels (`pushups - shallow`, `pushups - insufficient`, `pushups - elevated hips`) never block counting; accuracy unvalidated. Rep event fires live; reps saved to DB with faults[] only at call end. Reconnect within --leave-grace-s (2s) continues count; a new FaceTime = new room/session. Known accuracy: front-propped phone over-reads ~2 at bad floor angle; shallow reps undercounted; 87% exact on MM-Fit, 59% vs coaches on home sessions.
@@ -30,7 +30,7 @@ Engagement: rank-drop texts ("You dropped from #4 to #7. #6 is 12 points ahead."
 Avatar: original cartoon athlete designed from scratch (resemble no existing character/brand). Chest, triceps, front delts, core visibly grow across ~10 levels as points stack (only those). Level thresholds in config. Appears on leaderboard (small), profile (large), post-call result card, in-call reveal if video supported.
 Prizes (display only): 1st $100; top 3 group call with a UFC fighter. ~~Raffle for everyone ≥100 valid reps, with a reproducible seeded draw.~~ Cancelled 2026-10-12 (D-22).
 Eligibility: 18+, US, iPhone. One person one account. JOIN confirms 18+ and rules. Alt accounts give no advantage (reps stay with account) — note in rules.
-End: at Sun Oct 18 2026 23:59:59 ET freeze scoring; reps after freeze don't count; leaderboard "FINAL — pending verification". Top 3 do a live verification call before payout. Admins can void calls / adjust scores; every adjustment has a reason, written to audit log.
+End: at Tue Oct 20 2026 23:59:59 ET freeze scoring; reps after freeze don't count; leaderboard "FINAL — pending verification". Top 3 do a live verification call before payout. Admins can void calls / adjust scores; every adjustment has a reason, written to audit log.
 
 ## 3. Unknowns pending from Chert (James) — build behind adapters + mocks + flags; never block
 | # | Unknown | Flag | Primary | Fallback |

@@ -36,7 +36,7 @@ const TOC = [
 export default async function RulesPage() {
   const comp = await getCompetition();
   const start = formatEtDeadline(comp?.windowStart ?? null) ?? "Mon Oct 12 · 8:00 PM ET";
-  const end = formatEtDeadline(comp?.windowEnd ?? null) ?? "Sun Oct 18 · 11:59 PM ET";
+  const end = formatEtDeadline(comp?.windowEnd ?? null) ?? "Tue Oct 20 · 11:59 PM ET";
   const prize = comp?.firstPrize ?? "$500";
   const fighter = ufcFighterCopy(comp?.ufcFighter);
 

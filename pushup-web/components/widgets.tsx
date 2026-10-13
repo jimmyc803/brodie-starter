@@ -28,7 +28,7 @@ function useNow(initial: number): number {
 const LINE_LOOK: Record<LineSummary, { label: string; dot: string; pulse: boolean }> = {
   in_call: { label: "On a call", dot: "bg-live text-live", pulse: true },
   idle: { label: "Line open", dot: "bg-good text-good", pulse: true },
-  claimed: { label: "Next up connecting", dot: "bg-gold text-gold", pulse: true },
+  claimed: { label: "On a call", dot: "bg-live text-live", pulse: true }, // never reveal a claim window (anti call-stealing)
   offline: { label: "Resetting", dot: "bg-ink-3 text-ink-3", pulse: false },
   closed: { label: "Closed", dot: "bg-ink-3 text-ink-3", pulse: false },
 };

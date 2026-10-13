@@ -8,7 +8,7 @@ from challenge.store import Store, StoreError
 
 DEFAULTS: dict[str, Any] = {
     "window_start": "2026-10-12T20:00:00-04:00",
-    "window_end": "2026-10-18T23:59:59-04:00",
+    "window_end": "2026-10-20T23:59:59-04:00",
     "call_count_s": 180,
     "call_reveal_s": 15,
     "daily_call_cap": 5,

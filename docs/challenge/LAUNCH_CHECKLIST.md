@@ -1,7 +1,7 @@
 # Launch checklist (go-live order)
 
 Times are relative to the competition start `window_start` (config; default 2026-10-12 20:00 ET) and freeze `window_end`
-(2026-10-18 23:59:59 ET). Status 2026-10-13: the system is LIVE (site https://brodie-pushups.vercel.app, dispatcher
+(2026-10-20 23:59:59 ET; extended from Oct 18 on 2026-10-13). Status 2026-10-13: the system is LIVE (site https://brodie-pushups.vercel.app, dispatcher
 https://3.13.177.157.sslip.io, EC2 `i-0d098dcf3948886ce`, region us-east-2, AWS profile `beatmuse`). Boxes below marked
 (done) were verified live; the rest are still to do. Do not tick a box without running its verify command. "EC2" commands run over SSH on the host
 (RUNBOOK "Secrets and bootstrap"). `$DOMAIN` is `3.13.177.157.sslip.io`.
@@ -44,10 +44,10 @@ https://3.13.177.157.sslip.io, EC2 `i-0d098dcf3948886ce`, region us-east-2, AWS 
 - [ ] Reconciler timer firing every 60 s (EC2): `sudo systemctl list-timers 'brodie-reconciler*'` and `sudo journalctl -u brodie-reconciler --since '-10 min' --no-pager | tail`; no `commit_conflict` alerts
 - [ ] Review rejected-rep complaints in `/admin`; use void/adjust with a written reason (RUNBOOK)
 - [ ] Backup ran (EC2): `sudo journalctl -u brodie-backup -n 30 --no-pager`
-- [ ] Sunday 20:00 ET "ending soon" text expected; verify in `/admin` messages (provider is Chert iMessage)
-- [ ] Chert token expiry: confirm `CHERT_TOKEN_EXPIRES_AT` is after Sunday (RUNBOOK "Restart, logs and line recovery")
+- [ ] Tue Oct 20 20:00 ET "ending soon" text expected; verify in `/admin` messages (provider is Chert iMessage)
+- [ ] Chert token expiry: confirm `CHERT_TOKEN_EXPIRES_AT` is after Tue Oct 20 (RUNBOOK "Restart, logs and line recovery")
 
-## After the freeze (Sun 2026-10-18 23:59:59 ET)
+## After the freeze (Tue 2026-10-20 23:59:59 ET)
 - [ ] Scoring frozen. Verify (psql): `SELECT ch_config_get();` shows `competition_frozen` true (set it with `ch_config_set` if the job did not: RUNBOOK) and the site shows "FINAL - pending verification"
 - [ ] No open calls. Verify: `curl -s https://$DOMAIN/health` line states are idle/offline
 - [ ] Rejudge dry run, review, apply only if approved (RUNBOOK "Live configuration and moderation")

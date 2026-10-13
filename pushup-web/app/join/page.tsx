@@ -5,6 +5,7 @@ import { JoinButton } from "@/components/join-button";
 import { Sponsors } from "@/components/sponsors";
 import { ArrowRightIcon, CheckIcon } from "@/components/ui/icons";
 import { getCompetition } from "@/lib/data";
+import { tagsFromParams } from "@/lib/attribution";
 import { smsLink } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -14,7 +15,7 @@ export const metadata: Metadata = {
 };
 
 const STEPS = [
-  ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board after JOIN, like JOIN Marcus_T. Use 3 to 20 letters, numbers or underscores, no spaces."],
+  ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board at the end, like JOIN Marcus_T. Use 3 to 20 letters, numbers or underscores, no spaces."],
   ["Reply YES", "YES confirms you're 18+, in the US, and accept the official rules."],
   ["Text QUEUE", "Get in line. We text you your spot, then again when it's your turn."],
   ["FaceTime and rep", "When we text you're up, FaceTime Brodie within 90 seconds, keep your camera on, and do strict push-ups. Brodie hangs up at 3:15."],
@@ -50,9 +51,15 @@ function MessagesMock() {
   );
 }
 
-export default async function JoinPage() {
+export default async function JoinPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const comp = await getCompetition();
-  const link = smsLink(comp?.brodieNumber ?? null);
+  // /join?ref=<invite code> or ?src=<link label>: the tags ride along in the pre-filled text (lib/attribution.ts).
+  const tags = tagsFromParams(await searchParams);
+  const link = smsLink(comp?.brodieNumber ?? null, tags);
   const open = comp !== null;
 
   return (
@@ -76,6 +83,12 @@ export default async function JoinPage() {
             <p className="text-ink-2">
               Opens Messages with <strong className="font-mono text-ink">JOIN</strong> ready to go. Add your name and
               hit send.
+              {tags.ref ? (
+                <>
+                  {" "}
+                  Your friend&apos;s invite code <strong className="font-mono text-ink">{tags.ref}</strong> is already in it.
+                </>
+              ) : null}
             </p>
             <JoinButton href={link} size="lg" label="Text JOIN now" className="w-full shrink-0 sm:w-auto" />
           </>

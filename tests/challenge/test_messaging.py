@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from challenge.messaging.commands import parse, validate_display_name
+from challenge.messaging.commands import JoinArg, parse, split_join_arg, validate_display_name
 from challenge.messaging.providers import (
     ChertProvider, InvalidHandle, MockProvider, NotConfigured, WebOnlyProvider,
     normalize_handle, provider_from_env,
@@ -70,6 +70,31 @@ def test_exact_opt_out_words(word, style, wrapper):
 ])
 def test_standalone_stop_overrides_other_commands(body):
     assert parse(body).kind == "STOP"
+
+
+@pytest.mark.parametrize(("arg", "expected"), [
+    ("Marcus_T", JoinArg("Marcus_T")),
+    ("", JoinArg("")),
+    ("Marcus T", JoinArg("Marcus T")),                      # unchanged: still an invalid two-word name
+    ("ref_code", JoinArg("ref_code")),                      # underscore: a valid display name, not a tag
+    ("ref-k7x2qb Marcus_T", JoinArg("Marcus_T", "K7X2QB")),  # the site pre-fills the tag before the name
+    ("Marcus_T REF:K7X2QB", JoinArg("Marcus_T", "K7X2QB")),
+    ("src-TikTok Marcus_T", JoinArg("Marcus_T", None, "tiktok")),
+    ("ref=AB12 src-ig Bob", JoinArg("Bob", "AB12", "ig")),
+    ("ref-AB12 ref-ZZ99 Bob", JoinArg("Bob", "AB12")),        # first tag of a kind wins
+    ("\"ref-K7X2QB\" Bob", JoinArg("Bob", "K7X2QB")),
+    ("ref-K7X2QB", JoinArg("", "K7X2QB")),                  # tag without a name: bad name, tag still recorded
+    ("ref- Bob", JoinArg("ref- Bob")),                      # empty code is not a tag
+])
+def test_split_join_arg(arg, expected):
+    assert split_join_arg(arg) == expected
+
+
+def test_join_with_tags_parses_as_join():
+    command = parse("JOIN ref-K7X2QB Marcus_T")
+    assert (command.kind, split_join_arg(command.arg)) == ("JOIN", JoinArg("Marcus_T", "K7X2QB"))
+    assert parse("joim src-tiktok Bob").kind == "JOIN"
+    assert parse("JOIN ref-K7X2QB stop").kind == "STOP"
 
 
 @pytest.mark.parametrize("name", ["Amy", "Coach_12", "_name_", "A" * 20])
@@ -330,7 +355,7 @@ CTX = {
     "rejected_reps": 2, "points_earned": 40, "old_rank": 4, "next_rank": 6,
     "points_gap": 12, "yesterday_points": 80, "ends_at": "Sunday 23:59 ET",
     "site_url": "https://example.com", "rules_url": "https://example.com/rules",
-    "result_url": "https://example.com/r/call-1",
+    "result_url": "https://example.com/r/call-1", "invite_url": "https://example.com/join?ref=K7X2QB",
 }
 
 
@@ -356,11 +381,18 @@ def test_template_content_and_length():
     assert "90s" in render("youre_up", CTX, False)
     assert "FaceTime Brodie at +15550001111 now" in render("youre_up", CTX, False)  # names the line to call
     long = {**CTX, "display_name": "A" * 1000, "leaders": "Runner 100 points; " * 100}
-    for key in ("welcome", "top"):
+    for key, link in (("welcome", "invite_url"), ("top", "site_url")):
         text = render(key, long, True)
         assert len(text) <= 320
-        assert CTX["site_url"] in text
+        assert CTX[link] in text
     assert render("welcome", long, True).endswith("Text STOP to opt out.")
+    welcome = render("welcome", CTX, False)
+    assert "invite link: https://example.com/join?ref=K7X2QB Text STOP" in welcome
+    # A welcome queued before invite links existed still renders, with the site link.
+    old_ctx = {k: v for k, v in CTX.items() if k != "invite_url"}
+    assert render("welcome", old_ctx, False).endswith("invite link: https://example.com Text STOP to opt out.")
+    with pytest.raises(KeyError):
+        render("welcome", {"display_name": "A"}, False)
 
 
 def test_template_errors_are_explicit():

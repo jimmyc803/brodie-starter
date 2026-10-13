@@ -7,7 +7,7 @@ from typing import Any
 
 from challenge.config import Config
 from challenge.dispatcher.postcall import Outbox
-from challenge.messaging.commands import parse, validate_display_name
+from challenge.messaging.commands import parse, split_join_arg, validate_display_name
 from challenge.messaging.providers import Inbound
 from challenge.scoring import eta_range, format_eta
 from challenge.store import Store
@@ -64,11 +64,16 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
                       "p_opted_out": command.kind == "STOP", "p_now": now})
         template = "stop_ack" if command.kind == "STOP" else "start_ack"
     elif command.kind == "JOIN":
-        if not validate_display_name(command.arg)[0]:
+        join = split_join_arg(command.arg)
+        if (join.ref_code or join.source) and not user_id:
+            # Recorded before the name check so the invite survives a retry with a corrected name.
+            store.rpc("ch_join_attribution", {"p_handle": inbound.handle, "p_ref_code": join.ref_code,
+                                              "p_source": join.source, "p_now": now})
+        if not validate_display_name(join.name)[0]:
             template = "join_bad_name"
         else:
             result = store.rpc("ch_join_start", {"p_handle": inbound.handle,
-                               "p_display_name": command.arg, "p_now": now})
+                               "p_display_name": join.name, "p_now": now})
             template = {"ok": "join_confirm_prompt", "bad_name": "join_bad_name",
                         "taken": "join_taken"}.get(result["reason"], "help")
     elif command.kind == "YES":
@@ -77,6 +82,8 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
             user = store.rpc("ch_user_by_handle", {"p_handle": inbound.handle})
             user_id = user["user_id"]
             ctx["display_name"] = user["display_name"]
+            code = user.get("ref_code")
+            ctx["invite_url"] = f"{site}/join?ref={code}" if code else site
             template = "welcome"
         else:
             template = "join_taken" if result["reason"] == "taken" else "not_registered"

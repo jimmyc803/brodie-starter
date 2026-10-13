@@ -73,7 +73,7 @@ export function SiteNav({ joinHref }: { joinHref: string | null }) {
 
 const TICKER = (prize: string) => [
   "Strict reps only",
-  "7 days",
+  "Ends Tue Oct 20",
   `${prize} to 1st`,
   "FaceTime the line",
   "Judged live, every rep",

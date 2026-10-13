@@ -134,6 +134,24 @@ export async function setConfigValue(_prev: Prev, fd: FormData): Promise<ActionR
 
 // ------------------------------------------------------------------ users / scores / calls
 
+export async function setTeam(_prev: Prev, fd: FormData): Promise<ActionResult> {
+  return done(
+    await runAdminAction(async ({ email }) => {
+      const userId = parseUuid(fd.get("user_id"));
+      const team = fd.get("team") === "1";
+      const reason = requireReason(fd.get("reason"));
+      const res = await serviceRpc("ch_admin_set_team", {
+        p_user_id: userId,
+        p_team: team,
+        p_reason: reason,
+        p_actor: email,
+        p_now: new Date().toISOString(),
+      });
+      return rpcOutcome(res, team ? "Marked as team account." : "Marked as a player.");
+    }),
+  );
+}
+
 export async function setBan(_prev: Prev, fd: FormData): Promise<ActionResult> {
   return done(
     await runAdminAction(async ({ email }) => {
