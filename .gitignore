@@ -13,6 +13,7 @@ models/
 *.npz
 *.jpg
 *.png
+!pushup-web/assets/*.png
 *.pcm
 *.wav
 .env

@@ -1,9 +1,8 @@
 import Link from "next/link";
-import { Avatar } from "@/components/brodie-avatar";
 import { JoinButton } from "@/components/join-button";
 import { LeaderRow } from "@/components/leader-row";
 import { Leaderboard } from "@/components/leaderboard";
-import { LeaderSpotlight } from "@/components/leader-spotlight";
+import { Brodie, MascotPoster } from "@/components/mascot";
 import { LiveRefresh } from "@/components/live-refresh";
 import { Podium } from "@/components/podium";
 import { ArrowRightIcon, CrownIcon } from "@/components/ui/icons";
@@ -42,7 +41,7 @@ export default async function Home() {
     <div className="space-y-10 sm:space-y-14">
       <LiveRefresh />
 
-      <section className="relative grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_22rem] lg:gap-12">
+      <section className="relative grid items-start gap-8 lg:grid-cols-[minmax(0,1fr)_24rem] lg:gap-12">
         <div className="relative animate-rise">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2 font-mono text-xs font-bold tracking-[0.14em] uppercase">
             {final ? (
@@ -80,7 +79,7 @@ export default async function Home() {
             </Link>
           </div>
         </div>
-        {leader ? <LeaderSpotlight row={leader} final={final} /> : null}
+        <MascotPoster leader={leader} final={final} />
 
         <dl className="grid grid-cols-3 border-2 border-ink bg-surface lg:col-span-2">
           {[
@@ -113,7 +112,7 @@ export default async function Home() {
             <section aria-label="Leaderboard" className="card relative flex flex-col items-center overflow-hidden px-6 py-12 text-center">
               <div aria-hidden className="halftone absolute inset-0 [--dot:var(--color-pink)] opacity-50 [mask-image:radial-gradient(closest-side,transparent_55%,#000)]" />
               <div className="relative flex flex-col items-center">
-                <Avatar level={1} size={120} pose="idle" />
+                <Brodie size={160} className="h-auto w-40" />
                 <h2 className="mt-4 font-display text-5xl uppercase">The board is empty</h2>
                 <p className="mt-2 max-w-sm text-ink-2">First valid rep takes #1. Nobody&apos;s claimed it yet.</p>
                 <JoinButton href={joinHref} className="mt-6" label="Take #1" />

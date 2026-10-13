@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Anton, Archivo, Space_Mono } from "next/font/google";
 import Link from "next/link";
 import { Logo, MobileJoinBar, SiteNav, Ticker } from "@/components/site-chrome";
+import { Brodie } from "@/components/mascot";
 import { getCompetition } from "@/lib/data";
 import { smsLink } from "@/lib/format";
 import "./globals.css";
@@ -64,9 +65,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         </main>
         <footer className="relative mt-8 overflow-hidden border-t-2 border-ink bg-ink text-canvas">
           <div className="mx-auto max-w-6xl px-4 pt-10 pb-32 sm:px-6 sm:pb-10">
-            <p aria-hidden className="font-display text-[clamp(4rem,19vw,13rem)] leading-[0.8] uppercase">
-              Brodie<span className="text-pink">.</span>
-            </p>
+            <div className="flex items-end justify-between gap-4">
+              <p aria-hidden className="font-display text-[clamp(4rem,19vw,13rem)] leading-[0.8] uppercase">
+                Brodie<span className="text-pink">.</span>
+              </p>
+              <Brodie size={200} className="-mb-10 h-auto w-24 shrink-0 sm:w-40 lg:w-48" />
+            </div>
             <div className="mt-6 flex flex-col gap-4 border-t border-canvas/25 pt-5 sm:flex-row sm:items-center sm:justify-between">
               <p className="max-w-md font-mono text-xs leading-relaxed text-canvas/70 uppercase">
                 No video or audio is stored. 18+, US only. Display names only, never phone numbers.
