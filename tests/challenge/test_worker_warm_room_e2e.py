@@ -156,3 +156,36 @@ def test_warm_room_nobody_joins_ends_cleanly_without_start(tmp_path, monkeypatch
     asyncio.run(go())
     assert h.job.comp is None and h.made == [] and h.disp.requests == []
     assert h.job.done.is_set() and h.job.end_reason == "warm room timed out"
+
+
+def test_warm_room_chert_api_hangup_uses_bridge_call_id(tmp_path, monkeypatch):
+    # Real calls land in chert_warm rooms whose job metadata has no chert_call, so HANGUP_MODE=chert_api must end the
+    # call by the bridge identity's suffix (chert-bridge-<chert call id>; matched Chert's id on the first live call).
+    from challenge.worker.chert import ChertEndClient
+
+    monkeypatch.setenv("HANGUP_MODE", "chert_api")
+    monkeypatch.setenv("CHERT_FACETIME_TOKEN", "ftk_test")
+    monkeypatch.setenv("CHERT_PROJECT_ID", "proj-test")
+    ended = []
+
+    async def end_call(self, call_id, sleep):
+        ended.append(call_id)
+        return True
+    monkeypatch.setattr(ChertEndClient, "end_call", end_call)
+    h = make(monkeypatch, tmp_path)
+
+    async def go():
+        h.job.loop = asyncio.get_running_loop()
+        h.bind("chert-bridge-b4986152")
+        await h.settle()
+        comp = h.job.comp
+        assert comp.chert_call_id == "b4986152"
+        for _ in range(2000):
+            if h.job.done.is_set():
+                break
+            await h.clock.sleep(0.5)
+        await h.job.close_competition()
+        return comp
+    comp = asyncio.run(go())
+    assert ended == ["b4986152"]
+    assert comp.chert_hangup == "acknowledged"

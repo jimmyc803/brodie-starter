@@ -361,7 +361,7 @@ class CoachJob:
         self.player = None; self.player_task = None; self.cue_log = None
         self.per = None; self.thread = None; self.stop = threading.Event(); self.done = asyncio.Event(); self.closed = False
         self.latest = None; self.seq = 0; self.processed = 0; self.dropped = 0; self.idle = 0; self.frame_event = threading.Event()
-        self.video_task = None; self.bound = None; self.call_id = None; self.frame_size = None; self.first_frame_t = None
+        self.video_task = None; self.bound = None; self.call_id = None; self.bridge_call_id = None; self.frame_size = None; self.first_frame_t = None
         self.worker_error = None; self.cues_played = 0; self.ts_mode = None
         self.voice = None; self.voice_seq = 0; self.event_writer = None; self.consumer_tasks = []
         self.end_reason = None; self.leave_task = None; self.ctx_shutdown_called = False; self.t_end = None
@@ -536,7 +536,7 @@ class CoachJob:
         """A caller: remember it (the leave grace is keyed on it), start the model session once (never on a warm job: this only runs
         when somebody publishes), and in voice mode emit the synthetic session {state: open} event once the session is up."""
         self.bound = participant.identity
-        if participant.identity.startswith(BRIDGE_PREFIX): self.call_id = participant.identity[len(BRIDGE_PREFIX):]
+        if participant.identity.startswith(BRIDGE_PREFIX): self.call_id = self.bridge_call_id = participant.identity[len(BRIDGE_PREFIX):]
         extra = getattr(self.event_writer, 'extra', None)                   # the JSONL lines carry the call id from the bind on (null before it)
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
@@ -587,7 +587,9 @@ class CoachJob:
             print(f'[competition] CALLER_ID_SOURCE=chert_meta but chert_call has no handle (keys tried {CHERT_HANDLE_KEYS}); the dispatcher decides without one', flush=True)
         try:
             hangup = (os.environ.get('HANGUP_MODE') or 'unverified').strip()
-            chert_id = (cc.get('call_id') or cc.get('id')) if isinstance(cc, dict) else None
+            # The Chert call id is the bridge identity's suffix (chert-bridge-<id>): real calls land in chert_warm rooms whose
+            # job metadata has no chert_call (confirmed live 2026-10-13). Fall back to chert_call metadata for BYOR dispatch.
+            chert_id = self.bridge_call_id or ((cc.get('call_id') or cc.get('id')) if isinstance(cc, dict) else None)
             chert_end = None
             if hangup == 'chert_api':
                 from challenge.worker.chert import ChertEndClient
