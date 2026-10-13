@@ -35,7 +35,7 @@ function fixtureView(path: string): Record<string, unknown>[] {
       reasons: { too_shallow: 3, no_lockout: 1 }, liveness_result: "pass", void: false,
       rank_before: 9, rank_after: 6, points_before: 100, total_points_after: 130,
       avatar_level_before: 3, avatar_level_after: 4 }],
-    competition_public: [{ window_start: "2026-10-13T00:00:00Z", window_end: "2026-10-19T03:59:59Z",
+    competition_public: [{ window_start: "2026-10-13T00:00:00Z", window_end: "2026-10-21T03:59:59Z",
       frozen: false, site_url: "https://brodie-pushups.vercel.app",
       avatar_level_thresholds: FIXTURE_THRESHOLDS }],
     power_hour_public: [{ date_et: nextStart.toISOString().slice(0, 10), starts_at: nextStart.toISOString(),

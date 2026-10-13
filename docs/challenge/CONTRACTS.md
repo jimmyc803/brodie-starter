@@ -73,7 +73,7 @@ heartbeats(component text primary key, at timestamptz not null, detail jsonb)
 site_pulse(id int primary key default 1, bumped_at timestamptz not null)   -- anon-readable, realtime; bumped by triggers on calls/reps/line_state/queue/score_adjustments
 ```
 
-Config keys + seed values (`competition_config`): `window_start` "2026-10-12T20:00:00-04:00", `window_end` "2026-10-18T23:59:59-04:00",
+Config keys + seed values (`competition_config`): `window_start` "2026-10-12T20:00:00-04:00", `window_end` "2026-10-20T23:59:59-04:00" (extended from Oct 18 on 2026-10-13),
 `call_count_s` 180, `call_reveal_s` 15, `daily_call_cap` 5, `claim_window_s` 90, `line_offline_gap_s` 180, `min_counted_call_s` 30,
 `in_call_timeout_extra_s` 60, `power_hour_window` [12,22], `power_multiplier` 2, `rank_drop_min` 2, `rank_drop_throttle_h` 3,
 `quiet_hours` [23,9], `recap_hour` 10, `streak_risk_hour` 20,

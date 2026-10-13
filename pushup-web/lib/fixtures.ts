@@ -76,7 +76,7 @@ export function fixturePowerHour(nowMs: number): PowerHour {
 export function fixtureCompetition(frozen: boolean): CompetitionPublic {
   return {
     windowStart: "2026-10-12T04:00:00.000Z",
-    windowEnd: "2026-10-19T03:59:59.000Z",
+    windowEnd: "2026-10-21T03:59:59.000Z",
     frozen,
     ufcFighter: null,
     firstPrize: "$100",

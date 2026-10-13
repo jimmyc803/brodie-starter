@@ -17,7 +17,7 @@ const mono = Space_Mono({
   display: "swap",
 });
 
-const description = "One week. Strict push-ups on FaceTime, judged live. Climb the board, grow your Brodie.";
+const description = "Through Oct 20. Strict push-ups on FaceTime, judged live. Climb the board, grow your Brodie.";
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"),

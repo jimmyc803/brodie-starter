@@ -40,7 +40,7 @@ export default async function OpengraphImage() {
           <span style={{ color: "#ff3d97", textShadow: "8px 6px 0 #2346d8" }}>Live board.</span>
         </div>
         <div style={{ display: "flex", gap: 28, fontSize: 30, fontWeight: 700, textTransform: "uppercase" }}>
-          <span>One week</span>
+          <span>Ends Oct 20</span>
           <span>·</span>
           <span>Judged live on FaceTime</span>
           <span>·</span>

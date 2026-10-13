@@ -88,7 +88,7 @@ const COMMANDS: [string, string][] = [
 
 export default async function HowItWorksPage() {
   const comp = await getCompetition();
-  const end = formatEtDeadline(comp?.windowEnd ?? null) ?? "Sun Oct 18 · 11:59 PM ET";
+  const end = formatEtDeadline(comp?.windowEnd ?? null) ?? "Tue Oct 20 · 11:59 PM ET";
   const prize = comp?.firstPrize ?? "$500";
   const fighter = ufcFighterCopy(comp?.ufcFighter);
 
