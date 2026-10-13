@@ -324,12 +324,15 @@ def test_rank_deltas_first_observation_drops_ties_and_throttle(tx):
 def test_config_get_set_audited_and_reason_required(tx):
     cfg = rpc(tx, "ch_config_get")
     assert cfg["daily_call_cap"] == 5 and cfg["registration_open"] is True
+    # migrations may audit their own config writes (e.g. actor 'migration:judge_j3'): only count this test's rows
+    base = len(audit(tx, "config_set"))
+    assert all(r[0].startswith("migration:") for r in audit(tx, "config_set"))
     tx.execute("set local role service_role")
     assert rpc(tx, "ch_config_set", p_key="daily_call_cap", p_value=Jsonb(7), p_actor="admin@x.com",
                p_reason="more calls") == {"ok": True}
     tx.execute("reset role")
     assert rpc(tx, "ch_config_get")["daily_call_cap"] == 7
-    assert audit(tx, "config_set") == [("admin@x.com", "daily_call_cap", {"value": 5}, {"value": 7}, "more calls")]
+    assert audit(tx, "config_set")[base:] == [("admin@x.com", "daily_call_cap", {"value": 5}, {"value": 7}, "more calls")]
     assert tx.execute("select updated_by from competition_config where key='daily_call_cap'").fetchone()[0] == \
         "admin@x.com"
     for reason in (None, "", "   "):
@@ -342,7 +345,7 @@ def test_config_get_set_audited_and_reason_required(tx):
                p_reason="r")["reason"] == "type_mismatch"
     assert rpc(tx, "ch_config_set", p_key="brodie_number", p_value=Jsonb("+15551234"), p_actor="a",
                p_reason="r")["ok"]
-    assert len(audit(tx, "config_set")) == 2
+    assert len(audit(tx, "config_set")) - base == 2
 
 
 # ---------------------------------------------------------------- admin
