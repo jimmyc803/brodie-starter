@@ -70,7 +70,7 @@ CHECK_TEXTS_AFTER_S = 1.5      # check_texts after time_up
 HANG_UP_LEAD_S = 4.0           # hang_up this long before the leave (HANGUP_MODE unverified)
 RESCHEDULE_MIN_S = 2.0         # earliest liveness reschedule after a skip
 COMMIT_DEADLINE_S = 20.0       # end(): both events within this, else the checkpoint stays committed:false
-DRAIN_MAX_S = 1.0              # end(): wait this long for reps still in the perception pipe
+DRAIN_MAX_S = 3.0              # end(): wait this long for the rep intake to seal (frame in flight finished, its events in)
 DEFERRABLE_CUES = frozenset({"power_hour", "thirty_left"})   # held while a liveness challenge is open ...
 DEFER_MAX_S = 10.0                                           # ... and dropped once this late
 JUDGE_CUE_KEYS = frozenset({"knees_down", "too_shallow", "no_lockout", "not_in_frame", "hips", "multiple_people"})
@@ -172,7 +172,7 @@ class CompetitionCall:
                  liveness_factory: Callable[[random.Random, dict], Any] | None = None,
                  alert: Callable[[str, str], Any] | None = None,
                  sleep: Callable[[float], Awaitable[Any]] | None = None,
-                 commit_deadline_s: float = COMMIT_DEADLINE_S):
+                 commit_deadline_s: float = COMMIT_DEADLINE_S, drain_max_s: float = DRAIN_MAX_S):
         check_modes(hangup_mode, reveal_mode)
         self.call_id, self.line_id, self.handle = str(call_id), str(line_id), handle
         self.dispatcher = dispatcher
@@ -189,6 +189,7 @@ class CompetitionCall:
         self.alert = alert or _default_alert
         self._sleep = sleep or asyncio.sleep
         self.commit_deadline_s = float(commit_deadline_s)
+        self.drain_max_s = float(drain_max_s)
         self.t0: float | None = None
         self.decision: str | None = None          # accept | reject | error
         self.reason: str | None = None
@@ -203,6 +204,8 @@ class CompetitionCall:
         self.ended_at: float | None = None
         self.end_reason: str | None = None
         self._payload_built = False
+        self.sealed = False                        # rep intake closed: no rep event can arrive any more (payload only then)
+        self._commit_deferred = False              # end() found the intake unsealed: seal() + end() commits later
         self.committed = False
         self.sent = {"reps_committed": False, "call_ended": False}
         self.last_error: str | None = None
@@ -217,7 +220,6 @@ class CompetitionCall:
         self._old_windows: list[tuple[float, float]] = []            # windows adopted from a checkpoint
         self._pushed: dict[int, list] = {}         # id(lc) -> windows as last passed to update_challenge_window
         self._rescheduled = False
-        self._frame_errors = 0
         self._start_done = asyncio.Event()
         self._end_task: asyncio.Future | None = None
         self._bg: set[asyncio.Task] = set()
@@ -271,7 +273,7 @@ class CompetitionCall:
             "liveness_result": self.liveness_result, "liveness_first_fire_s": self.liveness_first_fire_t,
             "liveness": {"result": self.liveness_result, "first_fire_s": self.liveness_first_fire_t,
                          "fires_s": self.liveness_fires, "windows_s": self.windows(), "rescheduled": self._rescheduled},
-            "final": self.ended_at is not None,
+            "final": self.ended_at is not None, "sealed": self.sealed, "worker_pid": os.getpid(),
             "reps": self.final_reps() if self.ended_at is not None else self.reps,
             "late_reps": self.late_reps, "rep_count": len(self.reps), "ignored_reps": self.ignored_reps,
             "idem_keys": {k: idem_key(self.call_id, k) for k in self.sent},
@@ -331,7 +333,7 @@ class CompetitionCall:
         self._rescheduled = bool(lv.get("rescheduled"))
         if d.get("final") and d.get("ended_t") is not None:
             self.ended_at, self.end_reason = float(d["ended_t"]), d.get("end_reason")
-            self.counting_stopped = self._payload_built = True
+            self.counting_stopped = self._payload_built = self.sealed = True   # the earlier process is gone
         log.warning("call %s: adopted the existing checkpoint (t0 %s, %d reps, liveness %s, final %s, sent %s)", self.call_id,
                     utc_iso(self.t0), len(self.reps), self.liveness_result, self.ended_at is not None, self.sent)
 
@@ -600,15 +602,12 @@ class CompetitionCall:
         try:
             self.lc.on_frame(dataclasses.replace(f, t=self.rel(f.t)))
         except Exception as e:
-            self._frame_errors += 1
-            if self._frame_errors == 1:
-                log.exception("call %s: liveness on_frame failed (%r); a pass still needs the challenge", self.call_id, e)
-                self.alert("liveness_frame_error", f"call {self.call_id}: {e!r}")
+            self._lc_fail("on_frame", e)                   # its state can no longer be trusted: no later pass
 
     def on_rep(self, event: dict, t: float | None = None) -> dict | None:
         """A perception rep event (with the judge's valid/reject_reasons/metrics/cue/in_challenge) fired at wall time
         t (None = now). It counts by its own timestamp: fired before count end -> recorded, even when it is delivered
-        after tick(count_s) or while end() drains; once the commit payload is built it goes to late_reps and the call
+        after tick(count_s) or while end() drains; once the intake is sealed (cannot happen with a working drain) it goes to late_reps and the call
         stays committed:false. Must run on the event loop (the worker marshals it). Returns the stored rep."""
         if self.decision != "accept":
             return None
@@ -634,7 +633,7 @@ class CompetitionCall:
         metrics = event.get("metrics") or {}
         rep.update({k: metrics.get(k) for k in C2_METRIC_KEYS if k in metrics})
         rep = jsonable(rep)
-        if self._payload_built:
+        if self.sealed:                                 # cannot happen with a working drain(); kept, never dropped
             self.late_reps.append(rep)
             self.committed = False
             self.last_error = f"rep at {rel:.2f} s arrived after the commit payload was built"
@@ -667,13 +666,14 @@ class CompetitionCall:
         self._say(key, urgent=False)
 
     def final_reps(self) -> list[dict]:
-        """The reps as committed: in_challenge from every liveness window; without a passed challenge every valid rep
-        is marked liveness_fail (C7.l: earned reps never count without a pass)."""
+        """The reps as committed: in_challenge recomputed from the final windows (a FREEZE deadline that shrank after
+        the judge flagged a rep no longer covers it); without a passed challenge every valid rep is marked
+        liveness_fail (C7.l: earned reps never count without a pass)."""
         mark = self.liveness_result != "pass"
         out = []
         for r in self.reps:
             r = dict(r, reject_reasons=list(r["reject_reasons"]))
-            r["in_challenge"] = bool(r["in_challenge"]) or self._in_window(r["t"])
+            r["in_challenge"] = self._in_window(r["t"])
             if mark and r["valid"]:
                 r["valid"] = False
                 if "liveness_fail" not in r["reject_reasons"]:
@@ -726,10 +726,25 @@ class CompetitionCall:
 
     # ------------------------------------------------------------------ end
     async def end(self, reason: str = "end") -> dict:
-        """Idempotent; concurrent callers share one run, which is shielded from their cancellation."""
-        if self._end_task is None:
+        """Idempotent; concurrent callers share one run, which is shielded from their cancellation. A run that found
+        the rep intake unsealed sends nothing; once seal() was called the next end() commits."""
+        if self._end_task is None or (self._end_task.done() and self._commit_deferred and self.sealed):
+            self._commit_deferred = False
             self._end_task = asyncio.ensure_future(self._end(reason))
         return await asyncio.shield(self._end_task)
+
+    def seal(self) -> None:
+        """The worker: no rep event can arrive any more (the perception feed thread has exited)."""
+        if not self.sealed:
+            self.sealed = True
+            log.info("call %s: rep intake sealed", self.call_id)
+            if self.decision == "accept":
+                self._write()
+
+    @property
+    def commit_deferred(self) -> bool:
+        """end() ran but found the rep intake unsealed: nothing sent yet; seal() then end() commits."""
+        return self._commit_deferred and not self.ending
 
     @property
     def ending(self) -> bool:
@@ -745,15 +760,29 @@ class CompetitionCall:
         if self.decision != "accept":
             return {"recorded": False, "committed": False, "decision": self.decision}
         if self.ended_at is None:
-            now = self.clock()
-            self.ended_at, self.end_reason = now, reason
+            self.ended_at, self.end_reason = self.clock(), reason
             self.counting_stopped = True
-            if self._drain is not None:                       # reps fired before the end still in the perception pipe
+            self._write()
+        if not self.sealed:
+            # Stop the feed, let the frame in flight finish and its rep events reach on_rep; only then is the payload
+            # complete. drain() returns True once no rep event can arrive any more.
+            ok = self._drain is None
+            if not ok:
                 try:
-                    await asyncio.wait_for(self._drain(), DRAIN_MAX_S)
+                    ok = await asyncio.wait_for(self._drain(), self.drain_max_s) is True
+                except asyncio.TimeoutError:
+                    log.error("call %s: rep intake not sealed within %g s", self.call_id, self.drain_max_s)
                 except Exception as e:
-                    log.warning("call %s: drain before commit failed: %r", self.call_id, e)
-            self._settle_liveness(min(self.rel(now), self.count_s + self.reveal_s))
+                    log.exception("call %s: drain before commit failed: %r", self.call_id, e)
+            self.sealed = self.sealed or ok
+        self._settle_liveness(min(self.rel(self.ended_at), self.count_s + self.reveal_s))
+        if not self.sealed:
+            self._commit_deferred = True
+            self.last_error = "rep intake not sealed (perception feed busy): commit deferred until seal()"
+            self._write()
+            log.error("call %s: %s; checkpoint %s kept with committed:false", self.call_id, self.last_error, self.path)
+            self.alert("commit_pending", f"call {self.call_id}: {self.last_error}; checkpoint {self.path}")
+            return {"recorded": True, "committed": False, "reps": len(self.reps), "liveness_result": self.liveness_result}
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.commit_deadline_s
         rel_end = min(self.rel(self.ended_at), self.count_s)

@@ -79,9 +79,10 @@ class FakeLiveness:
     Records frames, reps and the window it got."""
     made: list = []
 
-    def __init__(self, rng, thr, outcomes, fire=None, cue="challenge_lift_hold", after=2.0, timeout=4.0, go=None):
+    def __init__(self, rng, thr, outcomes, fire=None, cue="challenge_lift_hold", after=2.0, timeout=4.0, go=None,
+                 go_cue="challenge_go", frame_error=None):
         self.thr, self.outcomes, self.fire_req, self.cue, self.after, self.timeout = thr, outcomes, fire, cue, after, timeout
-        self.go, self.go_said = go, False
+        self.go, self.go_said, self.go_cue, self.frame_error = go, False, go_cue, frame_error
         self.fire_t = None
         self.attempts = []
         self.result = None
@@ -124,7 +125,7 @@ class FakeLiveness:
         if self.go is not None and not self.go_said and t >= start + self.go:
             self.go_said = True
             self.attempts[-1] = (start, t + 2.0)
-            return "go", "challenge_go"
+            return "go", self.go_cue
         if t < start + self.after:
             return "pending", None
         self.result = self.outcomes if self.outcomes != "skipped" else self._no_pass()
@@ -137,6 +138,8 @@ class FakeLiveness:
         return self.result
 
     def on_frame(self, f):
+        if self.frame_error is not None and len(self.frames) >= 1:
+            raise self.frame_error
         self.frames.append(f)
 
     def windows(self):
@@ -912,6 +915,7 @@ def test_rep_racing_end_is_committed_or_leaves_committed_false(tmp_path):
         async def drain():
             holder["r"].call.on_rep(rep_ev(), t=T0 + 150)
             await asyncio.sleep(0)
+            return True
         a = Rig(tmp_path / "a", drain=drain)
         holder["r"] = a
         await a.call.start()
@@ -1042,7 +1046,8 @@ def test_close_competition_keeps_client_open_while_commit_runs(tmp_path, monkeyp
     async def go():
         job.loop = asyncio.get_running_loop()
         gate = asyncio.Event()
-        comp = SimpleNamespace(path="p", decision="accept", ended_at=None, reps=[], last_tick_wall=None, _end_task=None)
+        comp = SimpleNamespace(path="p", decision="accept", ended_at=None, reps=[], last_tick_wall=None, _end_task=None,
+                               commit_deferred=False)
 
         async def _end():
             await gate.wait()
@@ -1201,3 +1206,139 @@ def test_real_liveness_unanswered_challenge_fails_and_marks_reps(tmp_path):
     assert {a for a, _ in r.windows} == {a for a, _ in ck["liveness"]["windows_s"]}
     assert ck["reps"] and all(x["valid"] is False and "liveness_fail" in x["reject_reasons"] for x in ck["reps"])
     assert _payload(r.disp)["liveness_result"] == "fail"
+
+
+
+# ------------------------------------------------------------------ final fix round
+def test_rep_delivered_after_aclose_started_still_reaches_the_controller(tmp_path, monkeypatch):
+    worker, job = _job(monkeypatch, tmp_path)
+    seen = []
+    job.comp = SimpleNamespace(on_rep=lambda ev, t: seen.append((ev["n"], t)))
+    job.per_wall0 = T0
+    job.closed = True                                     # hang-up: aclose() already running
+    job._deliver({"type": "rep", "exercise": "pushups", "n": 4, "t": 30.0, "confidence": {}})
+    assert seen == [(4, T0 + 30.0)]                       # the controller decides by timestamp, not the worker
+
+
+def test_drain_feed_seals_intake_after_the_frame_in_flight(tmp_path, monkeypatch):
+    import threading
+    import time as _time
+    worker, job = _job(monkeypatch, tmp_path)
+    seen = []
+    job.comp = SimpleNamespace(on_rep=lambda ev, t: seen.append(ev["n"]))
+    job.per_wall0 = T0
+    started = threading.Event()
+
+    async def go():
+        job.loop = asyncio.get_running_loop()
+
+        def frame_in_flight():                            # the feed thread mid-frame: its rep event is posted at the end
+            with job.feed_lock:
+                started.set()
+                _time.sleep(0.1)
+                job.loop.call_soon_threadsafe(job._deliver, {"type": "rep", "exercise": "pushups", "n": 7, "t": 1.0, "confidence": {}})
+        th = threading.Thread(target=frame_in_flight)
+        th.start()
+        for _ in range(400):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.005)
+        assert started.is_set()
+        sealed = await asyncio.wait_for(job.drain_feed(), 2)
+        th.join()
+        return sealed
+    assert run(go()) is True and seen == [7] and job.feed_sealed is True
+
+
+def test_commit_waits_for_a_sealed_intake_and_never_loses_a_rep(tmp_path):
+    async def go():
+        async def stuck():                                # the feed thread is wedged: intake cannot be sealed
+            await asyncio.Event().wait()
+        r = Rig(tmp_path, drain=stuck, drain_max_s=0.05)
+        await r.call.start()
+        await r.advance(30)
+        r.call.on_rep(rep_ev(), t=T0 + 30)
+        await r.advance(196)
+        res1 = await r.call.end("complete")
+        ck1 = r.ckpt()
+        r.call.on_rep(rep_ev(), t=T0 + 100)               # the wedged frame finally fires its rep (before the end)
+        r.call.seal()                                     # the worker: the feed thread has exited
+        res2 = await r.call.end("again")
+        return r, res1, ck1, res2
+    r, res1, ck1, res2 = run(go())
+    assert res1["committed"] is False and ck1["sealed"] is False and ck1["sent"]["reps_committed"] is False
+    assert "commit_pending" in r.alerts and [k for k, _ in r.disp.events()].count("reps_committed") == 1
+    assert res2["committed"] is True and [x["t"] for x in _payload(r.disp)["reps"]] == [30.0, 100.0]
+    ck = r.ckpt()
+    assert ck["sealed"] is True and ck["committed"] is True and ck["late_reps"] == []
+
+
+def test_liveness_frame_error_fails_closed_at_once(tmp_path):
+    async def go():
+        r = Rig(tmp_path, liveness=factory("pass", fire=60.0, frame_error=RuntimeError("bad frame")))
+        await r.call.start()
+        img = np.zeros((33, 5), np.float32)
+        r.call.on_frame(FrameObs(t=T0 + 1, img=img, world=None, persons=1))
+        r.call.on_frame(FrameObs(t=T0 + 2, img=img, world=None, persons=1))
+        ck = r.ckpt()
+        await r.advance(70)                               # the challenge would have passed at 62
+        return r, ck
+    r, ck = run(go())
+    assert ck["liveness_result"] == "fail" and "liveness_error" in r.alerts
+    assert r.call.liveness_result == "fail" and "challenge_lift_hold" not in r.keys()
+
+
+def test_in_challenge_recomputed_from_final_windows(tmp_path):
+    async def go():
+        r = Rig(tmp_path, liveness=factory("pass", fire=60.0, cue="challenge_freeze", go=1.0, after=4.0, timeout=10.0))
+        await r.call.start()
+        await r.advance(60.5)
+        r.call.on_rep(rep_ev(), t=T0 + 60.5)                         # inside both the first and the final window
+        await r.advance(62)                                          # go at 61: the window shrinks to 60..63
+        r.call.on_rep(rep_ev(in_challenge=True), t=T0 + 66)          # the judge still had 60..70 when it fired
+        await r.advance(196)
+        await r.call.end("complete")
+        return r
+    r = run(go())
+    assert r.call.windows() == [(60.0, 63.0)]
+    by_t = {x["t"]: x for x in _payload(r.disp)["reps"]}
+    assert by_t[60.5]["in_challenge"] is True and by_t[66.0]["in_challenge"] is False and by_t[66.0]["valid"] is True
+
+
+def test_second_cue_of_a_go_status_is_played_as_given(tmp_path, monkeypatch):
+    monkeypatch.setitem(CUES, "challenge_down", "And down!")
+
+    async def go():
+        r = Rig(tmp_path, liveness=factory("pass", fire=60.0, cue="challenge_lift_hold", go=1.5, go_cue="challenge_down",
+                                           after=3.0, timeout=6.0))
+        await r.call.start()
+        await r.advance(64)
+        return r
+    r = run(go())
+    t = {k: s for s, k, _ in r.said}
+    assert t["challenge_lift_hold"] == 60 and t["challenge_down"] == 61.5 and "challenge_go" not in t
+    assert r.windows[-1] == (60.0, 63.5) and r.call.liveness_result == "pass"
+
+
+def test_worker_commits_a_deferred_call_once_the_feed_thread_is_gone(tmp_path, monkeypatch):
+    worker, job = _job(monkeypatch, tmp_path)
+
+    async def go():
+        async def stuck():
+            await asyncio.Event().wait()
+        r = Rig(tmp_path, drain=stuck, drain_max_s=0.05)
+        job.loop = asyncio.get_running_loop()
+        job.comp, job.comp_client = r.call, r.client
+        await r.call.start()
+        await r.advance(20)
+        r.call.on_rep(rep_ev(), t=T0 + 20)
+        await r.advance(196)
+        await job.close_competition()
+        deferred = r.call.commit_deferred
+        job.thread = None                                  # the feed thread exited (joined in aclose)
+        await job.finish_deferred_commit()
+        return r, deferred
+    r, deferred = run(go())
+    assert deferred is True and r.call.committed is True and r.ckpt()["sealed"] is True
+    assert [k for k, _ in r.disp.events()] == ["call_started", "reps_committed", "call_ended"]
+    assert r.client._client.is_closed

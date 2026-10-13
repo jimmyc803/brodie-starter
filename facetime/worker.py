@@ -375,7 +375,9 @@ class CoachJob:
         self.clock = time.time; self.sleep = asyncio.sleep        # the controller's wall clock and sleep (tests replace them)
         self.per_wall0 = None                                     # wall time of the Perception event clock's zero
         self.pending_windows = collections.deque()                # ('win', t0, t1) event clock / ('thr', thresholds): applied by the feed thread
-        self.feed_busy = False; self.last_proc_wall = None        # drain before the commit; job health
+        self.feed_busy = False; self.last_proc_wall = None        # job health
+        self.feed_lock = threading.Lock(); self.feed_sealed = False   # the feed thread processes a frame only under the lock and
+                                                                  # stops once sealed: drain_feed() then knows no rep can follow
         self.hb_task = None
 
     # ---- lifecycle ----
@@ -477,6 +479,7 @@ class CoachJob:
             except (asyncio.TimeoutError, asyncio.CancelledError): pass
         if self.thread is not None and self.thread.is_alive():                            # the feed loop polls stop every 50 ms
             await asyncio.get_running_loop().run_in_executor(None, self.thread.join, 1.0)
+        if self.comp is not None and getattr(self.comp, 'commit_deferred', False): await self.finish_deferred_commit()
         if self.voice is not None:
             try: await asyncio.wait_for(self.voice.aclose(), 3)
             except Exception as e: log.warning('voice close: %r', e)
@@ -624,10 +627,15 @@ class CoachJob:
         self.pending_windows.append(('thr', dict(thr)))
 
     async def drain_feed(self):
-        """end(): let the frame in flight finish and its events reach the loop (bounded by the controller)."""
-        while self.feed_busy:
+        """end(): seal the rep intake. Stop the feed (no new frame starts), wait for the frame in flight (it holds
+        feed_lock), then run the loop callbacks it posted (its rep events -> comp.on_rep). Returns True: no rep event
+        can arrive any more. Bounded by the controller (a wedged frame keeps the lock: the commit is deferred)."""
+        self.feed_sealed = True
+        while not self.feed_lock.acquire(blocking=False):
             await asyncio.sleep(0.01)
-        for _ in range(3): await asyncio.sleep(0)
+        self.feed_lock.release()
+        for _ in range(3): await asyncio.sleep(0)                 # call_soon_threadsafe callbacks posted before the release
+        return True
 
     def wall_of(self, ev_t):
         """Perception event clock (seconds since per.t0) -> wall time."""
@@ -673,12 +681,31 @@ class CoachJob:
         if self.comp_task is not None and not self.comp_task.done():
             self.comp_task.cancel()
             await asyncio.gather(self.comp_task, return_exceptions=True)
-        if self.comp_client is not None:
+        if self.comp_client is not None and not (self.comp is not None and self.comp.commit_deferred):   # still needed
             client = self.comp_client
             if self.comp is not None and self.comp.ending:
                 self.comp._end_task.add_done_callback(lambda _t: asyncio.ensure_future(self._close_client(client)))
             else:
                 await self._close_client(client)
+
+    async def finish_deferred_commit(self):
+        """aclose, after the feed thread was joined: the commit waited for a sealed rep intake. Thread gone -> seal and
+        commit now; still alive (wedged) -> leave the checkpoint committed:false (unsealed) for the reconciler."""
+        comp = self.comp
+        if self.thread is None or not self.thread.is_alive():
+            comp.seal()
+            try:
+                await asyncio.wait_for(asyncio.shield(comp.end('sealed after feed exit')), COMMIT_WAIT_S)
+            except asyncio.TimeoutError:
+                print(f'[competition] deferred commit still pending after {COMMIT_WAIT_S:g} s: checkpoint {comp.path} kept', flush=True)
+            except Exception as e:
+                log.exception('competition deferred commit failed: %r', e)
+        else:
+            print(f'[competition] perception feed still wedged: checkpoint {comp.path} kept unsealed, committed:false', flush=True)
+        if self.comp_client is not None:
+            client = self.comp_client
+            if comp.ending: comp._end_task.add_done_callback(lambda _t: asyncio.ensure_future(self._close_client(client)))
+            else: await self._close_client(client)
 
     @staticmethod
     async def _close_client(client):
@@ -822,11 +849,16 @@ class CoachJob:
                 self.frame_size = (frame.width, frame.height)
             rgb = frame_to_rgb(frame)
             self.per.frames_received = self.seq; self.per.frames_dropped = self.dropped
-            self.feed_busy = True
-            if self.pending_windows: self.before_frame()
-            self.per.process_frame(rgb, t_recv=t_mono, meta=dict(frame_seq=seq, ts_us=ts_us, t_capture=self.capture_time(ts_us, t_wall), t_recv=t_wall))
-            if self.comp is not None: self.after_frame(t_wall, (frame.width, frame.height))
-            self.processed += 1; self.feed_busy = False; self.last_proc_wall = time.time()
+            with self.feed_lock:
+                if self.feed_sealed: break                    # the call's commit is being built: no more frames, no more reps
+                self.feed_busy = True
+                try:
+                    if self.pending_windows: self.before_frame()
+                    self.per.process_frame(rgb, t_recv=t_mono, meta=dict(frame_seq=seq, ts_us=ts_us, t_capture=self.capture_time(ts_us, t_wall), t_recv=t_wall))
+                    if self.comp is not None: self.after_frame(t_wall, (frame.width, frame.height))
+                finally:
+                    self.feed_busy = False
+            self.processed += 1; self.last_proc_wall = time.time()
             if self.a.max_s and t_mono - self.first_frame_t >= self.a.max_s:
                 print(f'[worker] --max-s {self.a.max_s} reached', flush=True); self.loop.call_soon_threadsafe(self.end, 'max_s reached'); break
 
@@ -858,7 +890,7 @@ class CoachJob:
             self.recap.on_event(ev)
             if t == 'session' and (ev.get('state') == 'done' or ev.get('done')):        # plan finished, caller still here: save + show the card
                 asyncio.create_task(self.recap.finish(self.room, show=self.room_connected()), name='session-finish')
-        if t == 'rep' and self.comp is not None and not self.closed:
+        if t == 'rep' and self.comp is not None:                # also during shutdown: the controller judges by timestamp
             try: self.comp.on_rep(ev, t=self.wall_of(ev['t']))
             except Exception: log.exception('competition on_rep failed for rep %s', ev.get('n'))
         if t == 'rep':
