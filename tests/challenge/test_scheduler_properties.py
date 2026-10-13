@@ -23,7 +23,9 @@ invariants are checked after every step:
   * freeze vs pause (C7.s): after a tick at/after window_end no waiting entry remains and no "text QUEUE"
     missed_slot is written while frozen; a manual competition_frozen (toggled by the machine) stops popping but
     never expires an eligible waiting entry.
-Seeded: derandomize=True, no example database.
+Seeded: derandomize=True, no example database. Generation still varies with which other test modules are loaded
+(Hypothesis draws literal constants from loaded local modules; xdist --dist loadfile varies the mix): 250 examples gave
+the 1-line machine 133-269 pops, so 500 keeps the coverage floors well clear (worst seen 382).
 """
 from __future__ import annotations
 
@@ -51,7 +53,7 @@ GRACE_S = 10
 GAP_S = 30
 COUNT_S, REVEAL_S, EXTRA_S = 180, 15, 60
 MIN_COUNTED_S = 30
-SETTINGS = settings(max_examples=250, stateful_step_count=40, deadline=None, derandomize=True, database=None,
+SETTINGS = settings(max_examples=500, stateful_step_count=40, deadline=None, derandomize=True, database=None,
                     suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much,
                                            HealthCheck.data_too_large])
 
