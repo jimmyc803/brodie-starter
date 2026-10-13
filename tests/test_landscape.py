@@ -10,7 +10,7 @@ import pytest
 from challenge.judge.gates import DEFAULT_THRESHOLDS
 from facetime import pushup_mirror as pmod
 from facetime import worker
-from facetime.frameprep import FramePrep, OrientationGate, ORIENT_SUSTAIN_S, ORIENT_HOLD_S, phone_sideways, rotate
+from facetime.frameprep import FramePrep, OrientationGate, ORIENT_SUSTAIN_S, ORIENT_HOLD_S, phone_sideways, rotate, unrotate
 from facetime.pushup_mirror import MirrorState, PushupMirror
 
 from test_pushup_mirror import plank, SRC
@@ -320,3 +320,44 @@ def test_gate_holds_a_switch_long_enough_for_the_caller_to_place_the_phone():
     switched = t
     while g.landscape and t < switched + 30: t += 0.1; g.update(False, t)
     assert ORIENT_HOLD_S >= 8.0 and t - switched >= 8.0 - 1e-6 and g.n_switches == 2
+
+
+# ------------------------------------------------------------------------------------- sideways + rotation-locked phone
+def test_unrotate_is_the_inverse_of_rotate():
+    img = np.arange(24, dtype=np.uint8).reshape(2, 4, 3)
+    for deg in (0, 90, 270):
+        assert np.array_equal(rotate(unrotate(img.copy(), deg), deg), img)
+        assert np.array_equal(unrotate(rotate(img.copy(), deg), deg), img)
+
+
+def test_locked_sideways_phone_gets_the_card_pre_turned_on_the_portrait_track():
+    """prep.rotation != 0 = the caller's screen never rotates: the track stays 720x1280 the whole call and carries the
+    landscape card pre-turned by the inverse of the caller's rotation (live calls 2026-10-13: a landscape track on a
+    rotation-locked phone was shown turned and cropped / zoomed)."""
+    job = worker.CoachJob.__new__(worker.CoachJob); job.mirror_thresholds = lambda: None
+    r = PushupMirror(mascot=False)
+    snap = (np.full(SRC, 90, np.uint8), None, 1, 0.0)
+    for rot in (90, 270):
+        f = job._mirror_frame(r, None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=rot)
+        assert (f.width, f.height) == (720, 1280)
+    f = job._mirror_frame(r, None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=0)
+    assert (f.width, f.height) == (1280, 720)                             # no lock (screen rotates): landscape track as before
+
+
+def test_feed_layout_tracks_the_locked_phone_rotation(capsys):
+    job = worker.CoachJob.__new__(worker.CoachJob)
+    job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
+    raw = bridge(PORTRAIT_PIC)                                            # the lock turns the picture upright again
+    t = 0.0
+    def step():
+        nonlocal t
+        job.prep_frame(raw, t); job.update_layout(raw, t); t += 0.1
+    for _ in range(5): step()
+    assert job.mirror_landscape is False and job.mirror_rot == 0
+    job.prep.rotation = 270                                               # the phone goes sideways (portrait-locked)
+    for _ in range(40): step()
+    assert job.mirror_landscape is True and job.mirror_rot == 270
+    assert 'pre-turned 270 deg on the portrait track' in capsys.readouterr().out
+    job.prep.rotation = 0                                                 # upright again (sustain + the 8 s hold)
+    for _ in range(140): step()
+    assert job.mirror_landscape is False and job.mirror_rot == 0

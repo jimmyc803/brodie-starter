@@ -613,11 +613,13 @@ class CoachJob:
             while not self.stop.is_set():
                 speaking = self.player is not None and self.player.playing is not None
                 rf = getattr(self, 'reveal_frames', None)
+                rot = int(getattr(self, 'mirror_rot', 0) or 0)                 # sideways portrait-locked phone (update_layout)
                 rv_land = (rf is not None and renderer is not None and getattr(rf, 'landscape_size', None) is not None
                            and bool(getattr(self, 'mirror_landscape', False)))       # sideways phone: landscape card
                 rv_img = rf.current_frame(rv_land) if rf is not None else None
                 if rv_img is not None:                                         # reveal (C7.v): the whole card, never the mirror
-                    frame = await asyncio.to_thread(self._reveal_frame, rv_img, rf.landscape_size if rv_land else (VW, VH))
+                    if rv_land and rot: rv_img = rv_img.rotate(rot, expand=True)     # locked phone: landscape card pre-turned
+                    frame = await asyncio.to_thread(self._reveal_frame, rv_img, (VW, VH) if not rv_land or rot else rf.landscape_size)
                     source.capture_frame(frame)
                     next_t = loop.time() + 1.0 / IDLE_CARD_FPS
                     await asyncio.sleep(max(0.0, next_t - loop.time())); continue
@@ -628,7 +630,7 @@ class CoachJob:
                     lat = getattr(self, 'latest', None)                            # a caller frame newer than the pose's: show it
                     newer = lat[0] if (snap is not None and lat is not None and lat[4] > snap[2]) else None
                     landscape = snap is not None and bool(getattr(self, 'mirror_landscape', False))   # idle card: portrait
-                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats, newer, landscape)
+                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats, newer, landscape, rot)
                     if fails[0] >= 10:
                         print(f'[worker] push-up mirror failed {fails[0]} frames in a row: plain avatar for the rest of the call', flush=True)
                         renderer = None; self.mirror_live = False; self.mirror_in = None
@@ -667,13 +669,19 @@ class CoachJob:
             buf = img.tobytes()
         return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420)
 
-    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats, newer=None, landscape=False):
+    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats, newer=None, landscape=False, rot=0):
         """Render thread: one mirror frame (I420); on any error the plain face for this frame. newer: a caller VideoFrame
         that arrived after snap's (the pose's) frame: shown with snap's skeleton when the feed's crop + rotation fit it.
         landscape: the caller's phone is sideways -> a 1280x720 frame on the same track (the size changes mid-stream: the
-        native VideoSource passes any frame size through and WebRTC reconfigures the encoder, no republish)."""
+        native VideoSource passes any frame size through and WebRTC reconfigures the encoder, no republish).
+        rot (with landscape): the caller's phone is sideways AND portrait-locked (frameprep's orientation lock turns the
+        caller's picture by `rot` deg CW). The screen never rotates on such a phone, so a landscape track gets mangled
+        (live calls 2026-10-13: shown turned and cropped / zoomed). Instead the landscape card is pre-turned by the
+        inverse of `rot` into the normal portrait frame: FaceTime fills the portrait screen with it as always, and the
+        physical turn of the phone makes the card read upright. The track size then never changes mid-call."""
         from facetime.pushup_mirror import W as VW, H as VH, LW, LH
-        if landscape: VW, VH = LW, LH
+        from facetime.frameprep import unrotate
+        if landscape and not rot: VW, VH = LW, LH
         t0 = time.perf_counter()
         try:
             if snap is None: img = renderer.render(None, None, self.mirror_thresholds(), st, now=now)
@@ -683,6 +691,7 @@ class CoachJob:
                     up = prep.apply(frame_to_rgb(newer))
                     if up is not None and up.shape == rgb.shape: rgb = up
                 img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2], **({'landscape': True} if landscape else {}))
+                if landscape and rot: img = unrotate(img, rot)
             fails[0] = 0
             stats['n'] += 1; stats['ms'] += (time.perf_counter() - t0) * 1000
             ih, iw = img.shape[:2]
@@ -1243,17 +1252,22 @@ class CoachJob:
 
     def update_layout(self, raw, now):
         """Feed thread: the coach-video's orientation follows the caller's physical phone (frameprep.phone_sideways through
-        an OrientationGate: ~2 s sustained, no flapping) -> self.mirror_landscape, read by the avatar loop. Cosmetic: a
-        failure is logged and the layout stays as it was."""
+        an OrientationGate: ~2 s sustained, no flapping) -> self.mirror_landscape, read by the avatar loop. mirror_rot:
+        the caller's picture needed turning (the orientation lock) = sideways phone whose SCREEN stays portrait (rotation
+        lock on), so the landscape card goes pre-turned on the portrait track (_mirror_frame) instead of as a landscape
+        track. Cosmetic: a failure is logged and the layout stays as it was."""
         try:
             from facetime.frameprep import OrientationGate, phone_sideways
             gate = getattr(self, 'orient_gate', None)
             if gate is None: gate = self.orient_gate = OrientationGate()
-            was = gate.landscape
-            self.mirror_landscape = gate.update(phone_sideways(getattr(self, 'prep', None), raw), now)
-            if self.mirror_landscape != was:
+            was, was_rot = gate.landscape, getattr(self, 'mirror_rot', 0)
+            prep = getattr(self, 'prep', None)
+            self.mirror_landscape = gate.update(phone_sideways(prep, raw), now)
+            self.mirror_rot = int(getattr(prep, 'rotation', 0) or 0) if self.mirror_landscape else 0
+            if self.mirror_landscape != was or self.mirror_rot != was_rot:
                 print(f"[worker] caller's phone {'sideways' if self.mirror_landscape else 'upright'}: coach-video "
-                      f"{'landscape' if self.mirror_landscape else 'portrait'}", flush=True)
+                      f"{'landscape' if self.mirror_landscape else 'portrait'}"
+                      + (f' pre-turned {self.mirror_rot} deg on the portrait track (rotation-locked screen)' if self.mirror_rot else ''), flush=True)
         except Exception as e:
             self.layout_fails = getattr(self, 'layout_fails', 0) + 1
             if self.layout_fails == 1 or self.layout_fails % 100 == 0:

@@ -103,6 +103,15 @@ def rotate(img, deg):
     return img
 
 
+def unrotate(img, deg):
+    """The inverse of rotate: rotate(unrotate(img, deg), deg) is img again. Used on the OUTGOING coach-video for a
+    sideways portrait-locked phone: its screen shows our portrait track unturned, and the physical turn of the phone
+    (the same one the camera picture needed `deg` CW to undo) then makes a frame pre-turned this way read upright."""
+    if deg == 90: return cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    if deg == 270: return cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE)
+    return img
+
+
 def _conf(lm):
     c = lm[:, 3].astype(float)
     if lm.shape[1] >= 5: c = np.minimum(c, lm[:, 4].astype(float))
