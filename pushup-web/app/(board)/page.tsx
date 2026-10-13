@@ -111,7 +111,7 @@ export default async function Home() {
           ) : null}
           {rows.length === 0 ? (
             <section aria-label="Leaderboard" className="card relative flex flex-col items-center overflow-hidden px-6 py-12 text-center">
-              <div aria-hidden className="halftone-fade absolute inset-0 [--dot:var(--color-pink)] opacity-60" />
+              <div aria-hidden className="halftone absolute inset-0 [--dot:var(--color-pink)] opacity-50 [mask-image:radial-gradient(closest-side,transparent_55%,#000)]" />
               <div className="relative flex flex-col items-center">
                 <Avatar level={1} size={120} pose="idle" />
                 <h2 className="mt-4 font-display text-5xl uppercase">The board is empty</h2>
