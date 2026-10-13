@@ -71,3 +71,17 @@ begin
     create publication supabase_realtime;
   end if;
 end $$;
+
+-- Supabase installs extensions in schema `extensions` (not public), and API roles' search_path does not include it
+-- for `set search_path = public` functions. Mirror that so an unqualified pgcrypto call fails here exactly as it
+-- does live (gen_random_bytes in new_share_token broke every clients insert on 2026-10-13).
+create schema if not exists extensions;
+grant usage on schema extensions to anon, authenticated, service_role;
+create extension if not exists pgcrypto with schema extensions;
+-- Supabase's database default search_path includes `extensions` (so plain sessions and schema.sql see pgcrypto), but
+-- `set search_path = public` RPCs do not. Cloned test databases don't inherit this setting, which is stricter: there
+-- every pgcrypto call must be schema-qualified.
+do $$ begin
+  execute format('alter database %I set search_path = "$user", public, extensions', current_database());
+end $$;
+set search_path = "$user", public, extensions;
