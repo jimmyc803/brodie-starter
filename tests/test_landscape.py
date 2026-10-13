@@ -270,7 +270,8 @@ def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     assert (f.width, f.height) == (1280, 720)
 
 
-def test_feed_layout_follows_the_phone_with_hysteresis(capsys):
+def test_feed_layout_follows_the_phone_with_hysteresis(capsys, monkeypatch):
+    monkeypatch.setenv('MIRROR_LANDSCAPE', '1')                     # opt-in (default off since the 2026-10-13 call)
     job = worker.CoachJob.__new__(worker.CoachJob)
     job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
     up, side = bridge(PORTRAIT_PIC), bridge(LANDSCAPE_PIC)
@@ -292,7 +293,8 @@ def test_feed_layout_follows_the_phone_with_hysteresis(capsys):
     assert job.mirror_landscape is True
 
 
-def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys):
+def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys, monkeypatch):
+    monkeypatch.setenv("MIRROR_LANDSCAPE", "1")
     job = worker.CoachJob.__new__(worker.CoachJob)
     class Boom:
         rotation = 0
@@ -310,3 +312,13 @@ def test_rotated_portrait_picture_turned_upright_reads_as_sideways():
     raw = bridge(rotate(content, 270))
     for k in range(4): up = prep(raw, 0.25 * k)
     assert up.shape[:2] == (360, 640) and phone_sideways(prep, raw) is True
+
+
+def test_feed_layout_is_portrait_by_default_even_for_a_sideways_picture(monkeypatch):
+    """Default (MIRROR_LANDSCAPE unset): the coach-video never switches to landscape, whatever the caller's picture is."""
+    monkeypatch.delenv('MIRROR_LANDSCAPE', raising=False)
+    job = worker.CoachJob.__new__(worker.CoachJob)
+    wide = np.full((720, 1280, 3), 120, np.uint8)
+    for k in range(60):
+        job.update_layout(wide, k / 15)
+    assert job.mirror_landscape is False
