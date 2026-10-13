@@ -8,6 +8,8 @@ straight to SSM as CHERT_WEBHOOK_SECRET. Secrets are never printed.
   python3 scripts/chert_setup.py                      # list lines + existing subscriptions
   python3 scripts/chert_setup.py --subscribe          # create the webhook subscription
 """
+from __future__ import annotations
+
 import argparse
 import json
 import subprocess
