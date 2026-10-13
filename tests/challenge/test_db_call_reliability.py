@@ -120,9 +120,16 @@ def test_migration_applies_twice(pg_cluster, db):
     name = db.split("dbname=")[1].split()[0]
     pg_cluster.apply_file(name, MIGRATION)
     pg_cluster.apply_file(name, MIGRATION)
+    # later migrations redefine functions from this one (20261024 cap fix): re-apply them (twice: idempotent) so the
+    # module database ends on the current definitions again
+    for later in sorted(p for p in MIGRATIONS.glob("*.sql") if p.name > MIGRATION.name):
+        pg_cluster.apply_file(name, later)
+        pg_cluster.apply_file(name, later)
     with connect(db) as conn:
         assert conn.execute("select count(*) from competition_config where key in ('claim_grace_s', 'worker_stale_s')"
                             ).fetchone()[0] == 2
+        assert "turn_restored_at" in conn.execute(
+            "select pg_get_functiondef('ch_calls_cap_exempt(calls)'::regprocedure)").fetchone()[0]
 
 
 @pytest.mark.parametrize("fn", ["ch_calls_settle(text,timestamptz)", "ch_calls_cap_exempt(calls)",
@@ -335,6 +342,77 @@ def test_timeout_then_late_commit_recounts(c):
         ("commit", True)
     assert today(c, a) == 1
     assert c.execute("select count(*) from audit_log where action='call:turn_restored'").fetchone()[0] == 1
+
+
+def _counted_calls(c, uid, n, at=T0):
+    for i in range(n):
+        t = at - timedelta(hours=2, minutes=10 * i)
+        c.execute("insert into calls (id, line_id, user_id, decision, connected_at, ended_at, counted_toward_cap)"
+                  " values (%s, 'line-1', %s, 'accept', %s, %s, true)", (f"earlier-{uid[:8]}-{i}", uid, t,
+                                                                         t + timedelta(minutes=4)))
+    assert today(c, uid, at) == n
+
+
+def test_late_commit_after_the_restored_turn_was_used_never_exceeds_the_cap(c):
+    """20261024 fix: 4 counted calls, the 5th times out (exempt, turn restored), the restored turn is used (5th
+    counted call); the reconciler's late commit for the timed-out call must not make it 6."""
+    a = user(c, 1)
+    _counted_calls(c, a, 4)
+    claim_for(c, a)
+    s = T0 + timedelta(seconds=5)
+    c1, _ = start(c, s)
+    t = s + timedelta(seconds=TIMEOUT_S)
+    assert rpc(c, "ch_tick", p_now=t)["restored"][0]["call_id"] == c1
+    s2 = t + timedelta(seconds=5)
+    c2, r2 = start(c, s2)
+    assert r2["decision"] == "accept"
+    # the late commit arrives while the restored-turn call is still in progress: it may not take that call's slot
+    r = commit(c, c1, [rep(1, s + timedelta(seconds=10), True)], s2 + timedelta(seconds=20),
+               ended_at=s + timedelta(seconds=60))
+    assert r["ok"] and r["valid_reps"] == 1 and r["points"] >= 1                # the reps still score
+    assert counted(c, c1) is False
+    e2 = s2 + timedelta(seconds=120)
+    end(c, c2, e2, reps=3)
+    commit(c, c2, [rep(1, s2 + timedelta(seconds=10), True)], e2 + timedelta(seconds=1), ended_at=e2)
+    assert counted(c, c2) is True and counted(c, c1) is False and today(c, a) == 5
+    # retries of the late commit change nothing
+    assert commit(c, c1, [], e2 + timedelta(seconds=30))["already"] is True
+    assert today(c, a) == 5
+
+
+def test_late_commit_after_the_restored_turn_was_used_and_ended(c):
+    """Same, but the restored-turn call has already ended (counted) when the late commit lands: still capped at 5."""
+    a = user(c, 1)
+    _counted_calls(c, a, 4)
+    claim_for(c, a)
+    s = T0 + timedelta(seconds=5)
+    c1, _ = start(c, s)
+    t = s + timedelta(seconds=TIMEOUT_S)
+    rpc(c, "ch_tick", p_now=t)
+    s2 = t + timedelta(seconds=5)
+    c2, _ = start(c, s2)
+    e2 = s2 + timedelta(seconds=120)
+    end(c, c2, e2, reps=3)
+    assert today(c, a, e2) == 5
+    commit(c, c1, [rep(1, s + timedelta(seconds=10), True)], e2 + timedelta(seconds=30), ended_at=s + timedelta(seconds=60))
+    assert counted(c, c1) is False and today(c, a, e2) == 5
+
+
+def test_late_commit_recounts_when_under_the_cap_even_after_a_restore(c):
+    """Room left under the cap: the late commit still re-counts the restored call (the 20261023 behaviour)."""
+    a = user(c, 1)
+    _counted_calls(c, a, 3)
+    claim_for(c, a)
+    s = T0 + timedelta(seconds=5)
+    c1, _ = start(c, s)
+    t = s + timedelta(seconds=TIMEOUT_S)
+    rpc(c, "ch_tick", p_now=t)
+    s2 = t + timedelta(seconds=5)
+    c2, _ = start(c, s2)
+    e2 = s2 + timedelta(seconds=120)
+    end(c, c2, e2, reps=3)
+    commit(c, c1, [rep(1, s + timedelta(seconds=10), True)], e2 + timedelta(seconds=30), ended_at=s + timedelta(seconds=60))
+    assert counted(c, c1) is True and counted(c, c2) is True and today(c, a, e2) == 5
 
 
 # ---------------------------------------------------------------- P2-1 dial grace

@@ -55,6 +55,7 @@ STEP = timedelta(seconds=2)
 IDLE_JUMP = timedelta(minutes=5)
 CALL_COUNT_S, REVEAL_S, EXTRA_S = 180, 15, 60
 GAP_S, CLAIM_S, CAP, MIN_COUNTED_S = 180, 90, 5, 30
+GRACE_S = 10  # claim_grace_s (20261023): the holder may still connect until claimed_until + 10 s
 NO_SHOW_P = 0.15
 REPLY_TEMPLATES = {"call_queued", "welcome", "join_confirm_prompt", "join_bad_name", "join_taken", "queue_joined", "queue_line_open",
                    "queue_at_cap", "queue_already", "queue_in_call", "left_queue", "status", "top", "rules", "power",
@@ -214,6 +215,7 @@ class CallRec:
     end_reason: str | None = None
     rep_count: int = 0
     committed: bool = False
+    turn_restored: bool = False
     timed_out_at: datetime | None = None
     end_posted_at: datetime | None = None
 
@@ -294,6 +296,7 @@ class Sim:
         self.metrics: Counter = Counter()
         self.waits: list[float] = []
         self.youre_up_latency: list[float] = []
+        self.restored_queue_ids: set[int] = set()
         self.claim_log: list[dict] = []  # every claim ch_tick made: {queue_id, user_id, line_id, at, until}
         self.youre_up_at: dict[tuple[int, datetime], datetime] = {}  # (queue_id, claimed_until) -> first delivery
         self.line_time: dict[str, Counter] = {ln: Counter() for ln in self.lines}
@@ -617,13 +620,14 @@ class Sim:
             return "not_registered"
         if clients[uid]["banned"]:
             return "banned"
+        grace = timedelta(seconds=GRACE_S)
         if any(k != lid and l["user_id"] == uid and (l["state"] == "in_call" or (
-                l["state"] == "claimed" and l["claimed_until"] > t)) for k, l in lines.items()):
+                l["state"] == "claimed" and l["claimed_until"] + grace > t)) for k, l in lines.items()):
             return self.call_to_queue(uid, lines, queue, t)
         if self.calls_today(uid, t) >= CAP:
             return "at_cap"
         ls = lines[lid]
-        if ls["state"] == "claimed" and ls["claimed_until"] > t and ls["user_id"] == uid:
+        if ls["state"] == "claimed" and ls["claimed_until"] + grace > t and ls["user_id"] == uid:
             return "ok"
         if ls["state"] == "idle" and not any(q["user_id"] != uid for q in queue):
             return "ok"
@@ -796,7 +800,10 @@ class Sim:
         reps = max(rec.rep_count, len(rec.reps))
         if rec.end_reason == "timeout":
             rec.ended_at, rec.end_reason, rec.rep_count = max(ended, rec.started), "commit", reps
-            rec.counted = self._counted_rule(rec, rec.ended_at, reps)
+            # a restored call re-counts only if it fits under the cap (20261024): the user's other calls that day,
+            # counted or still in progress, take precedence
+            rec.counted = self._counted_rule(rec, rec.ended_at, reps) and not (
+                rec.turn_restored and self.others_today(rec) >= CAP)
         else:
             rec.rep_count = reps
             rec.counted = rec.counted or self._counted_rule(rec, rec.ended_at, reps)
@@ -806,7 +813,17 @@ class Sim:
         if rec.ended_at is None:
             rec.ended_at = min(rec.started + timedelta(seconds=CALL_COUNT_S + REVEAL_S), self.now)
             rec.end_reason = "timeout"
-        rec.counted = rec.counted or self._counted_rule(rec, rec.ended_at, rec.rep_count)
+        if rec.end_reason == "timeout" and not rec.committed and rec.rep_count == 0:
+            rec.counted = False  # 20261023: a timeout with no commit and no reps is cap-exempt (turn restored once)
+        else:
+            rec.counted = rec.counted or self._counted_rule(rec, rec.ended_at, rec.rep_count)
+
+    def others_today(self, rec: CallRec) -> int:
+        """The user's other accepted calls on rec's ET day that are counted or still in progress (no end yet)."""
+        day, uid = self.et_day(rec.started), rec.agent.uid if rec.agent else None
+        return sum(1 for c in self.calls.values()
+                   if c is not rec and c.decision == "accept" and c.agent and c.agent.uid == uid
+                   and self.et_day(c.started) == day and (c.counted or c.ended_at is None))
 
     def check_offline(self, lid: str, cid: str) -> None:
         l = self.snap_lines()[lid]
@@ -1053,6 +1070,30 @@ class Sim:
                 self.metrics["tick_timeouts"] += 1
         for ns in tick.get("no_shows", []):
             self.metrics["no_shows"] += 1
+        for r in tick.get("restored", []):  # 20261023: one-time turn restore after an exempt (timed-out) call
+            rec = self.calls.get(r["call_id"])
+            self.metrics["turn_restores"] += 1
+            if rec is None or rec.end_reason != "timeout" or rec.counted or rec.committed:
+                self.fail("cap", f"turn restored after {r['call_id']}, which is not an exempt timeout")
+            elif rec.turn_restored:
+                self.fail("cap", f"turn restored twice after {r['call_id']}")
+            else:
+                rec.turn_restored = True
+            if r["queue_id"] in self.restored_queue_ids:
+                self.fail("cap", f"queue entry {r['queue_id']} restored twice")
+            self.restored_queue_ids.add(r["queue_id"])
+            if rec is not None and rec.agent and self.calls_today(rec.agent.uid, t) >= CAP:
+                self.fail("cap", f"turn restored to {rec.agent.name} at the cap")
+            if r["how"] == "claimed":
+                ls = self.snap_lines()[r["line_id"]]  # the tick's restored entry names the line, not the deadline
+                until = ls["claimed_until"]
+                if ls["state"] != "claimed" or ls["user_id"] != r["user_id"]:
+                    self.fail("cap", f"restored claim for {r['user_id']} not on {r['line_id']}: {ls}")
+                if abs((until - t).total_seconds() - CLAIM_S) > 0.001:
+                    self.fail("claim_window", f"restored claim on {r['line_id']} lasts {(until - t).total_seconds()} s")
+                self.claims[r["line_id"]] = {"queue_id": r["queue_id"], "user_id": r["user_id"], "at": t, "until": until}
+                self.claim_log.append({"queue_id": r["queue_id"], "user_id": r["user_id"], "line_id": r["line_id"],
+                                       "at": t, "until": until})
         lines = self.snap_lines()
         new = {c["line_id"] for c in tick.get("claims", [])}
         pre = {k: ({**v, "state": "idle", "user_id": None} if k in new else v) for k, v in lines.items()}
@@ -1079,8 +1120,8 @@ class Sim:
             self.claim_log.append({"queue_id": c["queue_id"], "user_id": c["user_id"], "line_id": c["line_id"],
                                    "at": t, "until": until})
         for lid, l in lines.items():
-            if l["state"] == "claimed" and l["claimed_until"] <= t:
-                self.fail("stuck_lines", f"{lid} claimed past claimed_until after tick")
+            if l["state"] == "claimed" and l["claimed_until"] + timedelta(seconds=GRACE_S) <= t:
+                self.fail("stuck_lines", f"{lid} claimed past claimed_until + grace after tick")
             if l["state"] == "in_call" and l["in_call_since"] + timedelta(seconds=CALL_COUNT_S + REVEAL_S + EXTRA_S) <= t:
                 self.fail("stuck_lines", f"{lid} in_call past the timeout after tick")
             if l["state"] == "offline":
@@ -1394,7 +1435,7 @@ class Sim:
                 "no_shows": 1, "walk_ins": 1, "rejected:not_registered": 1, "rejected:queued": 1,
                 "rejected:at_cap": 1, "rejected:banned": 1, "rejected:frozen": 1, "stop_mid_queue": 1,
                 "ban_while_waiting": 1, "ban_while_claimed": 1, "reconciled": 1, "at_cap_queue_replies": 1,
-                "reps_2x": 1, "tick_timeouts": 1, "reps_rejected:after_freeze": 1, "reps_rejected:after_count": 1,
+                "reps_2x": 1, "tick_timeouts": 1, "turn_restores": 1, "reps_rejected:after_freeze": 1, "reps_rejected:after_count": 1,
                 "reps_rejected:liveness_fail": 1, "event_replays": 1, "webhook_redeliveries": 1,
                 "capped_then_called_next_day": 1 if len(self.days) > 1 and self.args.lines > 1 else 0,  # D-35
                 "span:midnight": 1 if len(self.days) > 1 else 0}
@@ -1407,7 +1448,7 @@ class Sim:
 CHECKS = [
     ("priority", "Pop priority: every claim went to the eligible waiting entry with the fewest counted calls today, FIFO within the tier"),
     ("idle_with_waiting", "No active line left idle after a tick while an eligible user was waiting (window open)"),
-    ("stuck_lines", "No stuck states: after every tick no line is past claimed_until / in_call timeout / offline_until"),
+    ("stuck_lines", "No stuck states: after every tick no line is past claimed_until + dial grace / in_call timeout / offline_until"),
     ("claim_window", "Every claim lasts exactly claim_window_s (90 s); no-shows release the line on the next tick"),
     ("offline_gap", "Line offline gap: offline_until = call end + line_offline_gap_s and no pop before it"),
     ("one_active", "<=1 active queue entry per user; <=1 line per user; notified entries <-> claims; LEAVE immediate"),
