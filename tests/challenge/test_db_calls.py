@@ -539,9 +539,12 @@ def test_before_start_and_frozen_at_commit(st, conn):
     tick(st, ws + timedelta(seconds=300))
     c2, _ = start(st, h, ws + timedelta(seconds=301))
     set_cfg(conn, "competition_frozen", True)
-    r = commit(st, c2, [rep(1, ws + timedelta(seconds=310))], ws + timedelta(seconds=400))
-    assert r["points"] == 0
-    assert _reps_rows(conn, c2)[0][4] == ["after_freeze"]
+    # the flip stamps frozen_at = wall-clock now(); pin it so the cutoff doesn't depend on when the suite runs
+    conn.execute("insert into competition_config (key, value, updated_by) values ('frozen_at', %s, 'test') "
+                 "on conflict (key) do update set value = excluded.value", (_jb((ws + timedelta(seconds=305)).isoformat()),))
+    r = commit(st, c2, [rep(1, ws + timedelta(seconds=303)), rep(2, ws + timedelta(seconds=310))], ws + timedelta(seconds=400))
+    assert r["points"] == 1
+    assert [x[4] for x in _reps_rows(conn, c2)] == [[], ["after_freeze"]]
 
 
 def test_liveness_fail_zeroes_all_reps(st, conn):
