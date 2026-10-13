@@ -352,6 +352,14 @@ PYTHONPATH=src:. .venv/bin/python scripts/seed_admins.py --emails alice@example.
   --actor you@example.com --reason "launch admins"
 ```
 
+Admins sign in at `/admin/login` with email + password (no email is sent). Set or reset a password (prints it;
+the email must already be on the allowlist):
+
+```bash
+export SUPABASE_URL='https://<ref>.supabase.co' SUPABASE_SERVICE_ROLE_KEY='...'
+.venv/bin/python scripts/set_admin_password.py alice@example.com
+```
+
 Quick health view during the week:
 
 ```bash
