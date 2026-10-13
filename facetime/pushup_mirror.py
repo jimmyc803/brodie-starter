@@ -78,7 +78,10 @@ FAINT = (215, 215, 210)
 HEAD_H = 150                               # the ink header (the island sits in it)
 VID_Y0 = HEAD_H                            # the video panel: full width, from here down PANEL_MIN..PANEL_MAX px (the
 PANEL_W = W                                # picture's height at the framing's zoom; a landscape source rarely fills a
-PANEL_MIN, PANEL_MAX = 400, 700            # portrait panel, so the panel shrinks to it instead of showing ink bars)
+PANEL_MIN, PANEL_MAX = 400, H - HEAD_H     # portrait panel, so the panel shrinks to it instead of showing ink bars;
+                                           # a tall one may fill the card to the bottom - live 2026-10-13: an upright
+                                           # phone shows the whole track in a small fitted box, so the picture must
+                                           # be most of the card (the count then rides ON it, PT_TALL)
 PANEL_ASPECT = PANEL_W / PANEL_MAX
 PILL_X, PILL_Y = SAFE_X - 6, VID_Y0 + 22   # camera status pill (top left of the video)
 MASCOT_H = 250                             # Brodie, bottom right: his head pops MASCOT_POP px over the video's bottom edge,
@@ -88,6 +91,9 @@ MASCOT_FEET = SAFE_BOTTOM - 8
 COUNT_X = SAFE_X - 4                       # the count: eyebrow at vid_y1 + 22, the numerals under it
 COUNT_PX = (120, 260)                      # the numerals fill the score zone's height, in steps of 10
 COUNT_MAX_W = 310                          # ... and never run into Brodie
+PT_TALL = MASCOT_FEET - 168                # a taller panel than this leaves no score zone under the video: the count
+PT_COUNT_W = 236                           # rides ON the picture as a paper ticket top right instead, and the small
+PT_COUNT_X1 = W - SAFE_X + 20              # (landscape) Brodie overlays its bottom right
 FLASH_S = 1.5; STAMP_S = 0.55; FADE_S = 0.3
 CUE_MIN_S = 1.2                            # a cue bubble shows at least this long (then only while he talks)
 S_MAX = 2.0                                # never zoom the source more than this (output px per source px; sharper)
@@ -280,8 +286,8 @@ class Framer:
         self.locked = False                       # the zoom is set (first framing)
 
     def _whole(self):
-        cw = max(self.w, self.h * PANEL_ASPECT)   # the whole picture fits the panel (ink beside a tall one)
-        return (self.w / 2, self.h / 2, cw)
+        cw = max(self.w, self.h * PANEL_ASPECT, PANEL_W / S_MAX)   # the whole picture fits the panel (ink beside a
+        return (self.w / 2, self.h / 2, cw)                        # tall one), never zoomed past S_MAX
 
     def crop_h(self, cw):
         return min(cw / PANEL_ASPECT, self.h)
@@ -678,7 +684,12 @@ class PushupMirror:
         self._blit(img, 'timer', *chip, W - SAFE_X - w_ + 4, HEAD_H - 20 - h)
 
     def _count(self, img, state, now):
-        """The valid-rep count under the video (portrait)."""
+        """The valid-rep count: under the video, or on it as a paper ticket when a tall picture fills the card."""
+        if self.vid_y1 > PT_TALL:
+            x0, y0 = PT_COUNT_X1 - PT_COUNT_W, VID_Y0 + 16
+            self._ls_ticket(img, x0, y0, PT_COUNT_X1, y0 + 260)
+            self._count_at(img, state, now, x0 + 18, y0 + 14, 180, (120, 180), PT_COUNT_W - 56)
+            return
         cy = self.vid_y1 + 24
         self._count_at(img, state, now, COUNT_X, cy, (MASCOT_FEET - cy - 36) / 0.9, COUNT_PX, COUNT_MAX_W)
 
@@ -752,7 +763,8 @@ class PushupMirror:
         rgb, a = brand.bubble(self._cue_lines(state, 30, maxw - 44), 30, maxw, tail='down', radius=4, tail_at=0.8)
         h, w_ = a.shape[:2]
         x = min(W - SAFE_X - w_ + 12, MASCOT_CX - int(0.8 * w_))
-        self._blit(img, 'bubble', rgb, a, max(SAFE_X - 6, x), self._mascot_feet() - MASCOT_H - h + 2)
+        mh_ = LS_MASCOT_H if self.vid_y1 > PT_TALL else MASCOT_H
+        self._blit(img, 'bubble', rgb, a, max(SAFE_X - 6, x), self._mascot_feet() - mh_ - h + 2)
 
     def _mascot(self, img, state, now, m=None, cx=MASCOT_CX, feet=None):
         """Brodie (m: which mascot, default the portrait one) centred on cx, feet on feet; both mascots react to a verdict."""
@@ -761,7 +773,9 @@ class PushupMirror:
             self._react_t = state.verdict_t
             for mm in (self.mascot, self.ls_mascot):
                 if mm is not None: mm.react('good' if state.verdict_ok else 'bad', state.verdict_t)
-        m = m or self.mascot; feet = self._mascot_feet() if feet is None else feet
+        if m is None:                                       # a tall picture: the smaller Brodie overlays its corner
+            m = (self.ls_mascot or self.mascot) if self.vid_y1 > PT_TALL else self.mascot
+        feet = self._mascot_feet() if feet is None else feet
         m.draw(img, cx, feet, now, speaking=state.speaking)
         hw = m.art_w / 2; self.boxes['mascot'] = (int(cx - hw), int(feet - m.height), int(math.ceil(cx + hw)), int(feet))
 

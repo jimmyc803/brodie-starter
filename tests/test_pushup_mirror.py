@@ -190,6 +190,28 @@ def test_render_with_mascot_verdict_cue_and_idle_card():
     assert idle[pmod.IDLE_FEET - 40, 40].tolist() != [0, 0, 0]
 
 
+def test_tall_picture_fills_the_card_with_the_count_riding_on_it():
+    """Live 2026-10-13: an upright phone shows the whole 720x1280 track in a small fitted box, so a tall (portrait)
+    picture must BE most of the card: full width, panel near the card's bottom, the count a paper ticket ON the
+    picture, the small Brodie overlaying its corner. A wide picture keeps the classic score zone under the video."""
+    pm = PushupMirror()
+    st = MirrorState(time_left_s=75.0)
+    for k in range(10):
+        pm.render(np.full((720, 486, 3), 110, np.uint8), plank(), DEFAULT_THRESHOLDS, st, now=0.1 * k, seq=k)
+    pic = pm.boxes['picture']
+    assert pic[2] - pic[0] == pmod.W                       # the whole card width (was 473 px wide before)
+    assert pic[3] - pic[1] >= 1000                         # ~1.5x the old 700 px panel
+    assert pm.vid_y1 > pmod.PT_TALL
+    c = pm.boxes['count']
+    assert c[1] >= pmod.VID_Y0 and c[3] <= pm.vid_y1 and c[2] <= pmod.PT_COUNT_X1   # the ticket rides on the picture
+    m = pm.boxes['mascot']
+    assert m[3] <= pmod.MASCOT_FEET and m[3] - m[1] <= pmod.LS_MASCOT_H + 40        # the small Brodie
+    pm2 = PushupMirror()
+    for k in range(10):
+        pm2.render(np.full((274, 486, 3), 110, np.uint8), plank(), DEFAULT_THRESHOLDS, st, now=0.1 * k, seq=k)
+    assert pm2.vid_y1 <= pmod.PT_TALL and pm2.boxes['count'][1] >= pm2.vid_y1       # the classic layout, unchanged
+
+
 def test_render_rejects_a_bad_frame_and_keeps_input_untouched():
     pm = PushupMirror(mascot=False)
     with pytest.raises(ValueError): pm.render(np.zeros((10, 10), np.uint8), None)

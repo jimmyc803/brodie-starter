@@ -167,10 +167,11 @@ def plank_score(lm, aspect, min_conf=0.5):
 
 
 def standing_score(lm, aspect, min_conf=0.5):
-    """0..1: how plausible an upright STANDING person is in this view (head over shoulders over hips, a hand hanging
-    or resting clearly below the shoulders). Positive proof the view is already upright (module docstring); 0 when in
-    doubt. The hands requirement is what tells a stander from a plank turned head-up: that plank's arms stick out
-    sideways, a stander's hang down (or rest on a desk below the shoulders)."""
+    """0..1: how plausible an upright STANDING person is in this view (head over shoulders over hips, hands hanging
+    below the shoulders or pressing into something they lean on). Positive proof the view is already upright (module
+    docstring); 0 when in doubt. The hands requirement is what tells a stander from a plank turned head-up: that
+    plank's arms stick out to the side with the body inclined AWAY from them, a stander's hang down or carry a lean
+    TOWARD them (wall / desk push-ups)."""
     if lm is None: return 0.0
     lm = np.asarray(lm, dtype=float)
     if lm.ndim != 2 or lm.shape[0] < 33 or lm.shape[1] < 4: return 0.0
@@ -182,9 +183,17 @@ def standing_score(lm, aspect, min_conf=0.5):
     if L < 1e-3 or d[1] < 0.8 * L: return 0.0                       # hips well BELOW the shoulders: the torso stands
     head = [i for i in (0, 7, 8) if c[i] >= min_conf]
     if head and ms[1] - P[head[0]][1] < 0.1 * L: return 0.0         # ... with the head on top
-    hands = [w for e, w in ((13, 15), (14, 16)) if min(c[e], c[w]) >= 0.7 * min_conf]
-    if not any(P[w][1] - ms[1] > 0.35 * L and P[w][1] - ms[1] >= 0.75 * abs(P[w][0] - ms[0]) for w in hands):
-        return 0.0                                                  # a hand hanging / resting clearly below the shoulders
+    ok = False
+    for e, wr in ((13, 15), (14, 16)):
+        if min(c[e], c[wr]) < 0.7 * min_conf: continue
+        v = P[wr] - ms; n = float(np.linalg.norm(v))
+        if n < 0.3 * L: continue                                    # a hand at the shoulder says nothing
+        if v[1] > 0.35 * L and v[1] >= 0.75 * abs(v[0]): ok = True  # hanging / resting below the shoulders
+        elif float((ms - mh) @ v) / (n * L) >= 0.1: ok = True       # pressing a wall / desk (hands out or up, live
+        # 2026-10-13 #2): the shoulders LEAN from the hips toward the hands, while a plank's body inclines AWAY from
+        # its hands (shoulders above the hips, hands below) - true in any rotation of the picture, so a turned
+        # head-up plank (arms out, incline toward the head) still reads 0 here.
+    if not ok: return 0.0
     return float(np.mean([c[i] for i in shs + hips]))
 
 
