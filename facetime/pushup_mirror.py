@@ -18,13 +18,29 @@ knee angle < knee_min_deg; arms green at lockout (elbow >= lockout_min_deg) or a
 The judge's other per-rep gates (knee floor contact, shoulder drop, timing, the classifier veto) have no per-frame
 colour: the rep stamp reports them.
 
-Camera status, per new pose with hysteresis (StatusFilter): CAN'T SEE YOU / STEP BACK (head to feet) / TURN SIDEWAYS
-(shoulders wide against the torso: a frontal view) / PHONE SIDEWAYS (the picture is a narrow portrait strip, e.g. the
-bridge's pillarboxed frame of an upright phone) / GET IN PLANK / CAMERA ANGLE GOOD.
+Camera status, per new pose with hysteresis (StatusFilter), lenient: CAMERA ANGLE GOOD whenever on one side the
+shoulder, elbow, wrist, hip and knee are visible and the pose is plank-like from any reasonable angle (side, diagonal,
+front-ish, a higher camera: facetime.frameprep.plank_score); feet may be out of frame. Otherwise SHOW HANDS TO KNEES
+(part of that chain missing), GET IN PLANK (all there, not a plank) or CAN'T SEE YOU (no pose). The orientation is
+fixed upstream (facetime/frameprep.py turns a sideways portrait-locked phone upright before the pose), so there is no
+"turn your phone" nagging.
 
-Look: the website's (pushup-web globals.css: paper, ink, pink + yellow, ink borders, hard shadows, condensed display
-type) via facetime/brand.py sprites. Layout respects mirror.SAFE_X / SAFE_TOP / SAFE_BOTTOM (FaceTime Fill crops the
-sides, the island covers the top, the self-view the bottom left).
+Layout (720x1280, FaceTime fills the screen with it): an ink header (BRODIE + the timer), the caller's video full-bleed
+under it (VID_Y0 down, PANEL_MIN..PANEL_MAX tall) framed by a stable virtual camera (Framer), the status pill and the verdict stamp floating on
+the video, and on the paper below the big overprinted valid-rep count with Brodie small on the right, his speech bubble
+over the video only while he talks. Look and tokens: the website (pushup-web/app/globals.css: paper, ink, pink + blue
+overprint, yellow tickets, ink borders, hard shadows, Anton + Space Mono) via facetime/brand.py sprites. Everything
+respects mirror.SAFE_X / SAFE_TOP / SAFE_BOTTOM (FaceTime Fill crops the sides, the island covers the top, the
+self-view the bottom left).
+
+Framing (Framer): the person's keypoint box (head to knees = "core"; with the feet = "full") is collected per pose over
+the last WINDOW_S seconds and reduced per edge to its 10th / 90th percentile, so a rep or a jittery landmark does not
+move it. The crop is the panel's aspect around that region (padded; head room; feet included only when that costs no
+picture height), never zoomed beyond S_MAX output px per source px. The crop moves only when the region leaves the
+inner safe area of the current crop or would zoom in by > 25 %, sustained SUSTAIN_S, and then eases there in EASE_S.
+No pose: the last framing holds. The picture is warped once per frame (cubic, a mild unsharp mask on the small source
+crop when upscaling, area-averaged when downscaling); the skeleton and overlays are drawn afterwards at output
+resolution.
 """
 from __future__ import annotations
 
@@ -39,36 +55,43 @@ import numpy as np
 from challenge.judge.gates import merged_thresholds
 from challenge.judge.metrics import SIDES, angle_deg, hip_line_dev_deg
 from facetime import brand
-from facetime.brand import CANVAS, INK, PINK, YELLOW, GOOD, BAD, WHITE, SURFACE
+from facetime.brand import CANVAS, INK, INK2, PINK, BLUE, YELLOW, GOOD, BAD, WHITE, SURFACE, SITE_GOOD, SITE_BAD, LIVE
+from facetime.frameprep import plank_score
 from facetime.mirror import W, H, SAFE_X, SAFE_TOP, SAFE_BOTTOM
 
 AA = cv2.LINE_AA
 FAINT = (215, 215, 210)
-TOPBAR_H = SAFE_TOP + 112                  # the top bar's bottom edge (the picture starts here)
-PILL_Y = TOPBAR_H + 26                     # camera status pill top
-FLASH_Y = TOPBAR_H + 66                    # rep stamp centre (it covers the status pill while it shows)
-MASCOT_H = 236                             # Brodie, bottom right, feet just above the self-view line
-MASCOT_CX = W - SAFE_X - 96
-MASCOT_FEET = SAFE_BOTTOM - 4
-FIT = (SAFE_X + 8, TOPBAR_H + 140, W - SAFE_X - 8, MASCOT_FEET - MASCOT_H + 30)   # the body is fitted inside this rectangle
-FLASH_S = 1.5; STAMP_S = 0.3; FADE_S = 0.3
-CUE_SHOW_S = 4.0
-S_MAX = 1.8                                # never zoom the source more than this (output px per source px)
-BOX_TAU_S = 0.45                           # crop smoothing time constant
-DEADBAND = 0.06                            # crop target moves only when it changed by more than this (fraction of size)
+HEAD_H = 150                               # the ink header (the island sits in it)
+VID_Y0 = HEAD_H                            # the video panel: full width, from here down PANEL_MIN..PANEL_MAX px (the
+PANEL_W = W                                # picture's height at the framing's zoom; a landscape source rarely fills a
+PANEL_MIN, PANEL_MAX = 400, 700            # portrait panel, so the panel shrinks to it instead of showing ink bars)
+PANEL_ASPECT = PANEL_W / PANEL_MAX
+PILL_X, PILL_Y = SAFE_X - 6, VID_Y0 + 22   # camera status pill (top left of the video)
+MASCOT_H = 250                             # Brodie, bottom right: his head pops MASCOT_POP px over the video's bottom edge,
+MASCOT_POP = 46                            # his feet no lower than MASCOT_FEET (the self-view line)
+MASCOT_CX = W - SAFE_X - 70
+MASCOT_FEET = SAFE_BOTTOM - 8
+COUNT_X = SAFE_X - 4                       # the count: eyebrow at vid_y1 + 22, the numerals under it
+COUNT_PX = (120, 260)                      # the numerals fill the score zone's height, in steps of 10
+COUNT_MAX_W = 330                          # ... and never run into Brodie
+FLASH_S = 1.5; STAMP_S = 0.55; FADE_S = 0.3
+CUE_MIN_S = 1.2                            # a cue bubble shows at least this long (then only while he talks)
+S_MAX = 3.0                                # never zoom the source more than this (output px per source px)
+WINDOW_S = 4.0                             # framing: the person's region over this many seconds
+SUSTAIN_S = 0.8                            # ... must want a move this long before the camera moves
+EASE_S = 1.0                               # ... which then takes this long
+SAFE_IN = 0.05                             # the inner safe area: the crop shrunk by this fraction per side
+ZOOM_IN = 0.75                             # zoom in only when the wanted crop is < this times the current width
+CORE = [i for i in range(0, 17)] + [23, 24, 25, 26]       # head, arms, hips, knees
+FULL = CORE + [27, 28, 29, 30, 31, 32]                   # + ankles, heels, toes
 
-ST_NONE, ST_BACK, ST_SIDE, ST_PHONE, ST_PLANK, ST_GOOD = 'cant_see', 'step_back', 'turn_sideways', 'phone_sideways', 'get_in_plank', 'good'
+ST_NONE, ST_BACK, ST_PLANK, ST_GOOD = 'cant_see', 'step_back', 'get_in_plank', 'good'
 STATUS_TEXT = {
-    ST_NONE: ("CAN'T SEE YOU", 'GET IN FRONT OF THE CAMERA'),
-    ST_BACK: ('STEP BACK', 'HEAD TO FEET IN FRAME'),
-    ST_SIDE: ('TURN SIDEWAYS', 'SIDE-ON TO THE CAMERA'),
-    ST_PHONE: ('PHONE SIDEWAYS', 'TURN YOUR PHONE LANDSCAPE'),
+    ST_NONE: ("CAN'T SEE YOU", 'GET IN FRAME'),
+    ST_BACK: ('SHOW HANDS TO KNEES', 'PHONE A BIT FURTHER AWAY'),
     ST_PLANK: ('GET IN PLANK', 'HANDS DOWN, LEGS STRAIGHT'),
     ST_GOOD: ('CAMERA ANGLE GOOD', None),
 }
-FRONTAL_RATIO = 0.75                       # shoulder width / torso length above this (body not upright) = facing the camera
-FRONTAL_RATIO_ANY = 1.15                   # ... above this whatever the torso angle (plank seen from the head)
-PORTRAIT_ASPECT = 0.9                      # content width / height below this = a portrait strip
 
 REASON_TEXT = {
     'multiple_people': 'ONE PERSON ONLY', 'not_in_frame': 'STAY IN FRAME', 'knees_down': 'KNEES DOWN',
@@ -98,21 +121,6 @@ def verdict_lines(valid: bool, reasons) -> tuple[str, str | None]:
 
 
 # ---------------------------------------------------------------------------------------------------- per-frame analysis
-def content_box(rgb, step=4, lit=24, frac=0.03):
-    """(x0, y0, x1, y1) pixel box of the non-black picture (pillarbox / letterbox bars trimmed); the whole frame when
-    nothing is lit. Subsampled: columns / rows with >= frac of their samples brighter than `lit`."""
-    h, w = rgb.shape[:2]
-    m = rgb[::step, ::step].max(axis=2) > lit
-    cols = np.flatnonzero(m.mean(axis=0) >= frac); rows = np.flatnonzero(m.mean(axis=1) >= frac)
-    if not len(cols) or not len(rows): return (0, 0, w, h)
-    return (int(cols[0] * step), int(rows[0] * step), min(w, int(cols[-1] * step + step)), min(h, int(rows[-1] * step + step)))
-
-
-def is_portrait_strip(box) -> bool:
-    x0, y0, x1, y1 = box
-    return (x1 - x0) < PORTRAIT_ASPECT * max(1, (y1 - y0))
-
-
 def _conf(lm):
     """The judge's per-keypoint confidence: min(visibility, presence), NaN -> 0, 0 outside the image."""
     c = lm[:, 3].astype(float)
@@ -128,38 +136,24 @@ def side_visibility(lm):
     return {s: float(v[list(ix)].mean()) for s, ix in SIDES.items()}
 
 
-def camera_status(lm, aspect, thr=None, side=None, portrait=False):
+def camera_status(lm, aspect, thr=None, side=None):
     """One frame's raw camera status (module docstring). lm: (33, >=4) normalised or None; aspect = frame w / h;
-    side: the body side being judged (None: the more visible one); portrait: the picture is a portrait strip."""
+    side: unused (kept for callers; the check takes whichever side shows the whole chain)."""
     t = merged_thresholds(thr); mc = float(t['min_conf'])
-    st = _raw_status(lm, aspect, mc, side)
-    return ST_PHONE if (portrait and st != ST_GOOD) else st
-
-
-def _raw_status(lm, aspect, mc, side):
     if lm is None: return ST_NONE
     lm = np.asarray(lm, dtype=float)
     if lm.ndim != 2 or lm.shape[0] < 33 or lm.shape[1] < 4: return ST_NONE
     c = _conf(lm)
     if max(min(c[11], c[23]), min(c[12], c[24])) < mc: return ST_NONE           # no torso on either side
-    P = lm[:, :2] * np.array([aspect, 1.0])
-    if c[11] >= mc and c[12] >= mc and c[23] >= mc and c[24] >= mc:
-        sw = float(np.linalg.norm(P[11] - P[12]))
-        d = (P[11] + P[12]) / 2 - (P[23] + P[24]) / 2; torso = float(np.linalg.norm(d)) + 1e-9
-        upright = math.degrees(math.atan2(abs(d[0]), abs(d[1]))) < 35.0              # torso within 35 deg of vertical
-        r = sw / torso
-        if r > FRONTAL_RATIO_ANY or (r > FRONTAL_RATIO and not upright): return ST_SIDE
-    if side is None:
-        sv = side_visibility(lm); side = 'right' if sv['right'] > sv['left'] else 'left'
-    if np.any(c[list(SIDES[side])] < mc): return ST_BACK
-    if not _prone(lm): return ST_PLANK
-    return ST_GOOD
+    chain = [(11, 13, 15, 23, 25), (12, 14, 16, 24, 26)]
+    if not any(all(c[i] >= mc for i in ix) for ix in chain): return ST_BACK
+    return ST_GOOD if plank_score(lm, aspect, mc) > 0 else ST_PLANK
 
 
-def _prone(lm):
-    """The judge's prone gate without world landmarks (rtcoach.repcount2 gate_ok('prone') fallback): the image torso
-    line (normalised coords) more than 60 deg from vertical."""
-    xy = lm[:, :2]; d = (xy[11] + xy[12]) / 2 - (xy[23] + xy[24]) / 2
+def side_view(lm, aspect):
+    """The torso runs across the picture (more than 60 deg from vertical, the judge's prone gate): 2-D body-line and
+    knee angles mean something. From the front they do not, so the mirror colours them only from the side."""
+    xy = np.asarray(lm, dtype=float)[:, :2] * np.array([aspect, 1.0]); d = (xy[11] + xy[12]) / 2 - (xy[23] + xy[24]) / 2
     return math.degrees(math.atan2(abs(d[0]), abs(d[1]) + 1e-9)) > 60.0
 
 
@@ -224,10 +218,105 @@ class MirrorState:
         self.cue = text; self.cue_t = time.monotonic() if now is None else now
 
 
+# ---------------------------------------------------------------------------------------------------- the framing
+def _smooth(u):
+    u = min(1.0, max(0.0, u)); return u * u * (3 - 2 * u)
+
+
+class Framer:
+    """The stable virtual camera (module docstring). Works in source pixels of one frame size: view = (cx, cy, cw),
+    the crop centre and width; the crop height is min(cw / PANEL_ASPECT, source height)."""
+
+    def __init__(self, src_w, src_h):
+        self.w, self.h = float(src_w), float(src_h)
+        self.hist = deque()                       # (t, core box, full box or None)
+        self.target = self._whole()               # no pose yet: the whole picture
+        self.view = self.target
+        self.ease = None                          # (t0, from view, to view)
+        self.want_t = None                        # since when a move has been wanted
+
+    def _whole(self):
+        cw = self.w
+        return (self.w / 2, self.h / 2, cw)
+
+    def crop_h(self, cw):
+        return min(cw / PANEL_ASPECT, self.h)
+
+    def add(self, lm, t):
+        """One pose (normalised (33, >=4) landmarks of this frame size, or None: nothing recorded, the framing holds)."""
+        if lm is not None:
+            a = np.asarray(lm, dtype=float); c = _conf(a)
+            core = [i for i in CORE if c[i] > 0.5]
+            if len(core) >= 5:
+                P = a[:, :2] * np.array([self.w, self.h])
+                cb = (*P[core].min(axis=0), *P[core].max(axis=0))
+                full = [i for i in FULL if c[i] > 0.5]
+                fb = (*P[full].min(axis=0), *P[full].max(axis=0))
+                self.hist.append((t, cb, fb))
+        while self.hist and t - self.hist[0][0] > WINDOW_S: self.hist.popleft()
+        if not self.hist: return
+        want = self._want()
+        cur = self.target
+        move = self._outside(cur) or want[2] < ZOOM_IN * cur[2]
+        if not move:
+            self.want_t = None; return
+        if self.want_t is None: self.want_t = t
+        if t - self.want_t >= SUSTAIN_S:                             # frame where the person is now: drop the samples
+            while len(self.hist) > 3 and self.hist[0][0] < self.want_t: self.hist.popleft()   # from before the change
+            want = self._want()                                      # (one eased move, not one per window turnover)
+            self.ease = (t, self.view, want); self.target = want; self.want_t = None
+
+    def _region(self, k):
+        b = np.array([h[k] for h in self.hist])
+        return (float(np.percentile(b[:, 0], 10)), float(np.percentile(b[:, 1], 10)),
+                float(np.percentile(b[:, 2], 90)), float(np.percentile(b[:, 3], 90)))
+
+    def _outside(self, view):
+        """The robust core region leaves the inner safe area of `view`."""
+        x0, y0, x1, y1 = self._region(1)
+        cx, cy, cw = view; ch = self.crop_h(cw)
+        mx, my = SAFE_IN * cw, SAFE_IN * ch
+        vx0, vx1 = max(0.0, cx - cw / 2) + mx, min(self.w, cx + cw / 2) - mx
+        vy0, vy1 = max(0.0, cy - ch / 2) + my, min(self.h, cy + ch / 2) - my
+        return x0 < vx0 or x1 > vx1 or y0 < vy0 or y1 > vy1
+
+    def _want(self):
+        x0, y0, x1, y1 = self._region(1); bw, bh = x1 - x0, y1 - y0
+        x0 -= 0.10 * bw + 0.03 * self.w; x1 += 0.10 * bw + 0.03 * self.w
+        y0 -= 0.30 * bh + 0.03 * self.h; y1 += 0.15 * bh + 0.03 * self.h
+        cw = max(x1 - x0, (y1 - y0) * PANEL_ASPECT)
+        fx0, _, fx1, _ = self._region(2)
+        fw = (fx1 - fx0) * 1.08 + 0.04 * self.w
+        fill = self.h * PANEL_ASPECT                                 # widest crop that still fills the panel height
+        if fw <= max(cw, fill):                                      # the feet too, when that costs no picture height
+            cw = max(cw, fw); x0, x1 = min(x0, fx0 - 0.02 * self.w), max(x1, fx1 + 0.02 * self.w)
+        cw = max(min(cw, max(self.w, (y1 - y0) * PANEL_ASPECT)), PANEL_W / S_MAX)   # wider than the source only for height
+        cx = (x0 + x1) / 2; ch = self.crop_h(cw)
+        cx = min(max(cx, cw / 2), self.w - cw / 2) if cw <= self.w else self.w / 2
+        cy = (y0 + y1) / 2
+        cy = min(max(cy, ch / 2), self.h - ch / 2)
+        return (cx, cy, cw)
+
+    def update(self, now):
+        """The view at `now` (eased toward the target)."""
+        if self.ease is None: self.view = self.target; return self.view
+        t0, a, b = self.ease; u = _smooth((now - t0) / EASE_S)
+        if u >= 1.0: self.ease = None; self.view = b; return b
+        self.view = (a[0] + u * (b[0] - a[0]), a[1] + u * (b[1] - a[1]), math.exp(math.log(a[2]) + u * (math.log(b[2]) - math.log(a[2]))))
+        return self.view
+
+    def matrix(self, view=None):
+        """(2x3 affine source px -> output px, the panel's bottom row) for `view`."""
+        cx, cy, cw = view or self.view; ch = self.crop_h(cw); s = PANEL_W / cw
+        ph = ch * s; panel = min(PANEL_MAX, max(PANEL_MIN, ph)); oy = VID_Y0 + (panel - ph) / 2
+        M = np.array([[s, 0.0, -s * (cx - cw / 2)], [0.0, s, oy - s * (cy - ch / 2)]], np.float64)
+        return M, int(round(VID_Y0 + panel))
+
+
 # ---------------------------------------------------------------------------------------------------- the renderer
 class PushupMirror:
-    """Stateful (smoothed crop, side choice, signal medians, depth-this-rep, status hysteresis): one per call, used
-    from one thread at a time."""
+    """Stateful (framing, side choice, signal medians, depth-this-rep, status hysteresis): one per call, used from one
+    thread at a time."""
 
     def __init__(self, mascot=True):
         """mascot: True = Brodie (facetime/mascot.py, his common expressions pre-composed here), False = none."""
@@ -236,25 +325,22 @@ class PushupMirror:
             from facetime.mascot import Mascot
             self.mascot = Mascot(MASCOT_H); self.idle_mascot = Mascot(IDLE_MASCOT_H)
             self.mascot.warm(); self.idle_mascot.warm(reactions=False)
-        self._idle = None; self._react_t = None; self._bg = None
-        self._topbar = self._make_topbar()
+        self._idle = None; self._react_t = None; self._paper = None; self._head = None; self.vid_y1 = VID_Y0 + PANEL_MAX
         self.thr = merged_thresholds(None)
         self.reset()
 
     def reset(self):
         self._last_lm = None; self._last_rgb = None; self._last_shape = None; self._last_seq = None
-        self._box = None; self._tgt = None; self._t_last = None
-        self._content = None; self._portrait = False
-        self.side = None; self._side_vis = None
+        self.framer = None
+        self.side = None; self._side_vis = None; self._side_view = False
         self._med = {k: _Med3() for k in ('elbow', 'knee', 'dev')}
         self.form = None; self.status_raw = None; self.status = StatusFilter()
         self.depth_hit = False; self._at_top = False; self.depth_frac = 0.0
-        self._draw_lm = None
+        self._draw_lm = None; self._draw_c = None; self._shown_cue_t = None
 
     # -- per new pose -------------------------------------------------------------------------------------------
     def _observe(self, rgb, lm, t):
         h, w = rgb.shape[:2]; aspect = w / h
-        self._content = content_box(rgb); self._portrait = is_portrait_strip(self._content)
         a = None
         if lm is not None:
             a = np.asarray(lm, dtype=float)
@@ -272,14 +358,15 @@ class PushupMirror:
                     for m in self._med.values(): m.clear()
                 self.side = best
             self.form = self._form(a, aspect)
+            self._side_view = side_view(a, aspect)
             xy = a[:, :2] * np.array([w, h])                       # drawing positions: light EMA (no jitter, little lag)
             if self._draw_lm is None or self._draw_lm.shape != xy.shape: self._draw_lm = xy
             else: self._draw_lm = self._draw_lm + 0.65 * (xy - self._draw_lm)
             self._draw_c = _conf(a)
-        self.status_raw = camera_status(a, aspect, self.thr, self.side, self._portrait)
+        self.status_raw = camera_status(a, aspect, self.thr, self.side)
         self.status.update(self.status_raw)
         self._update_depth()
-        self._target(a, w, h)
+        self.framer.add(a, t)
 
     def _form(self, a, aspect):
         t = self.thr; mc = float(t['min_conf'])
@@ -289,9 +376,10 @@ class PushupMirror:
         f = Form(side=self.side, good=bool(np.all(c >= mc)))
         arm_ok = bool(np.all(c[:3] >= mc))
         f.elbow = self._med['elbow'].add(angle_deg(sh, el, wr)) if arm_ok else None
-        if f.good:
-            f.knee = self._med['knee'].add(angle_deg(hp, kn, an))
-            f.dev = self._med['dev'].add(hip_line_dev_deg(sh, hp, an))
+        if bool(np.all(c[[0, 3, 4]] >= mc)):                        # body line + knee need shoulder, hip, knee (+ ankle)
+            if c[5] >= mc:
+                f.knee = self._med['knee'].add(angle_deg(hp, kn, an))
+                f.dev = self._med['dev'].add(hip_line_dev_deg(sh, hp, an))
         return f
 
     def _update_depth(self):
@@ -307,47 +395,11 @@ class PushupMirror:
         ref = max(top + 5.0, depth + 1.0)
         self.depth_frac = float(np.clip((ref - f.elbow) / (ref - depth), 0.0, 1.0))
 
-    def _target(self, a, w, h):
-        """The crop target (cx, cy, scale) in source pixels: the body box padded (head room, the floor) fitted in FIT."""
-        cx0, cy0, cx1, cy1 = self._content; cw, ch = cx1 - cx0, cy1 - cy0
-        fw, fh = FIT[2] - FIT[0], FIT[3] - FIT[1]
-        pts = None
-        if a is not None:
-            c = _conf(a); keep = c > 0.3
-            keep[17:23] = False                                   # finger points: noisy, the wrist covers them
-            if keep.sum() >= 6: pts = a[keep, :2] * np.array([w, h])
-        if pts is None:                                           # no pose: the whole picture, as large as fits the band
-            s = min(W / cw, (H - TOPBAR_H) / ch)
-            tgt = ((cx0 + cx1) / 2, (cy0 + cy1) / 2, s, True)
-        else:
-            x0, y0 = pts.min(axis=0); x1, y1 = pts.max(axis=0); bw, bh = x1 - x0, y1 - y0
-            x0 -= 0.07 * bw + 0.02 * cw; x1 += 0.07 * bw + 0.02 * cw
-            y0 -= 0.22 * bh + 0.04 * ch; y1 += 0.08 * bh + 0.03 * ch
-            bw, bh = max(x1 - x0, 0.3 * cw), max(y1 - y0, 0.3 * ch)
-            s = min(fw / bw, fh / bh, S_MAX)
-            tgt = ((x0 + x1) / 2, (y0 + y1) / 2, s, False)
-        if self._tgt is None or self._tgt[3] != tgt[3]:
-            self._tgt = tgt
-        else:                                                     # dead band: small changes keep the old target
-            ox, oy, os_, _ = self._tgt
-            size = (fw / os_)
-            if abs(tgt[0] - ox) > DEADBAND * size or abs(tgt[1] - oy) > DEADBAND * size or abs(math.log(tgt[2] / os_)) > DEADBAND:
-                self._tgt = tgt
-
-    def _smooth_box(self, now):
-        if self._tgt is None: return
-        if self._box is None or self._t_last is None:
-            self._box = list(self._tgt[:3])
-        else:
-            dt = max(0.0, min(1.0, now - self._t_last)); k = 1.0 - math.exp(-dt / BOX_TAU_S)
-            b = self._box; t = self._tgt
-            b[0] += k * (t[0] - b[0]); b[1] += k * (t[1] - b[1]); b[2] = math.exp(math.log(b[2]) + k * (math.log(t[2]) - math.log(b[2])))
-        self._t_last = now
-
     # -- render -------------------------------------------------------------------------------------------------
     def render(self, rgb, lm, thr=None, state=None, now=None, seq=None):
         """seq: the pose update's id (the pose runs slower than the render): the per-pose analysis (status, medians,
-        crop target) runs once per seq. None: once per new (rgb, landmarks) object pair."""
+        framing) runs once per seq. None: once per new (rgb, landmarks) object pair. rgb may be a newer frame of the
+        same size than the one the landmarks came from (the skeleton then lags it by a frame)."""
         now = time.monotonic() if now is None else now
         state = state if state is not None else MirrorState()
         self.thr = merged_thresholds(thr)
@@ -358,100 +410,140 @@ class PushupMirror:
             raise ValueError(f'expected an HxWx3 RGB frame, got shape {rgb.shape}')
         if seq is not None: fresh = seq != self._last_seq
         else: fresh = (rgb is not self._last_rgb) or (lm is not self._last_lm)
-        if rgb.shape != self._last_shape:                          # new resolution: the crop restarts
-            self._box = None; self._tgt = None; fresh = True
+        if rgb.shape != self._last_shape or self.framer is None:     # new picture size: the framing restarts
+            self.framer = Framer(rgb.shape[1], rgb.shape[0]); fresh = True; self._draw_lm = None
         if fresh:
             self._observe(rgb, lm, now)
             self._last_lm = lm; self._last_seq = seq
         self._last_rgb = rgb; self._last_shape = rgb.shape
-        self._smooth_box(now)
-        img = self._picture(rgb)
-        if self._draw_lm is not None and lm is not None: self._skeleton(img)
-        self._topbar_draw(img, state, now)
-        if not self._verdict(img, state, now): self._status_pill(img)
+        self.framer.update(now)
+        M, self.vid_y1 = self.framer.matrix()
+        img = self._base()
+        self._picture(img, rgb, M)
+        if self._draw_lm is not None and lm is not None: self._skeleton(img, M)
+        self._header(img, state, now)
+        self._count(img, state, now)
         self._mascot(img, state, now)
+        if not self._verdict(img, state, now): self._status_pill(img)
         self._caption(img, state, now)
         return img
 
-    def _map(self, x, y):
-        cx, cy, s = self._box
-        return (FIT[0] + FIT[2]) / 2 + s * (x - cx), (FIT[1] + FIT[3]) / 2 + s * (y - cy)
+    def _base(self):
+        """The static layers for this frame's panel height: paper everywhere, the ink header, the ink panel ground and
+        the ink rule under it."""
+        if self._paper is None: self._paper, self._head = self._make_paper(), self._make_header()
+        img = self._paper.copy(); y1 = self.vid_y1
+        img[:HEAD_H] = self._head; img[HEAD_H:y1] = INK; img[y1:y1 + 5] = INK
+        return img
 
-    def _picture(self, rgb):
-        """The canvas: the website's paper with a faint halftone, and the frame mapped by the smoothed box as a card
-        (ink border, hard shadow) in the band below the top bar."""
-        if self._bg is None: self._bg = self._make_bg()
-        img = self._bg.copy()
-        cx0, cy0, cx1, cy1 = self._content
-        cx, cy, s = self._box
-        ox = (FIT[0] + FIT[2]) / 2 - s * cx; oy = (FIT[1] + FIT[3]) / 2 - s * cy
-        sx0 = max(cx0, (0 - ox) / s); sx1 = min(cx1, (W - ox) / s)
-        sy0 = max(cy0, (TOPBAR_H - oy) / s); sy1 = min(cy1, (H - oy) / s)
-        if sx1 - sx0 < 2 or sy1 - sy0 < 2: return img
-        dx0 = max(0, int(round(ox + s * sx0))); dx1 = min(W, int(round(ox + s * sx1)))
-        dy0 = max(TOPBAR_H, int(round(oy + s * sy0))); dy1 = min(H, int(round(oy + s * sy1)))
-        if dx1 <= dx0 or dy1 <= dy0: return img
-        cv2.rectangle(img, (dx0 + 9, dy0 + 9), (min(W, dx1 + 9), min(H, dy1 + 9)), INK, -1)       # hard shadow
-        crop = rgb[int(sy0):int(math.ceil(sy1)), int(sx0):int(math.ceil(sx1))]
-        img[dy0:dy1, dx0:dx1] = cv2.resize(crop, (dx1 - dx0, dy1 - dy0), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_LINEAR)
-        cv2.rectangle(img, (dx0 - 2, dy0 - 2), (dx1 + 1, dy1 + 1), INK, 4)                         # ink border
+    def _picture(self, img, rgb, M):
+        """The framed video into the panel (ink where the picture does not reach), with the source -> output affine M."""
+        s = M[0, 0]; y1p = self.vid_y1; ph = y1p - VID_Y0
+        h, w = rgb.shape[:2]
+        # the source rows / columns the panel needs (+ a margin for the filter taps)
+        x0 = max(0, int(math.floor(-M[0, 2] / s)) - 3); x1 = min(w, int(math.ceil((PANEL_W - M[0, 2]) / s)) + 3)
+        y0 = max(0, int(math.floor((VID_Y0 - M[1, 2]) / s)) - 3); y1 = min(h, int(math.ceil((y1p - M[1, 2]) / s)) + 3)
+        if x1 - x0 < 2 or y1 - y0 < 2: return
+        src = rgb[y0:y1, x0:x1]
+        A = M.copy(); A[0, 2] += s * x0; A[1, 2] += s * y0 - VID_Y0       # roi px -> panel px
+        if s < 0.95:                                                  # downscale: area-average first, then place sub-pixel
+            nw, nh = max(2, int(round(src.shape[1] * s))), max(2, int(round(src.shape[0] * s)))
+            fx, fy = nw / src.shape[1], nh / src.shape[0]
+            src = cv2.resize(src, (nw, nh), interpolation=cv2.INTER_AREA)
+            A[0, 0] /= fx; A[1, 1] /= fy
+            flags = cv2.INTER_LINEAR
+        else:
+            if s > 1.25:                                              # mild unsharp mask on the small source crop
+                blur = cv2.GaussianBlur(src, (0, 0), 1.0)
+                src = cv2.addWeighted(src, 1.6, blur, -0.6, 0)
+            flags = cv2.INTER_CUBIC
+        panel = img[VID_Y0:y1p]
+        cv2.warpAffine(src, A, (PANEL_W, ph), dst=panel, flags=flags, borderMode=cv2.BORDER_TRANSPARENT)
+
+    @staticmethod
+    def _make_paper():
+        """The score zone's paper (the site's .stage: pink and blue ink bleeds, a faint halftone), full canvas size."""
+        top = VID_Y0 + PANEL_MIN
+        img = np.empty((H, W, 3), np.uint8); img[:] = CANVAS
+        z = np.empty((H - top, W, 3), np.float32); z[:] = CANVAS
+        yy, xx = np.mgrid[0:H - top, 0:W].astype(np.float32)
+        def bleed(cx, cy, rx, ry, col, k):
+            d = np.sqrt(((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2)
+            a = (np.clip(1 - d / 0.62, 0, 1) * k)[..., None]
+            return a, np.array(col, np.float32)
+        for cx, cy, rx, ry, col, k in ((W * 1.08, -40, 760, 520, PINK, 0.16), (-0.12 * W, 300, 640, 460, BLUE, 0.09)):
+            a, c = bleed(cx, cy, rx, ry, col, k); z = z * (1 - a) + c * a
+        dots = np.zeros((H - top, W), np.uint8)
+        for y in range(5, H - top, 10):
+            for x in range(((y // 10) % 2) * 5, W, 10): cv2.circle(dots, (x, y), 1, 255, -1, AA)
+        d = dots[..., None].astype(np.float32) / 255.0 * 0.07
+        z = z * (1 - d) + np.array(INK, np.float32) * d
+        img[top:] = np.clip(z, 0, 255).astype(np.uint8)
         return img
 
     @staticmethod
-    def _make_bg():
-        img = np.empty((H, W, 3), np.uint8); img[:] = CANVAS
-        dots = np.zeros((H, W), np.uint8)
-        for y in range(TOPBAR_H + 7, H, 16):
-            for x in range(((y // 16) % 2) * 8, W, 16): cv2.circle(dots, (x, y), 2, 255, -1, AA)
-        d = dots[..., None].astype(np.float32) / 255.0 * 0.10
-        return (img * (1 - d) + np.array(INK, np.float32) * d).astype(np.uint8)
+    def _make_header():
+        img = np.empty((HEAD_H, W, 3), np.uint8); img[:] = INK
+        rgb, a = brand.text('BRODIE', 58, CANVAS)
+        brand.blit(img, rgb, a, SAFE_X - 2, HEAD_H - 22 - a.shape[0] - 18)
+        rgb, a = brand.text('PUSH-UP CHALLENGE', 13, PINK, face='mono')
+        brand.blit(img, rgb, a, SAFE_X, HEAD_H - 22 - a.shape[0] + 2)
+        cv2.rectangle(img, (0, HEAD_H - 4), (W, HEAD_H), PINK, -1)
+        return img
 
     # -- skeleton -----------------------------------------------------------------------------------------------
     def _colors(self):
         """(body colour, legs colour, arm colour, hip label, knee label) from the judge thresholds."""
         f = self.form; t = self.thr
         body = legs = arm = WHITE; hip_lab = knee_lab = None
-        if f is None or self.status.shown != ST_GOOD:              # no form colours until the camera angle is right:
-            return body, legs, arm, hip_lab, knee_lab              # from the front the 2-D angles mean nothing
-        if f.dev is not None:
-            if f.dev > float(t['hip_line_max_dev_deg']): body = BAD; hip_lab = 'HIPS SAGGING'
-            elif f.dev < -float(t['hip_pike_max_dev_deg']): body = BAD; hip_lab = 'HIPS TOO HIGH'
-            else: body = GOOD
-        if f.knee is not None:
-            if f.knee < float(t['knee_min_deg']): legs = BAD; knee_lab = 'LEGS STRAIGHT'
-            else: legs = GOOD
+        if f is None or self.status.shown != ST_GOOD:              # no form colours until the camera angle is right
+            return body, legs, arm, hip_lab, knee_lab
+        if self._side_view:                                        # body line and knee: only meaningful from the side
+            if f.dev is not None:
+                if f.dev > float(t['hip_line_max_dev_deg']): body = BAD; hip_lab = 'HIPS SAGGING'
+                elif f.dev < -float(t['hip_pike_max_dev_deg']): body = BAD; hip_lab = 'HIPS TOO HIGH'
+                else: body = GOOD
+            if f.knee is not None:
+                if f.knee < float(t['knee_min_deg']): legs = BAD; knee_lab = 'LEGS STRAIGHT'
+                else: legs = GOOD
         if f.elbow is not None:
             if f.elbow >= float(t['lockout_min_deg']) or f.elbow <= float(t['depth_elbow_max_deg']): arm = GOOD
         return body, legs, arm, hip_lab, knee_lab
 
-    def _skeleton(self, img):
-        P = [tuple(int(round(v)) for v in self._map(x, y)) for x, y in self._draw_lm]
+    def _skeleton(self, img, M):
+        S = 4                                                      # sub-pixel drawing (shift = 2 bits)
+        xy = self._draw_lm @ M[:, :2].T + M[:, 2]
+        P = [(int(round(x * S)), int(round(y * S))) for x, y in xy]
+        Pi = [(int(round(x)), int(round(y))) for x, y in xy]
         c = self._draw_c; mc = float(self.thr['min_conf'])
         side = self.side or 'left'; other = 'right' if side == 'left' else 'left'
         sh, el, wr, hp, kn, an = SIDES[side]
         osh, oel, owr, ohp, okn, oan = SIDES[other]
         ok = lambda *ix: all(c[i] >= 0.35 for i in ix)
+        clip = img[VID_Y0:self.vid_y1]                             # the skeleton stays on the video
+        off = VID_Y0 * S
+        Q = [(x, y - off) for x, y in P]
         for a, b in ((osh, oel), (oel, owr), (osh, ohp), (ohp, okn), (okn, oan)):     # the far side: thin and faint
-            if ok(a, b): cv2.line(img, P[a], P[b], FAINT, 3, AA)
+            if ok(a, b): cv2.line(clip, Q[a], Q[b], FAINT, 3, AA, 2)
         body, legs, arm, hip_lab, knee_lab = self._colors()
         if hip_lab and ok(sh, an):                                # where the hips should be: the shoulder-ankle line
-            self._dashed(img, P[sh], P[an], WHITE)
+            self._dashed(clip, (Pi[sh][0], Pi[sh][1] - VID_Y0), (Pi[an][0], Pi[an][1] - VID_Y0), WHITE)
         thigh = BAD if BAD in (body, legs) else (GOOD if GOOD in (body, legs) else WHITE)
         bones = [(sh, hp, body), (hp, kn, thigh), (kn, an, legs), (sh, el, arm), (el, wr, arm)]
         ear = 7 if side == 'left' else 8; toe = 31 if side == 'left' else 32
         if ok(ear, sh): bones.insert(0, (ear, sh, WHITE))
         if ok(an, toe): bones.append((an, toe, legs))
         for a, b, col in bones:
-            if ok(a, b): cv2.line(img, P[a], P[b], INK, 18, AA)
+            if ok(a, b): cv2.line(clip, Q[a], Q[b], INK, 16, AA, 2)
         for a, b, col in bones:
-            if ok(a, b): cv2.line(img, P[a], P[b], col, 11, AA)
+            if ok(a, b): cv2.line(clip, Q[a], Q[b], col, 9, AA, 2)
         if self.form is not None and self.form.elbow is not None and ok(sh, el, wr):
-            self._elbow_arc(img, P[sh], P[el], P[wr], arm)
+            self._elbow_arc(img, Pi[sh], Pi[el], Pi[wr], arm)
         for i in (sh, el, wr, hp, kn, an):
             if c[i] >= 0.35:
-                cv2.circle(img, P[i], 11, INK, -1, AA); cv2.circle(img, P[i], 7, CANVAS, -1, AA)
-        if hip_lab and c[hp] >= mc: self._label(img, hip_lab, P[hp], below=(hip_lab == 'HIPS SAGGING'))
-        if knee_lab and c[kn] >= mc and not hip_lab: self._label(img, knee_lab, P[kn], below=True)
+                cv2.circle(clip, Q[i], 10 * S, INK, -1, AA, 2); cv2.circle(clip, Q[i], 6 * S, CANVAS, -1, AA, 2)
+        if hip_lab and c[hp] >= mc: self._label(img, hip_lab, Pi[hp], below=(hip_lab == 'HIPS SAGGING'))
+        if knee_lab and c[kn] >= mc and not hip_lab: self._label(img, knee_lab, Pi[kn], below=True)
 
     @staticmethod
     def _dashed(img, p, q, color, dash=18, gap=12):
@@ -464,9 +556,10 @@ class PushupMirror:
             d += dash + gap
 
     def _elbow_arc(self, img, s, e, w, col):
-        """The elbow-depth indicator: a translucent wedge between upper arm and forearm with the angle in degrees; a
-        green tick chip once depth was reached on this rep."""
-        r = 42
+        """The elbow-depth indicator: a translucent wedge between upper arm and forearm (green at lockout or depth); a
+        DEEP tick chip once depth was reached on this rep."""
+        r = 40
+        if not (VID_Y0 + r < e[1] < self.vid_y1 - r): return
         a1 = math.degrees(math.atan2(s[1] - e[1], s[0] - e[0])); a2 = math.degrees(math.atan2(w[1] - e[1], w[0] - e[0]))
         d = (a2 - a1 + 540) % 360 - 180
         x0, y0, n = e[0] - r - 2, e[1] - r - 2, 2 * r + 4
@@ -474,91 +567,104 @@ class PushupMirror:
         if cy1 <= cy0 or cx1 <= cx0: return
         roi = img[cy0:cy1, cx0:cx1]; over = roi.copy()
         cv2.ellipse(over, (e[0] - cx0, e[1] - cy0), (r, r), 0, a1, a1 + d, col, -1, AA)
-        cv2.addWeighted(over, 0.5, roi, 0.5, 0.0, dst=roi)
+        cv2.addWeighted(over, 0.45, roi, 0.55, 0.0, dst=roi)
         cv2.ellipse(img, e, (r, r), 0, a1, a1 + d, INK, 6, AA); cv2.ellipse(img, e, (r, r), 0, a1, a1 + d, col, 3, AA)
-        mid = math.radians(a1 + d / 2 + 180)                    # the number sits opposite the wedge
-        rgb, a = brand.pill(((f'{int(round(self.form.elbow))}\N{DEGREE SIGN}', 24, INK),), GOOD if self.depth_hit else CANVAS,
-                            icon='check' if self.depth_hit else None, pad=(12, 5), border=2, shadow=3)
+        if not self.depth_hit: return
+        mid = math.radians(a1 + d / 2 + 180)                    # depth reached this rep: a DEEP tick chip opposite the wedge
+        rgb, a = brand.pill((('DEEP', 22, INK),), GOOD, icon='check', radius=4, pad=(10, 4), border=2, shadow=3)
         h, w_ = a.shape[:2]
-        tx = int(e[0] + math.cos(mid) * (r + 34) - w_ / 2); ty = int(e[1] + math.sin(mid) * (r + 30) - h / 2)
-        tx = int(np.clip(tx, SAFE_X, W - SAFE_X - w_)); ty = int(np.clip(ty, TOPBAR_H + 4, H - h))
+        tx = int(e[0] + math.cos(mid) * (r + 30) - w_ / 2); ty = int(e[1] + math.sin(mid) * (r + 26) - h / 2)
+        tx = int(np.clip(tx, SAFE_X, W - SAFE_X - w_)); ty = int(np.clip(ty, VID_Y0 + 4, self.vid_y1 - h - 4))
         brand.blit(img, rgb, a, tx, ty)
 
     def _label(self, img, s, at, below):
-        rgb, a = brand.pill(((s, 26, WHITE),), BAD, icon='bang', pad=(14, 6), border=3, shadow=4)
+        rgb, a = brand.pill(((s, 26, WHITE),), SITE_BAD, radius=4, pad=(12, 5), border=3, shadow=4)
         h, w_ = a.shape[:2]
         x0 = int(np.clip(at[0] - w_ / 2, SAFE_X, W - SAFE_X - w_))
         y0 = at[1] + 30 if below else at[1] - 30 - h
-        y0 = int(np.clip(y0, TOPBAR_H + 100, MASCOT_FEET - h))
+        y0 = int(np.clip(y0, PILL_Y + 80, self.vid_y1 - h - 8))
         brand.blit(img, rgb, a, x0, y0)
 
     # -- chrome ---------------------------------------------------------------------------------------------------
-    @staticmethod
-    def _make_topbar():
-        bar = np.empty((TOPBAR_H, W, 3), np.uint8); bar[:] = CANVAS
-        cv2.rectangle(bar, (0, TOPBAR_H - 5), (W, TOPBAR_H), INK, -1)
-        rgb, a = brand.text('BRODIE', 62, INK)
-        brand.blit(bar, rgb, a, SAFE_X, SAFE_TOP + 4)
-        return bar
-
-    def _topbar_draw(self, img, state, now):
-        img[:TOPBAR_H] = self._topbar
+    def _header(self, img, state, now):
+        """The header's right side: the timer ticket (yellow; red in the last 10 s) or the site's LIVE chip."""
         if state.time_left_s is not None:
             sl = max(0, int(math.ceil(state.time_left_s)))
-            chip = brand.pill(((f'{sl // 60}:{sl % 60:02d} LEFT', 26, INK),), BAD if sl <= 10 else YELLOW, pad=(14, 5), border=3, shadow=3)
+            chip = brand.pill(((f'{sl // 60}:{sl % 60:02d}', 40, INK), ('LEFT', 12, INK, 'mono')), SITE_BAD if sl <= 10 else YELLOW,
+                              radius=4, pad=(14, 6), border=3, shadow=0, gap=4, align='center')
+            chip = brand.transform(*chip, 1.0, 2.0)
         else:
-            chip = brand.pill(((state.title or 'PUSH-UP CHALLENGE', 24, CANVAS),), INK, pad=(12, 5), border=2, shadow=0, radius=3)
-        brand.blit(img, *chip, SAFE_X + 2, TOPBAR_H - chip[1].shape[0] - 8)   # clear of the bar's bottom border
-        # the count card, right: yellow; green and popping right after a good rep
+            chip = brand.pill((('LIVE', 20, INK, 'mono'),), CANVAS, icon='dot', icon_fill=LIVE, icon_px=18, radius=2,
+                              pad=(14, 9), border=3, shadow=0)
+        h, w_ = chip[1].shape[:2]
+        brand.blit(img, *chip, W - SAFE_X - w_ + 4, HEAD_H - 20 - h)
+
+    def _count(self, img, state, now):
+        """The valid-rep count: the site's overprint numerals (pink, blue misregistration) under a mono eyebrow; a
+        valid rep pops it and stamps a +1."""
+        cy = self.vid_y1 + 24
+        rgb, a = brand.text('VALID REPS', 15, INK2, face='mono')
+        brand.blit(img, rgb, a, COUNT_X + 4, cy)
         since = now - state.verdict_t
-        pop = state.verdict_ok is True and 0 <= since < 0.8
-        rgb, a = brand.pill((('VALID REPS', 20, INK), (str(state.count), 64, INK)), GOOD if pop else YELLOW, radius=6,
-                            pad=(18, 6), border=4, shadow=6, min_w=150, align='center', gap=6)
+        pop = state.verdict_ok is True and 0 <= since < 0.6
+        px = int(min(COUNT_PX[1], max(COUNT_PX[0], (MASCOT_FEET - cy - 36) / 0.9)) // 10 * 10)
+        while px > COUNT_PX[0] and brand.text_size(str(state.count), px)[0] > COUNT_MAX_W: px -= 10
+        rgb, a = brand.text(str(state.count), px, PINK, offset=(px / 24, px / 28), offset_color=BLUE)
+        y = cy + 26
         if pop:
-            k = max(0.0, 1 - since / 0.3)
-            rgb, a = brand.transform(rgb, a, 1.0 + 0.16 * k, -4 * k)
-        h, w_ = a.shape[:2]
-        brand.blit(img, rgb, a, W - SAFE_X - 156 + (156 - w_) // 2, SAFE_TOP - 4 + (112 - h) // 2)
+            k = _smooth(1 - since / 0.6)
+            rgb, a = brand.transform(rgb, a, 1.0 + 0.14 * k, 0.0)
+            y -= int(0.07 * k * a.shape[0])
+        brand.blit(img, rgb, a, COUNT_X, y)
+        if pop:
+            plus = brand.pill((('+1', 34, INK),), YELLOW, radius=4, pad=(10, 2), border=3, shadow=4)
+            plus = brand.transform(*plus, 1.0, -6.0)
+            brand.blit(img, *plus, COUNT_X + a.shape[1] + 8, y + 10 - int(20 * min(1.0, since / 0.6)), opacity=min(1.0, (0.6 - since) / 0.2))
 
     def _status_pill(self, img):
         st = self.status.shown or ST_NONE
         title, sub = STATUS_TEXT[st]; good = st == ST_GOOD
-        lines = ((title, 34, INK),) + (((sub, 22, INK),) if sub else ())
-        rgb, a = brand.pill(lines, GOOD if good else YELLOW, icon='check' if good else 'bang', pad=(20, 9), gap=2)
-        brand.blit(img, rgb, a, (W - a.shape[1]) // 2, PILL_Y)
+        lines = ((title, 30, INK),) + (((sub, 12, INK2, 'mono'),) if sub else ())
+        rgb, a = brand.pill(lines, SURFACE if good else YELLOW, icon='dot', icon_fill=GOOD if good else (LIVE if st == ST_NONE else YELLOW),
+                            icon_px=16, radius=4, pad=(14, 8), border=3, shadow=5, gap=5)
+        brand.blit(img, rgb, a, PILL_X, PILL_Y)
 
     def _verdict(self, img, state, now):
         since = now - state.verdict_t
         if state.verdict_ok is None or not (0 <= since < FLASH_S): return False
         head, detail = verdict_lines(state.verdict_ok, state.verdict_reasons)
         good = state.verdict_ok
-        lines = ((head, 52, WHITE),) + (((detail, 28, WHITE),) if detail else ())
-        rgb, a = brand.pill(lines, GOOD if good else BAD, icon='check' if good else 'cross', radius=8, pad=(22, 10), border=4, shadow=7, gap=6)
-        u = min(1.0, since / STAMP_S)                             # the website's stamp: 1.6 -> 0.96 -> 1
+        lines = ((head, 54, WHITE),) + (((detail, 15, WHITE, 'mono'),) if detail else ())
+        rgb, a = brand.pill(lines, SITE_GOOD if good else SITE_BAD, radius=4, pad=(22, 10), border=4, shadow=7, gap=8, align='center')
+        u = min(1.0, since / STAMP_S)                             # the site's stamp: 1.6 -> 0.96 -> 1, rotated
         scale = 1.6 - 0.64 * (u / 0.7) if u < 0.7 else 0.96 + 0.04 * ((u - 0.7) / 0.3)
-        rgb, a = brand.transform(rgb, a, scale, 4.0 if good else -3.0)
+        rgb, a = brand.transform(rgb, a, scale, 6.0 if good else -6.0)
         op = min(1.0, (FLASH_S - since) / FADE_S) * min(1.0, since / 0.08 + 0.2)
         h, w_ = a.shape[:2]
-        brand.blit(img, rgb, a, (W - w_) // 2, FLASH_Y - h // 2, opacity=op)
+        brand.blit(img, rgb, a, (W - w_) // 2, PILL_Y + 40 - h // 2 + 16, opacity=op)
         return True
 
     def _caption(self, img, state, now):
-        """The current cue as Brodie's speech bubble, left of him."""
-        if not state.cue or not (state.speaking or 0 <= now - state.cue_t <= CUE_SHOW_S): return
-        maxw = MASCOT_CX - 70 - SAFE_X
+        """The current cue as Brodie's speech bubble above him (over the bottom of the video), its tail at his head;
+        only while he talks (at least CUE_MIN_S)."""
+        if not state.cue or not (state.speaking or 0 <= now - state.cue_t <= CUE_MIN_S): return
+        maxw = W - 2 * SAFE_X + 12
         lines = brand.wrap(str(state.cue).upper(), 30, maxw - 44)
         if len(lines) > 3: lines = lines[:3]; lines[2] = lines[2] + '...'
-        rgb, a = brand.bubble(tuple(lines), 30, maxw)
+        rgb, a = brand.bubble(tuple(lines), 30, maxw, tail='down', radius=4, tail_at=0.8)
         h, w_ = a.shape[:2]
-        x1 = MASCOT_CX - 62; y_tail = MASCOT_FEET - int(MASCOT_H * 0.72)
-        brand.blit(img, rgb, a, max(SAFE_X - 10, x1 - w_), y_tail - int((h - 8) * 0.62))
+        x = min(W - SAFE_X - w_ + 12, MASCOT_CX - int(0.8 * w_))
+        brand.blit(img, rgb, a, max(SAFE_X - 6, x), self._mascot_feet() - MASCOT_H - h + 2)
 
     def _mascot(self, img, state, now):
         if self.mascot is None: return
         if state.verdict_t != self._react_t and state.verdict_ok is not None:
             self._react_t = state.verdict_t
             self.mascot.react('good' if state.verdict_ok else 'bad', state.verdict_t)
-        self.mascot.draw(img, MASCOT_CX, MASCOT_FEET, now, speaking=state.speaking)
+        self.mascot.draw(img, MASCOT_CX, self._mascot_feet(), now, speaking=state.speaking)
+
+    def _mascot_feet(self):
+        return min(MASCOT_FEET, self.vid_y1 + MASCOT_H - MASCOT_POP)
 
     # -- idle card ------------------------------------------------------------------------------------------------
     def idle_card(self, now, state=None):
@@ -577,7 +683,7 @@ class PushupMirror:
             self.idle_mascot.draw(img, W // 2, IDLE_FEET, now, speaking=speaking)
         rgb, a = brand.bubble(('STRICT REPS', 'ONLY, BRO.'), 34, 260, tail='none')
         brand.blit(img, *brand.transform(rgb, a, 1.0, 3.0), SAFE_X - 4, IDLE_BAND_Y1 + 26)
-        rgb, a = brand.pill((('PHONE SIDEWAYS. HEAD TO FEET IN FRAME.', 26, INK),), CANVAS, radius=6, pad=(18, 10))
+        rgb, a = brand.pill((('PROP YOUR PHONE. HANDS TO KNEES IN VIEW.', 26, INK),), CANVAS, radius=4, pad=(18, 10))
         brand.blit(img, rgb, a, (W - a.shape[1]) // 2, IDLE_FEET + 26)
         return img
 

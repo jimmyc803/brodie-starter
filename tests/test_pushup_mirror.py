@@ -3,8 +3,8 @@ import pytest
 
 from challenge.judge.gates import DEFAULT_THRESHOLDS
 from facetime import pushup_mirror as pmod
-from facetime.pushup_mirror import (GOOD, BAD, MirrorState, PushupMirror, StatusFilter, ST_BACK, ST_GOOD, ST_NONE, ST_PHONE,
-                                    ST_PLANK, ST_SIDE, camera_status, content_box, is_portrait_strip, verdict_lines)
+from facetime.pushup_mirror import (GOOD, BAD, Framer, MirrorState, PushupMirror, StatusFilter, ST_BACK, ST_GOOD, ST_NONE,
+                                    ST_PLANK, STATUS_TEXT, camera_status, verdict_lines)
 
 ASPECT = 16 / 9
 
@@ -23,9 +23,23 @@ def plank(hip_y=0.53, ankle_vis=0.95, right_vis=0.3):
 
 
 def frontal():
-    """Plank seen from the head: shoulders wide, the torso foreshortened."""
-    lm = plank(right_vis=0.9)
-    lm[11, :2] = (0.40, 0.40); lm[12, :2] = (0.60, 0.40); lm[23, :2] = (0.46, 0.50); lm[24, :2] = (0.54, 0.50)
+    """Plank seen from in front of the head (the phone on the floor ahead): shoulders wide, the torso foreshortened,
+    the hands under the shoulders, the knees just visible behind the hips."""
+    lm = np.zeros((33, 5), np.float32); lm[:, 3] = 0.9; lm[:, 4] = 0.99; lm[:, :2] = (0.5, 0.5)
+    pts = {0: (0.50, 0.36), 7: (0.47, 0.35), 8: (0.53, 0.35), 11: (0.40, 0.45), 12: (0.60, 0.45), 13: (0.37, 0.58), 14: (0.63, 0.58),
+           15: (0.38, 0.72), 16: (0.62, 0.72), 23: (0.46, 0.53), 24: (0.54, 0.53), 25: (0.47, 0.57), 26: (0.53, 0.57),
+           27: (0.48, 0.60), 28: (0.52, 0.60)}
+    for i, xy in pts.items(): lm[i, :2] = xy
+    lm[27:33, 3] = 0.2                                            # feet hidden behind the body
+    return lm
+
+
+def diagonal_high():
+    """Plank from a higher camera off the head-side diagonal: the body runs ~35 deg down the picture."""
+    lm = plank(right_vis=0.4)
+    for i, (x, y) in {0: (0.28, 0.30), 7: (0.30, 0.30), 11: (0.34, 0.36), 13: (0.33, 0.48), 15: (0.33, 0.60), 23: (0.52, 0.52),
+                      25: (0.63, 0.60), 27: (0.74, 0.68), 31: (0.76, 0.70)}.items():
+        lm[i, :2] = (x, y)
     return lm
 
 
@@ -33,16 +47,21 @@ def test_status_good_plank_side_view():
     assert camera_status(plank(), ASPECT) == ST_GOOD
 
 
-def test_status_frontal_is_turn_sideways():
-    assert camera_status(frontal(), ASPECT) == ST_SIDE
+def test_status_good_from_the_front_and_from_a_higher_diagonal():
+    assert camera_status(frontal(), ASPECT) == ST_GOOD
+    assert camera_status(diagonal_high(), ASPECT) == ST_GOOD
 
 
-def test_status_missing_ankles_is_step_back():
-    assert camera_status(plank(ankle_vis=0.1), ASPECT) == ST_BACK
+def test_status_feet_out_of_frame_is_still_good():
+    assert camera_status(plank(ankle_vis=0.1), ASPECT) == ST_GOOD
+    lm = plank(); lm[27, 0] = 1.04; lm[31, 0] = 1.06              # the judge's conf is 0 outside the image
+    assert camera_status(lm, ASPECT) == ST_GOOD
 
 
-def test_status_out_of_frame_ankle_is_step_back():
-    lm = plank(); lm[27, 0] = 1.04                                # the judge's conf is 0 outside the image
+def test_status_needs_hands_to_knees():
+    lm = plank(); lm[25, 3] = 0.1                                 # the knee hidden
+    assert camera_status(lm, ASPECT) == ST_BACK
+    lm = plank(); lm[15, 1] = -0.02                               # the wrist out of the picture
     assert camera_status(lm, ASPECT) == ST_BACK
 
 
@@ -53,26 +72,18 @@ def test_status_standing_is_get_in_plank():
     assert camera_status(lm, ASPECT) == ST_PLANK
 
 
-def test_status_no_pose_and_pillarbox():
+def test_status_standing_from_the_front_is_not_a_plank():
+    lm = frontal()
+    for i, (x, y) in {11: (0.455, 0.30), 12: (0.545, 0.30), 23: (0.47, 0.55), 24: (0.53, 0.55), 13: (0.45, 0.42), 14: (0.55, 0.42),
+                      15: (0.45, 0.54), 16: (0.55, 0.54), 25: (0.47, 0.72), 26: (0.53, 0.72)}.items():
+        lm[i, :2] = (x, y)
+    assert camera_status(lm, ASPECT) == ST_PLANK
+
+
+def test_status_no_pose_and_no_phone_nagging():
     assert camera_status(None, ASPECT) == ST_NONE
-    assert camera_status(None, ASPECT, portrait=True) == ST_PHONE
-    assert camera_status(plank(ankle_vis=0.1), ASPECT, portrait=True) == ST_PHONE
-    assert camera_status(plank(), ASPECT, portrait=True) == ST_GOOD      # whole body in a plank: the strip is not the problem
-
-
-def test_pillarboxed_frame_is_a_portrait_strip():
-    rgb = np.zeros((720, 1280, 3), np.uint8); rgb[:, 438:842] = 120
-    box = content_box(rgb)
-    assert abs(box[0] - 438) <= 4 and abs(box[2] - 842) <= 4 and box[1] == 0 and box[3] == 720
-    assert is_portrait_strip(box)
-    assert not is_portrait_strip(content_box(np.full((720, 1280, 3), 90, np.uint8)))
-
-
-def test_renderer_phone_sideways_on_pillarboxed_bridge_frame():
-    pm = PushupMirror(mascot=False)
-    rgb = np.zeros((720, 1280, 3), np.uint8); rgb[:, 438:842] = 120
-    img = pm.render(rgb, None, None, MirrorState(), now=0.0)
-    assert pm.status.shown == ST_PHONE and img.shape == (1280, 720, 3)
+    texts = ' '.join(t for pair in STATUS_TEXT.values() for t in pair if t)
+    assert 'SIDEWAYS' not in texts and 'LANDSCAPE' not in texts
 
 
 def test_status_filter_hysteresis():
@@ -80,9 +91,9 @@ def test_status_filter_hysteresis():
     assert f.update(ST_BACK) == ST_BACK                           # the first status shows at once
     assert f.update(ST_GOOD) == ST_BACK and f.update(ST_GOOD) == ST_BACK and f.update(ST_GOOD) == ST_BACK
     assert f.update(ST_GOOD) == ST_GOOD                           # four in a row for green
-    assert f.update(ST_SIDE) == ST_GOOD and f.update(ST_GOOD) == ST_GOOD   # a one-frame blip does not switch
-    for _ in range(2): assert f.update(ST_SIDE) == ST_GOOD
-    assert f.update(ST_SIDE) == ST_SIDE
+    assert f.update(ST_PLANK) == ST_GOOD and f.update(ST_GOOD) == ST_GOOD   # a one-frame blip does not switch
+    for _ in range(2): assert f.update(ST_PLANK) == ST_GOOD
+    assert f.update(ST_PLANK) == ST_PLANK
 
 
 def _feed(pm, lm, n=5, t0=0.0):
@@ -115,9 +126,16 @@ def test_colours_follow_the_live_thresholds():
 
 def test_no_form_colours_until_the_camera_angle_is_good():
     pm = PushupMirror(mascot=False)
-    lm = frontal(); lm[23, 1] = 0.7
+    lm = plank(); lm[25, 3] = 0.1                                 # no knee: SHOW HANDS TO KNEES
     _feed(pm, lm)
-    assert pm.status.shown == ST_SIDE and pm._colors()[3] is None
+    assert pm.status.shown == ST_BACK and pm._colors() == (pmod.WHITE,) * 3 + (None, None)
+
+
+def test_front_view_is_good_but_draws_no_body_line_verdict():
+    pm = PushupMirror(mascot=False)
+    _feed(pm, frontal())
+    body, legs, arm, hip_lab, knee_lab = pm._colors()
+    assert pm.status.shown == ST_GOOD and body == pmod.WHITE and hip_lab is None   # 2-D hip angles mean nothing from the front
 
 
 def test_depth_latch_per_rep():
@@ -179,3 +197,98 @@ def test_portrait_frame_and_resolution_change():
     pm = PushupMirror(mascot=False)
     assert pm.render(np.full((1280, 720, 3), 80, np.uint8), None, now=0.0).shape == (1280, 720, 3)
     assert pm.render(np.full((480, 640, 3), 80, np.uint8), plank(), now=0.1).shape == (1280, 720, 3)
+
+
+# ---------------------------------------------------------------------------------------------------- the stable camera
+SRC = (274, 486, 3)                                               # the live bridge's caller picture (content crop)
+
+
+def _run_camera(pm, lm_at, t0, t1, fps=15, pose_every=1.5):
+    """Render frames t0..t1 at fps; a new pose (lm_at(t)) every pose_every-th frame like the 10 fps feed. Returns
+    [(t, view)]."""
+    rgb = np.full(SRC, 110, np.uint8); out = []; k = 0
+    n = int(round((t1 - t0) * fps))
+    for i in range(n):
+        t = t0 + i / fps
+        if i % pose_every < 1: k += 1; lm = lm_at(t)
+        pm.render(rgb, lm, DEFAULT_THRESHOLDS, MirrorState(), now=t, seq=k + int(t0 * 1000))
+        out.append((t, pm.framer.view))
+    return out
+
+
+def _spread(views):
+    v = np.array([x for _, x in views])
+    return float(np.ptp(v[:, 0])), float(np.ptp(v[:, 1])), float(np.ptp(np.log(v[:, 2])))
+
+
+def test_jittery_landmarks_do_not_move_the_camera():
+    rng = np.random.default_rng(3)
+    def lm_at(t):
+        lm = plank(); lm[:, :2] += rng.normal(0, 0.012, (33, 2)).astype(np.float32); return lm
+    pm = PushupMirror(mascot=False)
+    views = _run_camera(pm, lm_at, 0.0, 12.0)
+    first = views[0][1]
+    assert first == (SRC[1] / 2, SRC[0] / 2, float(SRC[1]))       # before any pose: the whole picture
+    settled = [(t, v) for t, v in views if t >= 3.0]
+    dx, dy, dz = _spread(settled)
+    assert dx < 0.5 and dy < 0.5 and dz < 0.002                   # still (the old EMA crop moved on 244 of 250 frames)
+    assert settled[0][1][2] < SRC[1] * 0.95                           # and it did frame the person (not the whole picture)
+
+
+def test_no_zoom_pulse_across_reps():
+    def lm_at(t):                                                 # push-ups: the upper body drops 0.10 and comes back, 1.6 s a rep
+        lm = plank(); d = 0.10 * (0.5 - 0.5 * np.cos(2 * np.pi * t / 1.6))
+        for i in (0, 7, 8, 11, 12, 13, 14): lm[i, 1] += d
+        lm[23, 1] += d / 2; lm[24, 1] += d / 2
+        return lm
+    pm = PushupMirror(mascot=False)
+    views = _run_camera(pm, lm_at, 0.0, 15.0)
+    dx, dy, dz = _spread([(t, v) for t, v in views if t >= 4.0])
+    assert dx < 0.5 and dy < 0.5 and dz < 0.002
+
+
+def test_no_pose_holds_the_framing():
+    pm = PushupMirror(mascot=False)
+    views = _run_camera(pm, lambda t: plank(), 0.0, 4.0)
+    held = views[-1][1]
+    later = _run_camera(pm, lambda t: None, 4.0, 10.0)
+    assert all(v == held for _, v in later)                       # never snaps to the full picture and back
+    assert held[2] < SRC[1] * 0.95
+
+
+def test_camera_follows_a_person_who_moves_away_with_an_eased_move():
+    pm = PushupMirror(mascot=False)
+    _run_camera(pm, lambda t: plank(), 0.0, 4.0)
+    before = pm.framer.view
+    def moved(t):
+        lm = plank(); lm[:, 0] -= 0.22; return lm                 # crawled toward the left edge
+    views = _run_camera(pm, moved, 4.0, 10.0)
+    after = views[-1][1]
+    assert after[0] < before[0] - 20                              # the camera followed
+    xs = [v[0] for _, v in views]
+    steps = np.diff(xs)
+    assert np.all(steps <= 1e-9)                                  # one monotonic move, no overshoot or wobble
+    assert np.max(np.abs(steps)) < 0.25 * abs(after[0] - before[0])   # eased over many frames, not a cut
+    t_moving = [t for (t, v), s in zip(views[1:], steps) if s < -1e-9]
+    assert t_moving[-1] - t_moving[0] <= pmod.EASE_S + 0.1
+
+
+def test_framer_crop_never_zooms_past_s_max():
+    f = Framer(486, 274)
+    lm = plank(); lm[:, :2] = 0.5 + (lm[:, :2] - 0.5) * 0.15        # a tiny person
+    for k in range(40): f.add(lm, 0.1 * k)
+    f.update(10.0)
+    M, y1 = f.matrix()
+    assert M[0, 0] <= pmod.S_MAX + 1e-9 and pmod.VID_Y0 + pmod.PANEL_MIN <= y1 <= pmod.VID_Y0 + pmod.PANEL_MAX
+
+
+def test_render_is_fast_enough_for_the_live_loop():
+    import time
+    pm = PushupMirror()
+    rgb = (np.random.default_rng(1).integers(0, 255, SRC)).astype(np.uint8)
+    st = MirrorState(time_left_s=60.0); st.say('Go lower', now=0.0); st.speaking = True
+    for k in range(10): pm.render(rgb, plank(), None, st, now=0.1 * k, seq=k)
+    t0 = time.perf_counter()
+    for k in range(30): pm.render(rgb, plank(), None, st, now=1.0 + 0.066 * k, seq=10 + k // 2)
+    ms = (time.perf_counter() - t0) / 30 * 1000
+    assert ms < 25.0, ms                                          # ~4 ms on a laptop core; the EC2 budget is 12 ms

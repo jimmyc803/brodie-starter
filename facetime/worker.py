@@ -82,6 +82,7 @@ CHALLENGE_MODES = ('demo', 'competition')
 CHERT_HANDLE_KEYS = ('caller', 'handle', 'from', 'phone', 'email')   # chert_call keys tried for the caller handle, in order
 HEARTBEAT_EVERY_S = 30.0
 JOB_BEAT_S = 30.0                     # job heartbeat (scope job) while a competition job runs
+MIRROR_BITRATE = 2_800_000            # the push-up mirror's 720x1280 track: a static framing + 2.8 Mbps keeps the caller's picture crisp
 JOB_STALL_S = 10.0                    # a counting job with no processed frame / controller tick this long is unhealthy
 JOB_STALE_S = 90.0                    # an active job whose health file is older than this is wedged
 COMMIT_WAIT_S = 15.0                  # aclose waits this long for the competition commit (the checkpoint is on disk already)
@@ -245,6 +246,9 @@ def build_parser():
                     '(default on; env AVATAR=0 turns it off)')
     ap.add_argument('--no-avatar', dest='avatar', action='store_false', help='publish no video track')
     ap.add_argument('--avatar-fps', type=float, default=float(os.environ.get('AVATAR_FPS', '12') or 12), help='coach-video frames per second (default 12)')
+    ap.add_argument('--mirror-fps', type=float, default=float(os.environ.get('MIRROR_FPS', '15') or 15),
+                    help="push-up mirror frames per second (default 15, the bridge's rate: every new caller frame is shown, the skeleton "
+                         'updates at the pose rate; env MIRROR_FPS)')
     mirror_env = os.environ.get('MIRROR')
     ap.add_argument('--mirror', dest='mirror', action='store_true', default=(None if mirror_env in (None, '') else truthy(mirror_env)),
                     help="coach-video = the push-up mirror (facetime/pushup_mirror.py): the caller's own video with the judge's form skeleton, the "
@@ -413,6 +417,7 @@ class CoachJob:
         self.avatar_task = None
         self.mirror_in = None; self.mirror_live = False           # newest (rgb, landmarks, seq, t_mono) for the push-up mirror (feed thread writes)
         self.mirror_state = None                                  # facetime.pushup_mirror.MirrorState (loop thread)
+        self.prep = None                                          # facetime.frameprep.FramePrep: content crop + orientation lock (feed thread)
 
     # ---- lifecycle ----
     async def run(self):
@@ -552,7 +557,8 @@ class CoachJob:
                     log.exception('push-up mirror unavailable'); print(f'[worker] push-up mirror unavailable ({e!r}): plain avatar', flush=True)
             if renderer is not None:
                 from facetime.pushup_mirror import W as VW, H as VH
-                self.mirror_live = True; kind = 'push-up mirror'; bitrate = 1_500_000
+                self.mirror_live = True; kind = 'push-up mirror'; bitrate = MIRROR_BITRATE
+                fps = max(1.0, float(getattr(self.a, 'mirror_fps', 15.0) or 15.0))
             else:
                 VW, VH = av.W, av.H; kind = 'avatar'; bitrate = 600_000
             source = rtc.VideoSource(VW, VH)
@@ -569,7 +575,9 @@ class CoachJob:
                     now = time.monotonic(); st = self._mirror_tick_state(now)
                     snap = self.mirror_in
                     if snap is not None and now - snap[3] > 2.0: snap = None; self.mirror_in = None      # frames stopped: idle card
-                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats)
+                    lat = getattr(self, 'latest', None)                            # a caller frame newer than the pose's: show it
+                    newer = lat[0] if (snap is not None and lat is not None and lat[4] > snap[2]) else None
+                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats, newer)
                     if fails[0] >= 10:
                         print(f'[worker] push-up mirror failed {fails[0]} frames in a row: plain avatar for the rest of the call', flush=True)
                         renderer = None; self.mirror_live = False; self.mirror_in = None
@@ -598,13 +606,19 @@ class CoachJob:
             buf = img.tobytes()
         return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420)
 
-    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats):
-        """Render thread: one mirror frame (I420); on any error the plain face for this frame."""
+    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats, newer=None):
+        """Render thread: one mirror frame (I420); on any error the plain face for this frame. newer: a caller VideoFrame
+        that arrived after snap's (the pose's) frame: shown with snap's skeleton when the feed's crop + rotation fit it."""
         from facetime.pushup_mirror import W as VW, H as VH
         t0 = time.perf_counter()
         try:
             if snap is None: img = renderer.render(None, None, self.mirror_thresholds(), st, now=now)
-            else: img = renderer.render(snap[0], snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2])
+            else:
+                rgb = snap[0]; prep = getattr(self, 'prep', None)
+                if newer is not None and prep is not None:
+                    up = prep.apply(frame_to_rgb(newer))
+                    if up is not None and up.shape == rgb.shape: rgb = up
+                img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2])
             fails[0] = 0
             stats['n'] += 1; stats['ms'] += (time.perf_counter() - t0) * 1000
             return rtc.VideoFrame(VW, VH, rtc.VideoBufferType.RGB24, img.tobytes()).convert(rtc.VideoBufferType.I420)
@@ -641,6 +655,9 @@ class CoachJob:
             except (asyncio.TimeoutError, asyncio.CancelledError): pass
         if self.thread is not None and self.thread.is_alive():                            # the feed loop polls stop every 50 ms
             await asyncio.get_running_loop().run_in_executor(None, self.thread.join, 1.0)
+        if getattr(self, 'prep', None) is not None and (self.thread is None or not self.thread.is_alive()):   # the probe pose landmarker (feed thread gone)
+            try: self.prep.close()
+            except Exception as e: log.debug('frame prep close: %r', e)
         if self.comp is not None and getattr(self.comp, 'commit_deferred', False): await self.finish_deferred_commit()
         if self.voice is not None:
             try: await asyncio.wait_for(self.voice.aclose(), 3)
@@ -1026,7 +1043,8 @@ class CoachJob:
             if self.frame_size != (frame.width, frame.height):
                 if self.frame_size is not None: print(f'[worker] received resolution changed {self.frame_size} -> {(frame.width, frame.height)}', flush=True)
                 self.frame_size = (frame.width, frame.height)
-            rgb = frame_to_rgb(frame)
+            raw = frame_to_rgb(frame)
+            rgb = self.prep_frame(raw, t_mono)                # the caller's picture only, upright (facetime/frameprep.py)
             self.per.frames_received = self.seq; self.per.frames_dropped = self.dropped
             with self.feed_lock:
                 if self.feed_sealed: break                    # the call's commit is being built: no more frames, no more reps
@@ -1038,14 +1056,44 @@ class CoachJob:
                 finally:
                     self.feed_busy = False
             self.processed += 1; self.last_proc_wall = time.time()
+            lm = getattr(self.pipe, 'last_landmarks', None)
+            self.check_orientation(raw, lm, t_mono)
             if self.mirror_live:                                  # newest frame + its pose for the mirror (only the newest is kept)
-                self.mirror_in = (rgb, getattr(self.pipe, 'last_landmarks', None), seq, time.monotonic())
+                self.mirror_in = (rgb, lm, seq, time.monotonic())
             if self.comp is not None and time.monotonic() - getattr(self, 'diag_t', 0.0) >= 1.0:
                 self.diag_t = time.monotonic()
-                try: print(f'[posediag] {pose_diag(rgb, getattr(self.pipe, "last_landmarks", None))}', flush=True)
+                try: print(f'[posediag] {pose_diag(rgb, lm)}; {self.prep.diag() if getattr(self, "prep", None) is not None else "no prep"}', flush=True)
                 except Exception as e: print(f'[posediag] failed: {e!r}', flush=True)
             if self.a.max_s and t_mono - self.first_frame_t >= self.a.max_s:
                 print(f'[worker] --max-s {self.a.max_s} reached', flush=True); self.loop.call_soon_threadsafe(self.end, 'max_s reached'); break
+
+    def prep_frame(self, raw, t_mono):
+        """Feed thread: the bridge frame -> the caller's picture, upright. A failure here never stops the counting: it is
+        logged and that frame goes to the pose uncropped."""
+        try:
+            if getattr(self, 'prep', None) is None:
+                from facetime.frameprep import FramePrep
+                self.prep = FramePrep(pose_variant=getattr(self.pipe, 'pose_variant', None) or 'full')
+            return self.prep(raw, t_mono)
+        except Exception as e:
+            self.prep_fails = getattr(self, 'prep_fails', 0) + 1
+            if self.prep_fails == 1 or self.prep_fails % 100 == 0:
+                log.exception('frame prep failed'); print(f'[worker] frame prep failed ({self.prep_fails} so far): {e!r}; raw frame used', flush=True)
+            return raw
+
+    def check_orientation(self, raw, lm, now=None):
+        """Feed thread, after the pose: the orientation lock (FramePrep.observe; probes <= 1/s only while no plank is seen).
+        A probe failure is logged; the current orientation stays."""
+        if getattr(self, 'prep', None) is None: return
+        try:
+            sw = self.prep.observe(raw, lm, time.monotonic() if now is None else now)
+        except Exception as e:
+            self.orient_fails = getattr(self, 'orient_fails', 0) + 1
+            if self.orient_fails == 1 or self.orient_fails % 50 == 0:
+                log.exception('orientation check failed'); print(f'[worker] orientation check failed ({self.orient_fails} so far): {e!r}', flush=True)
+            return
+        if sw is not None:
+            print(f'[worker] caller picture turned {sw[0]} -> {sw[1]} deg (sideways phone with rotation lock); {self.prep.diag()}', flush=True)
 
     # ---- sinks ----
     def say_from_worker(self, text, intent, meta):

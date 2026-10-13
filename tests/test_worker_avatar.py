@@ -77,7 +77,7 @@ def test_mirror_loop_publishes_720x1280_and_renders_the_newest_frame(monkeypatch
             job.mirror_rep(True, [], False); job.mirror_rep(False, ['too_shallow'], False); job.mirror_rep(True, [], True)
         return any(s[0] == (720, 1280, 3) for s in seen) and len(captured) >= 3
     _run(job, feed_once)
-    assert published == [('coach-video', 1_500_000)] and sizes == [(720, 1280)]
+    assert published == [('coach-video', worker.MIRROR_BITRATE)] and worker.MIRROR_BITRATE >= 2_500_000 and sizes == [(720, 1280)]
     assert set(captured) == {(720, 1280)}
     assert seen[0][0] is None                                     # idle card before the first frame
     assert any(s[0] == (720, 1280, 3) and s[1] == 7 and s[2] == 1 for s in seen)   # valid, not in a challenge: counted once
