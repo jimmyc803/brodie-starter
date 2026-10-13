@@ -36,7 +36,7 @@ export function formatLineStatus(s: LineStatus | null): string {
       : s.stateSummary === "offline"
         ? "Line resetting"
         : s.stateSummary === "claimed"
-          ? "Next up on the line"
+          ? "In a call"
           : "Line open";
   const parts = [state];
   if (s.queueLength > 0) parts.push(`${s.queueLength} in line`);
