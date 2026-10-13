@@ -27,6 +27,7 @@ Clean per clip (expected / accepted / counted): 4964650 4/5/5, 4964649 4/3/3, 60
 
 The 90% / <= 1 goal stays the target (judge_eval.run SHIP GATE). The six clean clips are too few to tune further
 without overfitting; more clean side-view footage is needed. test_calibration_real pins 86% / 2 so a regression fails.
+The gate numbers above are unchanged by the fix round (sag/pike independence, knee pivot).
 
 ### Count errors: judge, counter or label
 
@@ -95,6 +96,31 @@ gap gate is gone (j1 measured 0.14).
 - Depth: shoulder_wrist_drop is now the bottom / lockout ratio of the shoulder's height above the wrist.
 - Knee floor contact only from bent knees (< 160 deg). With straight legs, the wrist-ankle line is not the floor
   under the knee (low camera perspective in 4945123, kettlebell handles in cm_interval_pushups).
+- Sag and pike are judged independently (fix round). The 2nd-highest dev (sag side) and 2nd-lowest dev (pike side)
+  are each compared with their own limit, and the stored max_hip_line_dev_deg is the side that exceeds its limit
+  more. Before, the side with the larger |dev| was kept, so an allowed -19.5 deg pike hid a sustained +18.5 deg sag
+  (test_allowed_pike_cannot_mask_sustained_sag). Only one column is stored, so a rejudge with different hip limits
+  judges the stored side only.
+- Knee pivot (fix round): knee_floor_contact is also true when the knee is the pivot of the rep, whatever the knee
+  angle. A knee push-up with the foot raised reads 161.7 deg at the knee, so the < 160 deg rule alone scored it 5/5.
+  Over the judged frames (3-frame moving average) the least-squares slope of knee height vs hip height (image
+  vertical, torso lengths) is ~0.5 in a plank (the knee rides on the ankle-hip line) and ~0 or negative with the
+  knee on the floor. Pivot iff slope < 0.2 (KNEE_PIVOT_SLOPE), hip travel p90-p10 >= 0.1 torso, >= 6 frames, and
+  the knee's 2nd-lowest height above the wrist-ankle line < 0.1 torso (KNEE_PIVOT_MAX_KF; without it, sigma 0.02
+  jitter flagged 6-12% of synthetic plank reps at depth 90-105, now 0/150 at every depth and noise).
+  Real slopes: clean side-view 0.36-0.75 (one rep 0.26), cm_interval (kettlebells, knee 161-166) 0.50-0.63, the
+  knees clip -0.83..-0.19 (all 4 reps flagged). Margins: 0.16 clean / 0.39 knees. Real replay after the fix: clean
+  acceptance and counts unchanged on every clip (26/30); only reason mixes on already-rejected off-angle / two-people
+  reps moved between hips_sag and hips_pike.
+  Synthetic knees-on-floor at knee 161.7 deg: 0/60 accepted at noise 0 and 0.01, 6/60 at 0.02 (test bound 15%).
+
+### Residuals (synthetic)
+
+| case | sigma 0.01 | sigma 0.02 |
+|---|---|---|
+| no_lockout 140 deg | 0/60 | 12/60 (bound 25%, D-31) |
+| knees on floor, knee 161.7 deg | 0/60 | 6/60 (bound 15%) |
+| depth +5 deg (near miss) | 4% | 28% (bound 30%) |
 - Incline / decline: median wrist-ankle support-line tilt over the judged frames, folded into torso_ok.
 - src/rtcoach/video.py: the ffprobe size parse now uses JSON. On this ffprobe build the CSV output had blank
   stream-group lines, so `read_frames` crashed on every clip.

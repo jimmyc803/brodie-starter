@@ -490,3 +490,87 @@ def test_first_rep_walk_in_pike_ignored_later_pike_kept(side):
     # a first rep that never reaches the plank line is still a pike
     clip = synth_pushups(n_reps=1, side=side, hip_offset=-0.15)
     assert verdicts(clip)[0][1][0] == "hips_pike"
+
+
+def _set_hip_dev(f, side, target):
+    """Move the visible-side hip vertically until hip_line_dev_deg reads `target` (deg, + sag / - pike); the knee
+    stays on the (straight) ankle-hip line at its original fraction."""
+    s, h, a = (11, 23, 27) if side == "left" else (12, 24, 28)
+    k = h + 2
+    P = lambda k: f.img[k, :2].astype(float) * np.array([f.aspect, 1.0])
+    frac = float(np.linalg.norm(f.img[k, :2] - f.img[a, :2]) / np.linalg.norm(f.img[h, :2] - f.img[a, :2]))
+    y0 = float(f.img[h, 1])
+    lo, hi = y0 - 0.3, y0 + 0.3                      # dev grows with y (hip lower = sag)
+    for _ in range(60):
+        f.img[h, 1] = (lo + hi) / 2
+        if hip_line_dev_deg(P(s), P(h), P(a)) < target:
+            lo = f.img[h, 1]
+        else:
+            hi = f.img[h, 1]
+    f.img[k, :2] = f.img[a, :2] + frac * (f.img[h, :2] - f.img[a, :2])
+
+
+@pytest.mark.parametrize("side", SIDES)
+def test_allowed_pike_cannot_mask_sustained_sag(side):
+    # +18.5 deg sag held all rep (over the 17.5 sag limit) with a few -19.5 deg frames (inside the 20 deg pike limit)
+    clip = synth_pushups(n_reps=5, side=side, hip_offset=0.205 * BODIES["average"]["torso"])
+    for tf in clip.fire_times:
+        for f in clip.frames:
+            if tf - 2.0 < f.t <= tf:
+                _set_hip_dev(f, side, 18.5)
+    for tf in clip.fire_times:
+        for f in clip.frames:
+            if tf - 1.6 <= f.t < tf - 1.25:            # 4 consecutive frames early in each descent
+                _set_hip_dev(f, side, -19.5)
+    vs = verdicts(clip)
+    assert all(not v and r == ["hips_sag"] for v, r in vs), vs
+    # mirror: an allowed sag cannot mask a sustained pike
+    clip = synth_pushups(n_reps=5, side=side)
+    for tf in clip.fire_times:
+        for f in clip.frames:
+            if tf - 2.0 < f.t <= tf:
+                _set_hip_dev(f, side, -21.0 if not (tf - 1.6 <= f.t < tf - 1.25) else 17.0)
+    vs = verdicts(clip)
+    assert all(not v and r == ["hips_pike"] for v, r in vs), vs
+
+
+def _knees_on_floor_extended(knee_deg=161.7, **kw):
+    """Knee push-up (knee resting on the floor, the rep's pivot) with the foot raised so the knee angle reads
+    `knee_deg` in every frame: above the 150 deg knee_min_deg and the 160 deg bent-knee contact limit."""
+    noise, seed = kw.pop("noise", 0.0), kw.get("seed", 0)
+    side = kw.get("side", "left")
+    clip = synth_pushups(knees_down=True, **kw)
+    h, k, a = (23, 25, 27) if side == "left" else (24, 26, 28)
+    rng = np.random.default_rng(seed + 1000)
+    for f in clip.frames:
+        sc = np.array([f.aspect, 1.0])
+        H, K, A = f.img[h, :2] * sc, f.img[k, :2] * sc, f.img[a, :2] * sc
+        u = (K - H) / np.linalg.norm(K - H)             # thigh continued past the knee
+        cands = []
+        for sgn in (1.0, -1.0):
+            r = np.radians(sgn * (180.0 - knee_deg))
+            v = np.array([u[0] * np.cos(r) - u[1] * np.sin(r), u[0] * np.sin(r) + u[1] * np.cos(r)])
+            cands.append(K + np.linalg.norm(A - K) * v)
+        f.img[a, :2] = min(cands, key=lambda p: p[1]) / sc    # foot raised off the floor
+        if noise:
+            f.img[:, 0] += rng.normal(0, noise / f.aspect, 33)
+            f.img[:, 1] += rng.normal(0, noise, 33)
+    return clip
+
+
+@pytest.mark.parametrize("noise", [0.0, 0.01, 0.02])
+def test_knees_resting_on_floor_with_extended_knee_angle_rejected(noise):
+    accepted = total = 0
+    for body, side in GRID:
+        for seed in range(2):
+            clip = _knees_on_floor_extended(body=body, side=side, seed=seed, noise=noise)
+            ms = accumulate_clip(clip, D)
+            if noise == 0.0:
+                assert all(m.min_knee_deg > 160 and m.knee_floor_contact for m in ms)
+            for m in ms:
+                v, r = judge_rep(m, D)
+                accepted += v
+                total += 1
+                assert v or "knees_down" in r
+    # 0 at sigma <= 0.01; at 0.02 jitter can hide the knee pivot in a 2 s rep: measured residual 6/60
+    assert accepted / total <= (0.0 if noise < 0.02 else 0.15), accepted

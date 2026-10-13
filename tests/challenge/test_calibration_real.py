@@ -3,6 +3,9 @@
 Runs only where the gitignored footage exists: judge_eval/clips + judge_eval/labels.yaml in this checkout, or the
 paths in JUDGE_EVAL_CLIPS / JUDGE_EVAL_LABELS. Each clip goes through judge_eval.run.run_video_clip (decode, pose,
 RepCounter2, judge: the live code path). Slow (about 2 min for ~5k frames), so it is one module-scoped run.
+
+Pinned values are what j2 achieves (clean 86% accepted, worst clean count error 2), so a regression fails. The
+ship goal stays 90% accepted / count error <= 1 (judge_eval.run SHIP GATE); it needs more clean side-view footage.
 """
 from __future__ import annotations
 
