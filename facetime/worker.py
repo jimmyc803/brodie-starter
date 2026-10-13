@@ -54,7 +54,10 @@ dispatcher down -> leave within 5 s, nothing recorded), then runs the 3:00 count
 and timeline cues as the only audio, checkpoints data/tmp/sessions/<call_id>.challenge.json after every rep and commits
 via /calls/event (reps_committed, call_ended) before leaving. Startup refuses HANGUP_MODE=chert_api without CHERT_FACETIME_TOKEN/CHERT_PROJECT_ID, a missing
 DISPATCHER_URL/DISPATCHER_TOKEN or a missing liveness module; a daemon thread beats /calls/heartbeat every 30 s. Env:
-LINE_ID, CALLER_ID_SOURCE, HANGUP_MODE, REVEAL_MODE, CHALLENGE_SESSIONS_DIR. No media is ever written to disk.
+LINE_ID, CALLER_ID_SOURCE, HANGUP_MODE, REVEAL_MODE, CHALLENGE_SESSIONS_DIR, WORKER_MAX_JOBS. No media is ever written to disk.
+HANGUP_MODE=delete_room: once the commit is in (reps_committed, call_ended) the worker deletes the call's LiveKit room, which
+makes Chert end the FaceTime call (a failed delete falls back to leaving). A bridge caller with no video track is still
+started after NO_VIDEO_START_S and ended (0 reps) and hung up NO_VIDEO_END_S after joining unless video arrives.
 Run:
   .venv/bin/python -m facetime.worker --help
   .venv/bin/python -m facetime.worker [--plan "squats:10,pushups:8"] [--events-only] [--publish-data] dev     # LIVEKIT_URL/API_KEY/API_SECRET in env
@@ -87,7 +90,20 @@ JOB_STALL_S = 10.0                    # a counting job with no processed frame /
 JOB_STALE_S = 90.0                    # an active job whose health file is older than this is wedged
 IDLE_CARD_FPS = float(os.environ.get('IDLE_CARD_FPS', '4') or 4)   # coach-video rate while no caller video (warm room)
 COMMIT_WAIT_S = 15.0                  # aclose waits this long for the competition commit (the checkpoint is on disk already)
+NO_VIDEO_START_S = 8.0                # P0-3: a Chert bridge caller with no video track this long -> /calls/start anyway
+NO_VIDEO_CUE_DELAY_S = 4.0            # ... the camera cue this long after the accept (after the welcome, never cutting it)
+NO_VIDEO_END_S = 20.0                 # ... still no video this long after the caller joined -> end the call (0 reps) and hang up
+NO_VIDEO_POLL_S = 0.25
+CUE_DRAIN_MAX_S = 8.0                 # HANGUP_MODE=delete_room: the cue in flight may finish (a reject line is ~5 s) before the delete
+DELETE_ROOM_TIMEOUT_S = 4.0           # one LiveKit DeleteRoom attempt (2 attempts, then leave the room instead)
+AUDIO_PUBLISH_ATTEMPTS = 2            # P1-3: the cue audio track publish
+WORKER_MAX_JOBS = 4                   # P1-5: job_count_load = active jobs / this (a call + its replacement warm room + a spare)
 _chert_keys_logged = False
+
+
+def _no_video_cue():
+    from challenge.worker.controller import NO_VIDEO_CUE
+    return NO_VIDEO_CUE
 
 
 def challenge_mode():
@@ -419,6 +435,10 @@ class CoachJob:
         self.mirror_in = None; self.mirror_live = False           # newest (rgb, landmarks, seq, t_mono) for the push-up mirror (feed thread writes)
         self.mirror_state = None                                  # facetime.pushup_mirror.MirrorState (loop thread)
         self.prep = None                                          # facetime.frameprep.FramePrep: content crop + orientation lock (feed thread)
+        self.hangup_mode = (os.environ.get('HANGUP_MODE') or 'unverified').strip()
+        self.novideo_task = None                                  # P0-3 watch of a bridge caller that publishes no video
+        self.room_deleted = None                                  # HANGUP_MODE=delete_room: True/False once the delete was tried
+        self.lk_api = None                                        # () -> livekit.api.LiveKitAPI (tests replace it)
 
     # ---- lifecycle ----
     async def run(self):
@@ -431,7 +451,7 @@ class CoachJob:
         if getattr(a, 'voice', 'off') == 'gemini' or handlers_path(a):
             self.voice = self.build_voice()
         self.room.on('track_subscribed', self.on_track_subscribed)
-        self.room.on('participant_connected', lambda p: print(f'[worker] participant joined: {p.identity} (kind {rtc.ParticipantKind.Name(p.kind)})', flush=True))
+        self.room.on('participant_connected', self.on_participant_connected)
         self.room.on('participant_disconnected', self.on_participant_disconnected)
         self.room.on('disconnected', self.on_room_disconnected)
         try:
@@ -446,7 +466,8 @@ class CoachJob:
               f'mode {describe_mode(a)}; audio {"OFF (events only)" if a.events_only else "cue player"}; '
               f'metadata: {md_note}; participants {list(self.room.remote_participants)}', flush=True)
         if self.player is not None:
-            await self.room.local_participant.publish_track(self.player.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+            if not await self.publish_audio():                    # P1-3: a job with no audio track is useless to a caller: end it
+                self.end_reason = 'audio publish failed'; await self.aclose(); self.shutdown_ctx(self.end_reason); return
             self.player_task = asyncio.create_task(self.player.run())
             print(f'[worker] published audio track {AUDIO_TRACK_NAME}', flush=True)
         if getattr(a, 'avatar', False):
@@ -474,9 +495,26 @@ class CoachJob:
         self.consumer_tasks += [asyncio.create_task(fn(self), name=f'consumer-{fn.__name__}') for fn in CONSUMERS]
         if self.voice is not None:
             self.consumer_tasks.append(asyncio.create_task(self.voice.run(), name='consumer-voice'))
+        for p in list(self.room.remote_participants.values()):   # a caller already in the room when the job joined
+            self.watch_no_video(p)
         await self.done.wait()
         reason = self.end_reason or (f'perception error: {self.worker_error!r}' if self.worker_error is not None else 'done')
         await self.aclose(); self.shutdown_ctx(reason)
+
+    async def publish_audio(self):
+        """Publish the cue track: AUDIO_PUBLISH_ATTEMPTS tries 0.5 s apart. False (logged loudly) when every try failed:
+        the job then ends so no caller lands in a room whose agent cannot speak (Chert's next warm room gets a new job)."""
+        for i in range(1, AUDIO_PUBLISH_ATTEMPTS + 1):
+            try:
+                await self.room.local_participant.publish_track(self.player.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
+                return True
+            except Exception as e:
+                log.error('audio track publish failed (attempt %d/%d): %r', i, AUDIO_PUBLISH_ATTEMPTS, e)
+                print(f'[worker] audio track publish failed (attempt {i}/{AUDIO_PUBLISH_ATTEMPTS}): {type(e).__name__}: {e}', flush=True)
+            if i < AUDIO_PUBLISH_ATTEMPTS: await asyncio.sleep(0.5)
+        log.critical('ALERT audio_publish_failed: job %s room %r has no cue track; ending the job', self.ctx.job.id, self.room.name)
+        print(f'[worker] ERROR: could not publish the cue audio track after {AUDIO_PUBLISH_ATTEMPTS} attempts: ending job {self.ctx.job.id}', flush=True)
+        return False
 
     def end(self, reason):
         """End the job (event loop): run() wakes, cleans up and returns, then tells the framework (shutdown_ctx)."""
@@ -655,6 +693,7 @@ class CoachJob:
         if self.t_end is None: self.t_end = t0
         if self.leave_task is not None: self.leave_task.cancel()
         if self.open_task is not None and not self.open_task.done(): self.open_task.cancel()
+        if self.novideo_task is not None and not self.novideo_task.done(): self.novideo_task.cancel()
         for t in getattr(self, 'consumer_tasks', []): t.cancel()
         if self.avatar_task is not None: self.avatar_task.cancel()
         if self.comp is not None or self.comp_task is not None: await self.close_competition()   # commit before the teardown
@@ -876,7 +915,10 @@ class CoachJob:
         end_task = None
         if self.comp is not None:
             end_task = asyncio.ensure_future(self.comp.end(self.end_reason or 'shutdown'))
-            await self.leave_room()
+            # comp exists: a caller was gatekept here (never an empty warm room); a room that already went away is not deleted
+            delete = self.hangup_mode == 'delete_room' and not str(self.end_reason or '').startswith('room disconnected')
+            if delete: await self.wait_cue_done(CUE_DRAIN_MAX_S)      # the room goes away with the delete: let the last cue finish
+            else: await self.leave_room()
             try:
                 await asyncio.wait_for(asyncio.shield(end_task), COMMIT_WAIT_S)
             except asyncio.TimeoutError:
@@ -884,6 +926,8 @@ class CoachJob:
             except Exception as e:
                 log.exception('competition end failed: %r', e)
             self.write_health(active=False)
+            if delete:                                                # after the commit and call_ended: Chert ends the call
+                if not await self.delete_room(): await self.leave_room()
         if self.comp_task is not None and not self.comp_task.done():
             self.comp_task.cancel()
             await asyncio.gather(self.comp_task, return_exceptions=True)
@@ -917,6 +961,42 @@ class CoachJob:
     async def _close_client(client):
         try: await client.aclose()
         except Exception as e: log.debug('dispatcher client close: %r', e)
+
+    async def wait_cue_done(self, max_s):
+        """The cue in flight (and one queued) finishes, at most max_s; only while still connected."""
+        if self.player is None or not self.room_connected(): return
+        for _ in range(int(max_s / 0.1)):
+            if not self.player.playing and self.player.pending is None and getattr(self.player, 'urgent', None) is None: return
+            await asyncio.sleep(0.1)
+
+    async def delete_room(self):
+        """HANGUP_MODE=delete_room: DeleteRoom through the LiveKit room service (LIVEKIT_URL/API_KEY/API_SECRET); Chert
+        ends the FaceTime call when its room is removed. Two attempts; False (logged, never raises) -> the caller leaves."""
+        name = getattr(self.room, 'name', None)
+        try:
+            from livekit import api
+        except Exception as e:
+            api = None; log.error('delete_room: livekit.api unavailable: %r', e)
+        if not name or api is None:
+            log.error('delete_room: cannot delete (room %r)', name); self.room_deleted = False; return False
+        for i in (1, 2):
+            client = None
+            try:
+                client = (self.lk_api or api.LiveKitAPI)()
+                await asyncio.wait_for(client.room.delete_room(api.DeleteRoomRequest(room=name)), DELETE_ROOM_TIMEOUT_S)
+                print(f'[competition] hang-up: deleted room {name!r} (HANGUP_MODE=delete_room)', flush=True)
+                self.room_deleted = True; return True
+            except Exception as e:
+                log.error('delete_room %r failed (attempt %d/2): %r', name, i, e)
+                print(f'[competition] delete room {name!r} failed (attempt {i}/2): {type(e).__name__}: {str(e)[:160]}', flush=True)
+            finally:
+                if client is not None:
+                    try: await client.aclose()
+                    except Exception as e: log.debug('LiveKitAPI close: %r', e)
+            if i == 1: await asyncio.sleep(0.5)
+        print('[competition] hang-up: room delete failed; leaving the room instead (Chert ends the call once the room empties)', flush=True)
+        self.room_deleted = False
+        return False
 
     async def leave_room(self):
         """Competition: leave the room now (after at most 1.5 s of the cue in flight), before the commit finishes."""
@@ -1012,6 +1092,54 @@ class CoachJob:
             if self.vision is not None: ev.update(vision_frames=self.vision.n_sent, vision_fps=self.vision.fps, vision_replaced=self.vision.n_replaced)
             if self.player is not None: ev.update(underruns=self.player.underruns, cues_played=self.cues_played, cues_dropped=self.player.n_dropped)
             self.emit('status', **ev)
+
+    def on_participant_connected(self, p):
+        try: kind = rtc.ParticipantKind.Name(p.kind)
+        except Exception: kind = str(getattr(p, 'kind', '?'))
+        print(f'[worker] participant joined: {p.identity} (kind {kind})', flush=True)
+        self.watch_no_video(p)
+
+    def watch_no_video(self, p):
+        """P0-3, competition: a Chert bridge caller (chert-bridge-<call id>) in the room starts the no-video watch (once)."""
+        if not self.competition or self.closed or self.comp is not None or self.novideo_task is not None: return
+        if not str(getattr(p, 'identity', '')).startswith(BRIDGE_PREFIX): return
+        self.novideo_task = asyncio.create_task(self._no_video_watch(p), name='no-video-watch')
+
+    def has_video(self):
+        return self.video_task is not None or self.seq > 0
+
+    async def _no_video_watch(self, p):
+        """A bridge caller with no video track after NO_VIDEO_START_S (FaceTime Audio, camera off) is still a call: bind it
+        and run /calls/start (attribution, claim and cap logic as for any call; a reject plays its cue and hangs up). On an
+        accept: NO_VIDEO_CUE NO_VIDEO_CUE_DELAY_S later; still no video NO_VIDEO_END_S after the join -> end the call (the
+        commit records 0 reps, then call_ended) and hang up. Video arriving at any point -> the call simply continues."""
+        t_join = self.clock()
+        try:
+            while self.clock() - t_join < NO_VIDEO_START_S:
+                await self.sleep(NO_VIDEO_POLL_S)
+                if self.closed or self.comp is not None or self.has_video(): return
+                if p.identity not in self.room.remote_participants: return          # the caller left before any video
+            print(f'[competition] {p.identity!r}: no video after {NO_VIDEO_START_S:g} s: starting the call anyway (camera off / audio only)', flush=True)
+            self.bind(p, f'no video after {NO_VIDEO_START_S:g} s')
+            comp = self.comp
+            if comp is None: return
+            while not comp.start_done:
+                if self.closed: return
+                await self.sleep(NO_VIDEO_POLL_S)
+            if comp.decision != 'accept': return                                    # reject / fail closed: its own cue and hang-up
+            t_acc = self.clock(); cued = False
+            while self.clock() - t_join < NO_VIDEO_END_S:
+                if self.closed or comp.ended_at is not None or self.has_video(): return
+                if not cued and self.clock() - t_acc >= NO_VIDEO_CUE_DELAY_S:
+                    cued = True; comp.say(_no_video_cue())
+                await self.sleep(NO_VIDEO_POLL_S)
+            if self.closed or comp.ended_at is not None or self.has_video(): return
+            print(f'[competition] call {self.call_id}: still no video {NO_VIDEO_END_S:g} s after the caller joined: ending the call', flush=True)
+            self.end('no video')
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('no-video watch failed')
 
     def on_participant_disconnected(self, p):
         print(f'[worker] participant left: {p.identity}', flush=True)
@@ -1250,9 +1378,24 @@ class CoachJob:
             print(f"[cue] {rec['status']} [{rec['intent']}] {rec['text']!r} {rec.get('why_dropped', '')}", flush=True)
 
 
+def max_jobs():
+    try: return max(1, int(os.environ.get('WORKER_MAX_JOBS') or WORKER_MAX_JOBS))
+    except ValueError: return WORKER_MAX_JOBS
+
+
+def job_count_load(worker):
+    """P1-5: the worker's load = active jobs / WORKER_MAX_JOBS (env overrides), not CPU. One call drives CPU to 0.6-1.0 on
+    2 vCPU, and the default CPU load with its 0.7 threshold then marked the worker full exactly when Chert asks for the
+    replacement warm-room job, leaving the next caller's room without an agent. A job is cheap until a caller publishes."""
+    try: n = len(worker.active_jobs)
+    except Exception: n = 0
+    return min(1.0, n / max_jobs())
+
+
 def worker_options(a):
+    # load_threshold 1.0 with job_count_load: available while active (+ reserved) jobs < WORKER_MAX_JOBS
     return WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm, agent_name=a.agent_name, num_idle_processes=max(0, int(a.idle_processes)),
-                         initialize_process_timeout=90.0, job_memory_warn_mb=3000)
+                         initialize_process_timeout=90.0, job_memory_warn_mb=3000, load_fnc=job_count_load, load_threshold=1.0)
 
 
 def main(argv=None):
@@ -1314,7 +1457,7 @@ def start_heartbeat(every_s=HEARTBEAT_EVERY_S):
     daemon thread of the supervisor process (alive while the worker is, between calls too). A failed beat is logged."""
     from challenge.worker.client import DispatcherError, heartbeat_sync
     url, token = os.environ['DISPATCHER_URL'], os.environ['DISPATCHER_TOKEN']; line = os.environ.get('LINE_ID') or 'line-1'
-    detail = dict(pid=os.getpid(), agent=os.environ.get('AGENT_NAME', 'brodie-coach'))
+    detail = dict(pid=os.getpid(), agent=os.environ.get('AGENT_NAME', 'brodie-coach'), hangup_mode=(os.environ.get('HANGUP_MODE') or 'unverified').strip())
 
     def loop():
         fails = 0

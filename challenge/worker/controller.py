@@ -17,7 +17,9 @@ Timeline (call clock, numbers from the /calls/start `config` or the competition_
 counting stops (later reps are ignored, not recorded); check_texts 1.5 s later (REVEAL_MODE audio_only; REVEAL_MODE=video
 also publishes a card/fallback video track via the worker's `reveal` hook, C7.v; any failure stays audio_only); HANGUP_MODE
 unverified plays hang_up HANG_UP_LEAD_S before count_s + reveal_s; at count_s + reveal_s end() commits and the
-worker leaves the room (leave_room and unverified both leave; chert_api has no API to call: refused at startup).
+worker leaves the room (leave_room and unverified both leave; chert_api asks Chert to end the call first; delete_room:
+the worker deletes the LiveKit room once the commit is in, which makes Chert end the FaceTime call, and leaves the room
+if the delete fails).
 Only the latest due cue of a tick is played (a stalled loop never stacks cues).
 
 Liveness (judge/liveness.py LivenessChallenge, C7.l: schedule/due/start/poll/finish/on_frame/on_rep/windows):
@@ -68,7 +70,12 @@ C2_METRIC_KEYS = ("min_elbow_deg_l", "min_elbow_deg_r", "top_elbow_deg", "max_hi
                   "frame_conf_frac", "persons_in_frame", "rep_duration_s", "torso_ok", "side", "classifier_labels")
 DEFAULT_COUNT_S = 180          # competition_config call_count_s default (used only when the dispatcher sends none)
 DEFAULT_REVEAL_S = 15          # competition_config call_reveal_s default
-START_DEADLINE_S = 3.0         # the whole /calls/start retry loop
+START_DEADLINE_S = 8.0         # the whole /calls/start retry loop (P1-2: a slow or lost answer is retried, same call id)
+FAIL_CUE = "competition_over"  # fail closed: the caller hears this instead of silence (an existing, rendered phrase)
+FAIL_CUE_S = 3.0               # fail closed: let the cue play before the hang-up
+FAIL_ENDED_S = 5.0             # fail closed: the best-effort call_ended is given this long
+FAIL_ENDED_REASONS = frozenset({"dispatcher_unreachable", "accept_without_user", "call_setup_failed"})
+NO_VIDEO_CUE = "not_in_frame"  # P0-3: an accepted call without a video track (no rendered "camera on" phrase exists)
 REJECT_LEAVE_S = 3.5           # leave this long after t0 on a reject (+ <= 1.5 s cue tail in the worker = 5 s)
 WELCOME_GAP_S = 4.0            # power_hour cue after the welcome
 CHECK_TEXTS_AFTER_S = 1.5      # check_texts after time_up
@@ -79,7 +86,8 @@ DRAIN_MAX_S = 3.0              # end(): wait this long for the rep intake to sea
 DEFERRABLE_CUES = frozenset({"power_hour", "thirty_left"})   # held while a liveness challenge is open ...
 DEFER_MAX_S = 10.0                                           # ... and dropped once this late
 JUDGE_CUE_KEYS = frozenset({"knees_down", "too_shallow", "no_lockout", "not_in_frame", "hips", "multiple_people"})
-HANGUP_MODES = ("leave_room", "unverified", "chert_api")
+HANGUP_MODES = ("leave_room", "unverified", "chert_api", "delete_room")
+LIVEKIT_ENV = ("LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET")   # HANGUP_MODE=delete_room (the room service API)
 REVEAL_MODES = ("audio_only", "video")
 LIVENESS_RESULTS = ("pass", "fail", "skipped")
 
@@ -90,7 +98,7 @@ class UnsupportedMode(ValueError):
 
 def check_modes(hangup_mode: str, reveal_mode: str) -> list[str]:
     """Validate HANGUP_MODE / REVEAL_MODE for the worker. chert_api needs CHERT_FACETIME_TOKEN and CHERT_PROJECT_ID
-    (C7.h); returns the fallback notes to log."""
+    (C7.h), delete_room the LiveKit credentials; returns the notes to log."""
     if hangup_mode not in HANGUP_MODES:
         raise UnsupportedMode(f"HANGUP_MODE={hangup_mode!r}: expected one of {', '.join(HANGUP_MODES)}")
     if hangup_mode == "chert_api":
@@ -98,12 +106,20 @@ def check_modes(hangup_mode: str, reveal_mode: str) -> list[str]:
         if missing_env():
             raise UnsupportedMode(f"HANGUP_MODE=chert_api needs {' and '.join(missing_env())} in the environment "
                                   "(C7.h); set them or use leave_room / unverified")
+    if hangup_mode == "delete_room":
+        missing = [k for k in LIVEKIT_ENV if not (os.environ.get(k) or "").strip()]
+        if missing:
+            raise UnsupportedMode(f"HANGUP_MODE=delete_room needs {' and '.join(missing)} in the environment "
+                                  "(the LiveKit room service deletes the room); set them or use leave_room / unverified")
     if reveal_mode not in REVEAL_MODES:
         raise UnsupportedMode(f"REVEAL_MODE={reveal_mode!r}: expected one of {', '.join(REVEAL_MODES)}")
     notes = []
     if reveal_mode == "video":
         notes.append("REVEAL_MODE=video: reveal card/fallback video track (C7.v); any failure plays the audio_only "
                      "check_texts cue only (FALLBACK)")
+    if hangup_mode == "delete_room":
+        notes.append("HANGUP_MODE=delete_room: after the commit the worker deletes the LiveKit room of a call (never an "
+                     "empty warm room) so Chert ends the FaceTime call; a failed delete falls back to leaving the room")
     if hangup_mode == "unverified":
         notes.append("HANGUP_MODE=unverified: hang_up cue before leaving; hang-up not verified (FALLBACK)")
     return notes
@@ -514,7 +530,8 @@ class CompetitionCall:
             try:
                 r = await self.dispatcher.start_call(self.call_id, self.line_id, self.handle, deadline_s=START_DEADLINE_S)
             except DispatcherError as e:
-                return self._fail_closed("dispatcher_unreachable", f"dispatcher unreachable at call start ({e})")
+                self._fail_closed("dispatcher_unreachable", f"dispatcher unreachable at call start ({e})")
+                return await self._fail_exit()
             if r.get("decision") != "accept":
                 self.decision, self.reason = "reject", str(r.get("reason") or "rejected")
                 log.info("call %s: rejected (%s, cue %s)", self.call_id, self.reason, r.get("cue"))
@@ -525,22 +542,62 @@ class CompetitionCall:
                 self._leave(f"rejected: {self.reason}")
                 return False
             if not r.get("user_id"):
-                return self._fail_closed("accept_without_user", "dispatcher accepted without a user_id")
+                self._fail_closed("accept_without_user", "dispatcher accepted without a user_id")
+                return await self._fail_exit()
             try:
-                return self._accept(r)
+                ok = self._accept(r)
             except Exception as e:
                 log.exception("call %s: setting up the accepted call failed", self.call_id)
-                return self._fail_closed("call_setup_failed", f"setup failed after accept ({e!r})")
+                self._fail_closed("call_setup_failed", f"setup failed after accept ({e!r})")
+                ok = False
+            if self.decision == "error":
+                return await self._fail_exit()
+            return ok
         finally:
             self._start_done.set()
 
+    @property
+    def start_done(self) -> bool:
+        """start() has finished (accepted, rejected or failed closed, its cue and hang-up included)."""
+        return self._start_done.is_set()
+
+    def say(self, key: str) -> None:
+        """The worker: an urgent cue of an accepted call that is still running (e.g. NO_VIDEO_CUE)."""
+        if self.decision == "accept" and self.ended_at is None:
+            self._say(key)
+
     def _fail_closed(self, reason: str, detail: str) -> bool:
+        """Mark the call failed closed (logged + alerted); start() then runs _fail_exit (cue, best-effort end, leave)."""
         self._release_lock()
         self.decision, self.reason = "error", reason
         log.error("call %s: %s: not counting this call (fail closed)", self.call_id, detail)
         self.alert(reason, f"call {self.call_id} on {self.line_id}: {detail}")
-        self._leave(reason)
         return False
+
+    async def _fail_exit(self) -> bool:
+        """Fail closed, the caller's side: FAIL_CUE instead of silence; when the dispatcher may hold the line in_call for
+        this call (FAIL_ENDED_REASONS, not an adopted call another owner may hold), a best-effort call_ended with 0 reps
+        (frees the line; under 30 s with no rep it is not counted toward the cap), bounded by FAIL_ENDED_S; both
+        before the hang-up so the end is recorded first. Never raises. Returns False."""
+        self._say(FAIL_CUE)
+        jobs = [self._sleep(FAIL_CUE_S)]
+        if self.reason in FAIL_ENDED_REASONS and not self.adopted:
+            jobs.append(self._send_fail_ended())
+        await asyncio.gather(*jobs, return_exceptions=True)
+        self._leave(self.reason or "fail closed")
+        return False
+
+    async def _send_fail_ended(self) -> None:
+        now = utc_iso(self.clock())
+        body = {"ended_at": now, "count_end_at": now, "rep_count": 0}
+        try:
+            r = await asyncio.wait_for(self.dispatcher.event("call_ended", self.call_id, body, at=now), FAIL_ENDED_S)
+        except asyncio.TimeoutError:
+            log.error("call %s: fail closed: call_ended not delivered within %g s", self.call_id, FAIL_ENDED_S)
+        except Exception as e:
+            log.error("call %s: fail closed: call_ended not delivered (%s)", self.call_id, e)
+        else:
+            log.info("call %s: fail closed: call_ended sent (%s)", self.call_id, r)
 
     def _accept(self, r: dict) -> bool:
         self.user_id = r.get("user_id")
@@ -1031,7 +1088,7 @@ class CompetitionCall:
     async def _end(self, reason: str) -> dict:
         if self.t0 is not None and not self._start_done.is_set():
             try:
-                await asyncio.wait_for(self._start_done.wait(), START_DEADLINE_S + REJECT_LEAVE_S + 1)
+                await asyncio.wait_for(self._start_done.wait(), START_DEADLINE_S + max(REJECT_LEAVE_S, FAIL_CUE_S + FAIL_ENDED_S) + 1)
             except asyncio.TimeoutError:
                 log.error("call %s: end(%s) while /calls/start is still pending; nothing recorded", self.call_id, reason)
         if self.decision != "accept":

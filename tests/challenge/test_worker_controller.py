@@ -235,9 +235,18 @@ def test_dispatcher_down_at_start_fails_closed(tmp_path):
     r, ok = run(go())
     assert ok is False and r.call.decision == "error"
     assert r.alerts == ["dispatcher_unreachable"]
-    assert r.keys() == []                                   # no misleading not_your_turn cue
-    assert len(r.left) == 1 and r.left[0][0] <= 5.0
-    assert set(r.disp.paths()) == {"/calls/start"} and len(r.disp.paths()) >= 2   # retried within the deadline
+    # P1-2: the short competition_over cue instead of silence (never a misleading not_your_turn), then the hang-up
+    assert r.keys() == ["competition_over"] and "not_your_turn" not in r.keys()
+    assert r.said[0][0] >= ctl.START_DEADLINE_S - 0.5                # retried for the whole widened deadline first
+    assert len(r.left) == 1 and r.left[0][0] <= ctl.START_DEADLINE_S + ctl.FAIL_CUE_S + ctl.FAIL_ENDED_S + 0.5
+    starts = [p for p in r.disp.paths() if p == "/calls/start"]
+    assert len(starts) >= 4                                          # retried within the deadline (same call id)
+    assert {b["call_id"] for p, b, _ in r.disp.requests if p == "/calls/start"} == {"call-1"}
+    # a best-effort call_ended (0 reps) before the leave, so a dispatcher that did commit in_call frees the line
+    assert r.disp.events() == [("call_ended", "call-1:call_ended")]
+    ended = [b for p, b, _ in r.disp.requests if p == "/calls/event"][0]["payload"]
+    assert ended["rep_count"] == 0 and ended["ended_at"] == ended["count_end_at"]
+    assert r.disp.paths()[-1] == "/calls/event"
     assert not os.path.exists(r.call.path)
 
 
@@ -1056,10 +1065,15 @@ def test_accept_without_user_or_setup_error_fails_closed(tmp_path):
         res_b = await b.call.end("x")
         return a, ok_a, b, ok_b, res_b
     a, ok_a, b, ok_b, res_b = run(go())
-    assert ok_a is False and a.call.decision == "error" and a.left == [(0.0, "accept_without_user")]
-    assert ok_b is False and b.call.decision == "error" and b.left == [(0.0, "call_setup_failed")]
+    # P1-2: the fail cue plays, then the leave (FAIL_CUE_S later); a best-effort call_ended (0 reps) frees the line
+    assert ok_a is False and a.call.decision == "error" and a.left == [(ctl.FAIL_CUE_S, "accept_without_user")]
+    assert ok_b is False and b.call.decision == "error" and b.left == [(ctl.FAIL_CUE_S, "call_setup_failed")]
+    assert a.keys() == ["competition_over"] and b.keys() == ["competition_over"]
     assert res_b == {"recorded": False, "committed": False, "decision": "error"}
-    assert a.call.on_rep(rep_ev(), t=T0 + 1) is None and [k for k, _ in b.disp.events()] == []
+    assert a.call.on_rep(rep_ev(), t=T0 + 1) is None
+    for r in (a, b):
+        assert r.disp.events() == [("call_ended", "call-1:call_ended")]
+        assert [b_["payload"]["rep_count"] for p, b_, _ in r.disp.requests if p == "/calls/event"] == [0]
 
 
 # ------------------------------------------------------------------ worker plumbing

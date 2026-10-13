@@ -22,7 +22,7 @@ _FALLBACKS = {
 class Flags(BaseModel):
     CALLER_ID_SOURCE: Literal["chert_meta", "claim_window"] = "claim_window"
     MESSAGING_PROVIDER: Literal["chert", "web_only", "mock"] = "mock"
-    HANGUP_MODE: Literal["leave_room", "chert_api", "unverified"] = "unverified"
+    HANGUP_MODE: Literal["leave_room", "chert_api", "unverified", "delete_room"] = "unverified"
     REVEAL_MODE: Literal["video", "audio_only"] = "audio_only"
     CARD_DELIVERY: Literal["attachment", "link"] = "link"
     LINE_OFFLINE_GAP_S: int | None = Field(default=None, ge=0)

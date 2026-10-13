@@ -26,6 +26,7 @@ log = logging.getLogger("challenge.worker.client")
 
 RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 EVENT_KINDS = ("call_started", "call_ended", "reps_committed")
+START_MIN_RETRIES = 6          # /calls/start with a deadline: retries until the deadline (P1-2), idempotent on call_id
 
 
 class DispatcherError(Exception):
@@ -111,12 +112,16 @@ class DispatcherClient:
         raise last or DispatcherError(f"POST {path}: no attempt fit in the {deadline_s} s deadline")
 
     async def start_call(self, call_id: str, line_id: str, handle: str | None = None, *,
-                         deadline_s: float | None = None) -> dict:
-        """POST /calls/start. deadline_s bounds the whole retry loop (the gatekeeper must answer within seconds)."""
+                         deadline_s: float | None = None, retries: int | None = None) -> dict:
+        """POST /calls/start. deadline_s bounds the whole retry loop (the gatekeeper must answer within seconds); within
+        a deadline at least START_MIN_RETRIES retries are made (fast failures keep retrying until the deadline). Safe:
+        ch_call_start is idempotent on call_id."""
         body: dict[str, Any] = {"call_id": call_id, "line_id": line_id}
         if handle:
             body["handle"] = handle
-        r = await self._post("/calls/start", body, deadline_s=deadline_s)
+        if retries is None and deadline_s is not None:
+            retries = max(self.retries, START_MIN_RETRIES)
+        r = await self._post("/calls/start", body, retries=retries, deadline_s=deadline_s)
         if r.get("decision") not in ("accept", "reject"):
             raise DispatcherError(f"/calls/start: unexpected decision {r.get('decision')!r}", None, False)
         return r
