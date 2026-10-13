@@ -35,6 +35,7 @@ fi
 release="$release_base/releases/$sha"
 install -d -m 0755 "$release_base/releases"
 install -d -m 0755 -o brodie -g brodie "$release_base/data"
+install -d -m 0755 -o brodie -g brodie "$release_base/models"
 if [[ ! -f $release/.release-ready ]]; then
   [[ ! -e $release ]] || { echo 'Incomplete release exists; inspect and remove it before retrying' >&2; exit 1; }
   install -d -m 0755 -o brodie -g brodie "$release"
@@ -42,6 +43,7 @@ if [[ ! -f $release/.release-ready ]]; then
   git_as_user archive "$sha" | runuser -u brodie -- tar -x -C "$release"
   [[ ! -e $release/data && ! -L $release/data ]] || { echo 'Release data must remain outside git' >&2; exit 1; }
   ln -s "$release_base/data" "$release/data"
+  ln -s "$release_base/models" "$release/models"   # gitignored pose models (pose_landmarker_*.task)
   runuser -u brodie -- uv venv --python 3.12 "$release/.venv"
   runuser -u brodie -- uv pip sync --index-strategy unsafe-best-match --python "$release/.venv/bin/python" "$release/requirements.lock"
   runuser -u brodie -- uv pip check --python "$release/.venv/bin/python"
