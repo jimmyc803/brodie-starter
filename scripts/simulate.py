@@ -56,7 +56,7 @@ IDLE_JUMP = timedelta(minutes=5)
 CALL_COUNT_S, REVEAL_S, EXTRA_S = 180, 15, 60
 GAP_S, CLAIM_S, CAP, MIN_COUNTED_S = 180, 90, 5, 30
 NO_SHOW_P = 0.15
-REPLY_TEMPLATES = {"welcome", "join_confirm_prompt", "join_bad_name", "join_taken", "queue_joined", "queue_line_open",
+REPLY_TEMPLATES = {"call_queued", "welcome", "join_confirm_prompt", "join_bad_name", "join_taken", "queue_joined", "queue_line_open",
                    "queue_at_cap", "queue_already", "queue_in_call", "left_queue", "status", "top", "rules", "power",
                    "help", "stop_ack", "start_ack", "unknown", "not_registered"}
 QUIET_OK = {"youre_up", "post_call"} | REPLY_TEMPLATES | {"alert"}
@@ -619,7 +619,7 @@ class Sim:
             return "banned"
         if any(k != lid and l["user_id"] == uid and (l["state"] == "in_call" or (
                 l["state"] == "claimed" and l["claimed_until"] > t)) for k, l in lines.items()):
-            return "not_your_turn"
+            return self.call_to_queue(uid, lines, queue, t)
         if self.calls_today(uid, t) >= CAP:
             return "at_cap"
         ls = lines[lid]
@@ -627,7 +627,16 @@ class Sim:
             return "ok"
         if ls["state"] == "idle" and not any(q["user_id"] != uid for q in queue):
             return "ok"
-        return "not_your_turn"
+        return self.call_to_queue(uid, lines, queue, t)
+
+    def call_to_queue(self, uid: str, lines: dict, queue: list[dict], t: datetime) -> str:
+        """Model of the call-to-queue step after a not_your_turn reject (C4, chert_meta): ch_queue_join's order."""
+        if any(q["user_id"] == uid for q in queue) or any(l["user_id"] == uid and l["state"] == "claimed"
+                                                           for l in lines.values()):
+            return "queued"  # 'already'
+        if any(l["user_id"] == uid and l["state"] == "in_call" for l in lines.values()):
+            return "not_your_turn"
+        return "not_your_turn" if self.calls_today(uid, t) >= CAP else "queued"
 
     def facetime(self, agent: Agent | None, why: str, plan: dict | None = None, handle: str | None = None) -> None:
         t = self.now
@@ -1382,12 +1391,12 @@ class Sim:
         self.ph = {str(d): f"{ph[d][0].astimezone(self.ET):%H:%M}–{ph[d][1].astimezone(self.ET):%H:%M}" for d in days}
         # ---------------- coverage of required scenarios
         need = {"span:ph_start": 1, "span:ph_end": 1, "span:ph_mixed_multiplier": 1, "span:window_end": 1,
-                "no_shows": 1, "walk_ins": 1, "rejected:not_registered": 1, "rejected:not_your_turn": 1,
+                "no_shows": 1, "walk_ins": 1, "rejected:not_registered": 1, "rejected:queued": 1,
                 "rejected:at_cap": 1, "rejected:banned": 1, "rejected:frozen": 1, "stop_mid_queue": 1,
                 "ban_while_waiting": 1, "ban_while_claimed": 1, "reconciled": 1, "at_cap_queue_replies": 1,
                 "reps_2x": 1, "tick_timeouts": 1, "reps_rejected:after_freeze": 1, "reps_rejected:after_count": 1,
                 "reps_rejected:liveness_fail": 1, "event_replays": 1, "webhook_redeliveries": 1,
-                "capped_then_called_next_day": 1 if len(self.days) > 1 else 0,
+                "capped_then_called_next_day": 1 if len(self.days) > 1 and self.args.lines > 1 else 0,  # D-35
                 "span:midnight": 1 if len(self.days) > 1 else 0}
         for k, v in need.items():
             if m[k] < v:
@@ -1402,7 +1411,7 @@ CHECKS = [
     ("claim_window", "Every claim lasts exactly claim_window_s (90 s); no-shows release the line on the next tick"),
     ("offline_gap", "Line offline gap: offline_until = call end + line_offline_gap_s and no pop before it"),
     ("one_active", "<=1 active queue entry per user; <=1 line per user; notified entries <-> claims; LEAVE immediate"),
-    ("gatekeeper", "Every /calls/start decision equals the independent model (walk-in, claim, not_your_turn, at_cap, banned, frozen, unregistered)"),
+    ("gatekeeper", "Every /calls/start decision equals the independent model (walk-in, claim, busy-line auto-queue, not_your_turn, at_cap, banned, frozen, unregistered)"),
     ("queue_replies", "Every QUEUE reply equals the model (joined / already / line open / at cap / in call / frozen)"),
     ("cap", "Caps across ET midnight: <=5 counted calls per user per ET day; counted_toward_cap equals the model for every call; rejected calls never count"),
     ("points", "Every rep's valid/multiplier/points equal challenge.scoring.rep_points (power hour 2x per rep, after_count, liveness, freeze)"),
