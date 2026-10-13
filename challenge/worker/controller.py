@@ -362,6 +362,7 @@ class CompetitionCall:
             "t0": self.t0, "started_at": utc_iso(self.t0), "count_s": self.count_s, "reveal_s": self.reveal_s,
             "count_end_at": utc_iso(count_end), "ended_at": utc_iso(self.ended_at) if self.ended_at is not None else None,
             "ended_t": self.ended_at, "end_reason": self.end_reason, "judge_version": JUDGE_VERSION,
+            "liveness_enabled": self.liveness_enabled(),
             "liveness_result": self.liveness_result, "liveness_first_fire_s": self.liveness_first_fire_t,
             "liveness": {"result": self.liveness_result, "first_fire_s": self.liveness_first_fire_t,
                          "fires_s": self.liveness_fires, "windows_s": self.windows(), "rescheduled": self._rescheduled},
@@ -481,6 +482,12 @@ class CompetitionCall:
         self.last_error = d.get("last_error")
         rc = d.get("reconcile")
         self.reconcile_meta = dict(rc) if isinstance(rc, dict) else None   # backoff/late/conflict state survives
+        # the call keeps the liveness setting it ran with (a recovery must not void or un-void by today's config);
+        # checkpoints from before the flag existed (judge j1/j2) always ran with the challenge on
+        on = d.get("liveness_enabled", d.get("judge_version") in ("j1", "j2"))
+        if isinstance(on, bool) and on != self.liveness_enabled():
+            self.judge_cfg = {**self.judge_cfg, "liveness_enabled": on}
+            self.thr = merged_thresholds(self.judge_cfg)
         lv = d.get("liveness") or {}
         self.liveness_result = lv.get("result", d.get("liveness_result"))
         self.liveness_first_fire_t = lv.get("first_fire_s", d.get("liveness_first_fire_s"))

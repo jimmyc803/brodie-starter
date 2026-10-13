@@ -109,6 +109,8 @@ def make_call(tmp_path, t0, call_id="call-1", rep_ts=(30.0, 40.0, 50.0), outcome
     async def go():
         c = CompetitionCall(call_id, "line-1", "+15550001111", disp, clock=clock, checkpoint_dir=str(tmp_path),
                             hangup_mode="leave_room",
+                            # the liveness challenge is off by default since j3; these rigs exercise it ON
+                            judge_cfg={"liveness_enabled": True},
                             liveness_factory=lambda rng, thr: StubLiveness(rng, thr, outcome))
         assert await c.start()
         if outcome is not None:
@@ -1510,3 +1512,17 @@ def test_amain_once_arms_and_disarms_the_deadline(tmp_path, monkeypatch):
         monkeypatch.setenv("RECONCILE_MAX_RUN_S", bad)
         assert run(rs.amain(rs.parse_args(["--once", "--dir", str(tmp_path)]))) == 2
     assert len(armed) == 4
+
+
+@pytest.mark.parametrize("ckpt,live_cfg,want", [
+    ({"liveness_enabled": True, "judge_version": "j3"}, None, True),           # ran with the challenge on
+    ({"liveness_enabled": False, "judge_version": "j3"}, {"liveness_enabled": True}, False),  # ran with it off
+    ({"judge_version": "j2"}, None, True),                                     # pre-flag checkpoint: challenge was on
+    ({"judge_version": "j3"}, None, False),                                    # j3 without the key: today's default
+])
+def test_adopted_call_keeps_the_liveness_setting_it_ran_with(tmp_path, ckpt, live_cfg, want):
+    # A recovery must not void (or un-void) a call's reps by today's liveness config (merge of task 32 with j3).
+    c = CompetitionCall("call-1", "line-1", None, FakeClient(), judge_cfg=live_cfg, clock=Clock(time.time()),
+                        checkpoint_dir=str(tmp_path), hangup_mode="leave_room")
+    c._adopt({"call_id": "call-1", "line_id": "line-1", "t0": time.time() - 100, "reps": [], **ckpt})
+    assert c.liveness_enabled() is want
