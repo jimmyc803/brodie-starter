@@ -3,10 +3,10 @@
 The exact text is part of the audio bank key: facetime.cues_tts.vocabulary() renders every value in CUES.
 """
 CUES = {
-    'knees_down': "Knees up! That one didn't count.",
+    'knees_down': "Knees off the floor! That one didn't count.",
     'too_shallow': 'Lower! Get that chest down.',
     'no_lockout': 'Lock those arms out up top!',
-    'not_in_frame': 'Side view, head to toe in frame!',
+    'not_in_frame': 'Get your upper body and knees in frame!',
     'hips': 'Hips in line, straight body!',
     'multiple_people': 'Just you in frame! One person only.',
     'challenge_tap_left': 'Tap your left shoulder',
@@ -28,7 +28,7 @@ CUES = {
     'check_texts': 'Great work! Check your texts for your score.',
     'power_hour': "It's power hour! Every rep counts double!",
     'hang_up': "That's a wrap! You can hang up now.",
-    'welcome': "You're on! Side view, head to toe in frame. Let's go!",
+    'welcome': "You're on! Upper body and knees in frame. Let's go!",
     'camera_off': "I can't see you! Turn your camera on so I can count.",
     'try_again': "Something glitched on my end. Hang up and call back in a minute!",
 }

@@ -14,7 +14,7 @@ def test_keys_and_exact_phrases():
     assert CUES['competition_over'] == "The challenge isn't open right now. Watch your texts!"
     assert CUES['time_up'] == 'Time!'
     assert CUES['hang_up'] == "That's a wrap! You can hang up now."
-    assert CUES['welcome'] == "You're on! Side view, head to toe in frame. Let's go!"
+    assert CUES['welcome'] == "You're on! Upper body and knees in frame. Let's go!"
     assert CUES['not_your_turn'] == "Not your turn! Text this number JOIN, then QUEUE. I'll text you when you're up."
     assert CUES['queued'] == "Line's busy, but you're in line now! I'll text you when you're up."
     assert CUES['not_signed_up'] == "You're not signed up! Text this number JOIN and your name."
