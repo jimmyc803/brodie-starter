@@ -248,7 +248,10 @@ def test_start_retries_503_with_same_call_id(tmp_path):
     assert {b["call_id"] for p, b, _ in r.disp.requests if p == "/calls/start"} == {"call-1"}
 
 
-def test_unsupported_modes():
+def test_unsupported_modes(monkeypatch):
+    # chert_api is refused without credentials; keep this hermetic if a dev shell exports them
+    monkeypatch.delenv("CHERT_FACETIME_TOKEN", raising=False)
+    monkeypatch.delenv("CHERT_PROJECT_ID", raising=False)
     with pytest.raises(UnsupportedMode, match="chert_api"):
         CompetitionCall("c", "l", None, None, hangup_mode="chert_api")
     with pytest.raises(UnsupportedMode):
