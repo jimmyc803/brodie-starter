@@ -48,6 +48,13 @@ the framework into the realtime session's push_video (JPEG). A warm job never st
 is then appended to the persona as free text (a recipe, a checklist), not parsed as exercises.
   .venv/bin/python -m facetime.worker --perception off --vision --voice gemini --persona starter/examples/meal_prep/persona.md \
       --plan-file starter/examples/meal_prep/recipe.md --handlers starter/examples/meal_prep/handlers.py dev
+Competition (CHALLENGE_MODE=competition; default demo keeps everything above): push-ups only with the strict judge, no
+DEMO_CLIENT_ID; on bind a challenge.worker CompetitionCall gatekeeps through the dispatcher (POST /calls/start; reject or
+dispatcher down -> leave within 5 s, nothing recorded), then runs the 3:00 count + 0:15 reveal with the judge, liveness
+and timeline cues as the only audio, checkpoints data/tmp/sessions/<call_id>.challenge.json after every rep and commits
+via /calls/event (reps_committed, call_ended) before leaving. Startup refuses HANGUP_MODE=chert_api, a missing
+DISPATCHER_URL/DISPATCHER_TOKEN or a missing liveness module; a daemon thread beats /calls/heartbeat every 30 s. Env:
+LINE_ID, CALLER_ID_SOURCE, HANGUP_MODE, REVEAL_MODE, CHALLENGE_SESSIONS_DIR. No media is ever written to disk.
 Run:
   .venv/bin/python -m facetime.worker --help
   .venv/bin/python -m facetime.worker [--plan "squats:10,pushups:8"] [--events-only] [--publish-data] dev     # LIVEKIT_URL/API_KEY/API_SECRET in env
@@ -71,6 +78,95 @@ AGENT_KIND = rtc.ParticipantKind.PARTICIPANT_KIND_AGENT
 BRIDGE_PREFIX = 'chert-bridge-'
 LK_COMMANDS = ('dev', 'start', 'connect', 'download-files', 'console')
 CONSUMERS = []                        # coroutines consumer(job) started per job; they read job.events (see docs/STARTER_EVENTS.md)
+CHALLENGE_MODES = ('demo', 'competition')
+CHERT_HANDLE_KEYS = ('caller', 'handle', 'from', 'phone', 'email')   # chert_call keys tried for the caller handle, in order
+HEARTBEAT_EVERY_S = 30.0
+JOB_BEAT_S = 30.0                     # job heartbeat (scope job) while a competition job runs
+JOB_STALL_S = 10.0                    # a counting job with no processed frame / controller tick this long is unhealthy
+JOB_STALE_S = 90.0                    # an active job whose health file is older than this is wedged
+COMMIT_WAIT_S = 15.0                  # aclose waits this long for the competition commit (the checkpoint is on disk already)
+_chert_keys_logged = False
+
+
+def challenge_mode():
+    """CHALLENGE_MODE: demo (default; the legacy DEMO_CLIENT_ID path) or competition (challenge/worker controller)."""
+    return (os.environ.get('CHALLENGE_MODE') or 'demo').strip().lower()
+
+
+def is_competition():
+    return challenge_mode() == 'competition'
+
+
+def caller_handle(chert_call):
+    """The caller handle from chert_call metadata: the first non-empty string among CHERT_HANDLE_KEYS (a nested
+    {handle|phone|email} object is looked into too). None when there is none."""
+    if not isinstance(chert_call, dict): return None
+    for k in CHERT_HANDLE_KEYS:
+        v = chert_call.get(k)
+        if isinstance(v, dict): v = next((v[x] for x in ('handle', 'phone', 'email') if isinstance(v.get(x), str) and v[x].strip()), None)
+        if isinstance(v, str) and v.strip(): return v.strip()
+    return None
+
+
+def metadata_note(md, redact):
+    """The job metadata for the joined-room line. redact (competition): chert_call as its key names only (the values hold
+    the caller's handle: phone or email)."""
+    parts = []
+    for k in ('chert_warm', 'chert_call', 'media'):
+        if k not in md: continue
+        v = md[k]
+        if redact and k == 'chert_call':
+            parts.append(f'chert_call=<keys {sorted(v) if isinstance(v, dict) else type(v).__name__}>')
+        else:
+            parts.append(f'{k}={json.dumps(v)[:80]}')
+    return ', '.join(parts) or 'none'
+
+
+def apply_judge_thresholds(pipe, thr):
+    """Feed thread: the live judge thresholds on the FramePipeline (judges built later get them too) and on its current
+    judge in place (buffered frames are kept: the accumulator reads its thresholds when it uses them)."""
+    from challenge.judge.gates import merged_thresholds
+    m = merged_thresholds(thr)
+    pipe.judge_thr = dict(thr)
+    j = getattr(pipe, 'judge', None)
+    if j is not None:
+        j.thr = m; j.acc.thr = m
+
+
+def health_path():
+    d = os.environ.get('WORKER_HEALTH_DIR') or os.path.join(DATA, 'tmp', 'worker_health')
+    return os.path.join(d, f"{os.environ.get('LINE_ID') or 'line-1'}.json")
+
+
+def supervisor_health(now=None):
+    """The supervisor heartbeat's health: a job in a call must have refreshed its health file within JOB_STALE_S and
+    called itself healthy; no active job = healthy. Returns (healthy, detail)."""
+    now = time.time() if now is None else now
+    try:
+        with open(health_path()) as f: h = json.load(f)
+    except FileNotFoundError:
+        return True, {'job': None}
+    except (OSError, ValueError) as e:
+        return False, {'job': f'unreadable health file: {e!r}'}
+    age = now - float(h.get('t') or 0)
+    if not h.get('active'): return True, {'job': 'idle'}
+    alive = True
+    if h.get('pid'):
+        try: os.kill(int(h['pid']), 0)
+        except ProcessLookupError: alive = False
+        except OSError: pass
+    if not alive: return True, {'job': 'gone'}                      # the job process exited without clearing it
+    ok = bool(h.get('healthy')) and age <= JOB_STALE_S
+    return ok, {'job': 'in_call', 'job_age_s': round(age, 1), 'job_healthy': bool(h.get('healthy')), 'call_id': h.get('call_id')}
+
+
+def log_chert_keys(chert_call):
+    """Log the chert_call key names once per process (never the values: they hold the caller's handle)."""
+    global _chert_keys_logged
+    if _chert_keys_logged: return
+    _chert_keys_logged = True
+    keys = sorted(chert_call) if isinstance(chert_call, dict) else None
+    print(f'[competition] chert_call keys: {keys if keys is not None else type(chert_call).__name__}', flush=True)
 
 
 def consumer(fn):
@@ -150,7 +246,8 @@ def resolve_mode(a, *, load_client=True):
         a.plan = None; a.exercise = None; a.floor = getattr(a, 'floor', None) or 'open'
     else:
         a.plan_text = None; a.floor = getattr(a, 'floor', None) or 'gated'
-        if a.exercise: a.plan = None
+        if is_competition(): a.plan = None; a.exercise = 'pushups'      # competition: one push-up set, never a client assignment
+        elif a.exercise: a.plan = None
         elif getattr(a, 'auto', False): a.plan = None
         else:
             if not a.plan and not os.environ.get('PLAN') and os.environ.get('DEMO_CLIENT_ID'):
@@ -272,6 +369,14 @@ class CoachJob:
         self.voice_mode = perception_off(a)                       # --perception off: no Perception; the worker emits its own session/status events
         self.recap = None                                         # facetime/call_recap.py: save the session + heat map card (DEMO_CLIENT_ID)
         self.t0 = time.monotonic(); self.ev_seq = 0; self.vision = None; self.vision_logged = False; self.session_opened = False; self.open_task = None
+        # competition (CHALLENGE_MODE=competition): challenge.worker CompetitionCall per call; all its methods run on the loop
+        self.competition = is_competition() and not self.voice_mode
+        self.comp = None; self.comp_task = None; self.comp_client = None
+        self.clock = time.time; self.sleep = asyncio.sleep        # the controller's wall clock and sleep (tests replace them)
+        self.per_wall0 = None                                     # wall time of the Perception event clock's zero
+        self.pending_windows = collections.deque()                # ('win', t0, t1) event clock / ('thr', thresholds): applied by the feed thread
+        self.feed_busy = False; self.last_proc_wall = None        # drain before the commit; job health
+        self.hb_task = None
 
     # ---- lifecycle ----
     async def run(self):
@@ -294,7 +399,7 @@ class CoachJob:
             print(f'[worker] job {ctx.job.id}: connect failed ({type(e).__name__}: {str(e)[:120]}): the room went away before the peer connection completed '
                   f'(a doctor or warm room torn down early); leaving', flush=True)
             self.end_reason = 'connect failed'; await self.aclose(); self.shutdown_ctx(self.end_reason); return
-        md_note = ', '.join(f'{k}={json.dumps(self.md[k])[:80]}' for k in ('chert_warm', 'chert_call', 'media') if k in self.md) or 'none'
+        md_note = metadata_note(self.md, redact=self.competition)
         print(f'[worker] job {ctx.job.id}: joined room {self.room.name!r} as {self.room.local_participant.identity!r} (agent {a.agent_name!r}); '
               f'mode {describe_mode(a)}; audio {"OFF (events only)" if a.events_only else "cue player"}; '
               f'metadata: {md_note}; participants {list(self.room.remote_participants)}', flush=True)
@@ -306,7 +411,10 @@ class CoachJob:
             from facetime.perception import JsonlWriter
             self.event_writer = JsonlWriter(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=ctx.job.id))
         else:
-            self.per = Perception(self.cfg, pipe=self.pipe, say=(self.say_from_worker if self.player is not None else None), clip_s=(self.bank.duration if self.bank is not None else None))
+            # competition: the controller's cues are the only audio (the demo session would count and correct invalid reps aloud)
+            self.per = Perception(self.cfg, pipe=self.pipe, say=(self.say_from_worker if self.player is not None and not self.competition else None),
+                                  clip_s=(self.bank.duration if self.bank is not None else None))
+            self.per_wall0 = time.time() - (time.monotonic() - self.per.t0)
             self.per.on_event(self.on_event)
             self.event_writer = self.per.log_to(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=ctx.job.id))
             if self.player is not None:
@@ -361,6 +469,7 @@ class CoachJob:
         if self.leave_task is not None: self.leave_task.cancel()
         if self.open_task is not None and not self.open_task.done(): self.open_task.cancel()
         for t in getattr(self, 'consumer_tasks', []): t.cancel()
+        if self.comp is not None or self.comp_task is not None: await self.close_competition()   # commit before the teardown
         recap_close = asyncio.create_task(self.recap.aclose()) if self.recap is not None else None   # hang-up save runs alongside the teardown
         if self.video_task is not None and not self.video_task.done():                 # closes the VideoStream (read_video's finally)
             self.video_task.cancel()
@@ -428,7 +537,10 @@ class CoachJob:
         extra = getattr(self.event_writer, 'extra', None)                   # the JSONL lines carry the call id from the bind on (null before it)
         if isinstance(extra, dict): extra['call_id'] = self.call_id
         print(f'[worker] bound to {participant.identity!r} (call id {self.call_id or "n/a"}): {what}', flush=True)
-        if self.recap is None and not self.warm and not self.voice_mode and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
+        if self.competition:
+            if self.warm: print('[competition] warm job (chert_warm): no call to gatekeep; nothing is counted or recorded here', flush=True)
+            elif self.comp is None and not self.closed: self.start_competition()
+        elif self.recap is None and not self.warm and not self.voice_mode and self.a.plan and os.environ.get('DEMO_CLIENT_ID'):
             from facetime.call_recap import CallRecap
             self.recap = CallRecap(self.a.plan, getattr(self.a, 'assignment', None))
             self.recap.start_task = asyncio.create_task(self.recap.start(), name='session-start')
@@ -448,6 +560,176 @@ class CoachJob:
             self.emit('session', state='open', exercise=None, target=None, count=0, item=None, done=False, mode='voice')
         finally:
             self.open_task = None
+
+    # ---- competition (CHALLENGE_MODE=competition): challenge/worker/controller.py ----
+    def start_competition(self):
+        """Gatekeep and run this call through a CompetitionCall (on the loop). Any setup error fails closed: logged, the
+        worker leaves, nothing is recorded."""
+        from challenge.worker.client import DispatcherClient
+        from challenge.worker.controller import CompetitionCall
+        from facetime.pipeline import load_json_arg
+        cc = self.md.get('chert_call')
+        log_chert_keys(cc)
+        if self.call_id is None:
+            cid = (cc.get('call_id') or cc.get('id')) if isinstance(cc, dict) else None
+            self.call_id = str(cid) if cid else f'job-{self.ctx.job.id}'
+            extra = getattr(self.event_writer, 'extra', None)
+            if isinstance(extra, dict): extra['call_id'] = self.call_id
+        source = (os.environ.get('CALLER_ID_SOURCE') or 'claim_window').strip()
+        handle = caller_handle(cc) if source == 'chert_meta' else None      # claim_window: the claim decides; send no PII
+        if source == 'chert_meta' and handle is None:
+            print(f'[competition] CALLER_ID_SOURCE=chert_meta but chert_call has no handle (keys tried {CHERT_HANDLE_KEYS}); the dispatcher decides without one', flush=True)
+        try:
+            self.comp_client = DispatcherClient.from_env()
+            self.comp = CompetitionCall(self.call_id, os.environ.get('LINE_ID') or 'line-1', handle, self.comp_client,
+                                        load_json_arg(getattr(self.a, 'judge_thr', None), None), clock=self.clock, say=self.say_cue,
+                                        leave=self.end, update_challenge_window=self.queue_challenge_window, sleep=self.sleep,
+                                        on_config=self.queue_judge_config, drain=self.drain_feed,
+                                        reveal_mode=(os.environ.get('REVEAL_MODE') or 'audio_only').strip(),
+                                        hangup_mode=(os.environ.get('HANGUP_MODE') or 'unverified').strip())
+        except Exception as e:
+            log.exception('competition setup failed')
+            print(f'[competition] setup failed ({type(e).__name__}: {e}): leaving without counting (fail closed)', flush=True)
+            self.end('competition setup failed'); return
+        print(f'[competition] call {self.call_id} on {self.comp.line_id}: asking the dispatcher (caller id {source}, handle {"yes" if handle else "no"})', flush=True)
+        self.comp_task = asyncio.create_task(self._run_competition(), name='competition')
+        self.hb_task = asyncio.create_task(self._job_heartbeat(), name='job-heartbeat')
+
+    async def _run_competition(self):
+        try:
+            if await self.comp.start():
+                await self.comp.run()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.exception('competition controller failed')
+            print(f'[competition] controller error ({type(e).__name__}: {e}): ending the call (the checkpoint is replayed by the reconciler)', flush=True)
+            self.end('competition controller error')
+
+    def say_cue(self, key, text, urgent):
+        """The controller's cues: urgent ones cut whatever plays (say_now), corrective ones queue as a correction."""
+        if self.player is None:
+            print(f'[competition] cue {key}: {text!r} (no audio: events only)', flush=True); return
+        if urgent: self.player.say_now(text, 'challenge', {'cue': key})
+        else: self.player.say(text, 'correction', {'cue': key})
+
+    def queue_challenge_window(self, t0_wall, t1_wall):
+        """Controller (wall clock) -> the feed thread, which applies it to Perception on the event clock before its next frame."""
+        if self.per_wall0 is None: return
+        self.pending_windows.append(('win', t0_wall - self.per_wall0, t1_wall - self.per_wall0))
+
+    def queue_judge_config(self, thr):
+        """Controller (on accept): the live judge thresholds for the pipeline judge, applied by the feed thread before its
+        next frame; the controller counts reps only after that (judge_applied, posted back to the loop in order)."""
+        self.pending_windows.append(('thr', dict(thr)))
+
+    async def drain_feed(self):
+        """end(): let the frame in flight finish and its events reach the loop (bounded by the controller)."""
+        while self.feed_busy:
+            await asyncio.sleep(0.01)
+        for _ in range(3): await asyncio.sleep(0)
+
+    def wall_of(self, ev_t):
+        """Perception event clock (seconds since per.t0) -> wall time."""
+        return (self.per_wall0 if self.per_wall0 is not None else self.clock()) + float(ev_t)
+
+    def before_frame(self):
+        """Feed thread, before each processed frame: apply queued challenge windows."""
+        while self.pending_windows:
+            item = self.pending_windows.popleft()
+            if item[0] == 'win':
+                self.per.update_challenge_window(item[1], item[2])
+            else:
+                apply_judge_thresholds(self.per.pipe, item[1])
+                if self.comp is not None: self.loop.call_soon_threadsafe(self.comp.judge_applied)
+
+    def after_frame(self, t_wall, size):
+        """Feed thread, after each processed frame: the frame's pose (as the pipeline saw it: never mirrored) for the
+        liveness challenge, handed to the controller on the loop."""
+        comp = self.comp
+        if comp is None or self.per is None: return
+        from challenge.judge.metrics import FrameObs
+        pipe = self.per.pipe; a = getattr(pipe, 'last_landmarks', None)
+        obs = FrameObs(t=float(t_wall), img=(None if a is None else a.copy()), world=None, persons=int(getattr(pipe, 'persons', 0) or 0),
+                       aspect=(size[0] / size[1]) if size and size[1] else 16 / 9)
+        self.loop.call_soon_threadsafe(comp.on_frame, obs)
+
+    async def close_competition(self):
+        """aclose: start (or join) the commit, let the cue in flight finish, leave the room at once (the call ends on time
+        whatever the dispatcher does), then wait for the commit (bounded; the checkpoint is on disk). The dispatcher
+        client is closed only when no end() is running any more."""
+        if self.hb_task is not None: self.hb_task.cancel()
+        end_task = None
+        if self.comp is not None:
+            end_task = asyncio.ensure_future(self.comp.end(self.end_reason or 'shutdown'))
+            await self.leave_room()
+            try:
+                await asyncio.wait_for(asyncio.shield(end_task), COMMIT_WAIT_S)
+            except asyncio.TimeoutError:
+                print(f'[competition] commit still pending after {COMMIT_WAIT_S:g} s: checkpoint {self.comp.path} kept (committed:false)', flush=True)
+            except Exception as e:
+                log.exception('competition end failed: %r', e)
+            self.write_health(active=False)
+        if self.comp_task is not None and not self.comp_task.done():
+            self.comp_task.cancel()
+            await asyncio.gather(self.comp_task, return_exceptions=True)
+        if self.comp_client is not None:
+            client = self.comp_client
+            if self.comp is not None and self.comp.ending:
+                self.comp._end_task.add_done_callback(lambda _t: asyncio.ensure_future(self._close_client(client)))
+            else:
+                await self._close_client(client)
+
+    @staticmethod
+    async def _close_client(client):
+        try: await client.aclose()
+        except Exception as e: log.debug('dispatcher client close: %r', e)
+
+    async def leave_room(self):
+        """Competition: leave the room now (after at most 1.5 s of the cue in flight), before the commit finishes."""
+        if self.player is not None and self.room_connected():
+            for _ in range(15):
+                if not self.player.playing and self.player.pending is None and getattr(self.player, 'urgent', None) is None: break
+                await asyncio.sleep(0.1)
+        disconnect = getattr(self.room, 'disconnect', None)
+        if disconnect is None or not self.room_connected(): return
+        try: await asyncio.wait_for(disconnect(), 2.0)
+        except Exception as e: log.warning('room disconnect: %r', e)
+
+    def job_health(self):
+        """(healthy, detail) of this job: the feed thread alive, frames processed recently while a caller is bound, the
+        controller ticking. Sent with the job heartbeat and written for the supervisor's beat."""
+        now = time.time(); comp = self.comp
+        feed_alive = self.thread is None or self.thread.is_alive()
+        frame_age = None if self.last_proc_wall is None else round(now - self.last_proc_wall, 1)
+        tick_age = None if comp is None or comp.last_tick_wall is None else round(now - comp.last_tick_wall, 1)
+        counting = comp is not None and comp.decision == 'accept' and comp.ended_at is None
+        healthy = feed_alive and self.worker_error is None and not (counting and (
+            (self.video_task is not None and frame_age is not None and frame_age > JOB_STALL_S) or (tick_age is not None and tick_age > JOB_STALL_S)))
+        detail = dict(call_id=self.call_id, state=(comp.decision if comp is not None else None) or 'gatekeeping', counting=counting,
+                      reps=len(comp.reps) if comp is not None else 0, frames_processed=self.processed, last_frame_age_s=frame_age,
+                      tick_age_s=tick_age, feed_alive=feed_alive)
+        return healthy, detail
+
+    def write_health(self, active=True):
+        """The job's health for the supervisor heartbeat (data/tmp/worker_health/<line>.json, atomic; no media)."""
+        try:
+            healthy, detail = self.job_health()
+            from challenge.worker.controller import write_json_atomic
+            write_json_atomic(health_path(), dict(t=time.time(), active=bool(active), healthy=healthy, pid=os.getpid(), **detail))
+        except Exception as e:
+            log.warning('job health file: %r', e)
+
+    async def _job_heartbeat(self):
+        """Every JOB_BEAT_S during a competition job: POST /calls/heartbeat scope job (in-call state) + the health file."""
+        line = os.environ.get('LINE_ID') or 'line-1'
+        while not self.closed:
+            healthy, detail = self.job_health(); self.write_health()
+            try:
+                await self.comp_client.heartbeat(line, detail, scope='job', healthy=healthy)
+            except Exception as e:
+                log.warning('job heartbeat failed: %r', e)
+            await asyncio.sleep(JOB_BEAT_S)
 
     def video_frames(self, track):
         """The VideoStream of the bound track (RGB24 for Perception; the tee hands the same frames to the model). Tests replace it."""
@@ -540,8 +822,11 @@ class CoachJob:
                 self.frame_size = (frame.width, frame.height)
             rgb = frame_to_rgb(frame)
             self.per.frames_received = self.seq; self.per.frames_dropped = self.dropped
+            self.feed_busy = True
+            if self.pending_windows: self.before_frame()
             self.per.process_frame(rgb, t_recv=t_mono, meta=dict(frame_seq=seq, ts_us=ts_us, t_capture=self.capture_time(ts_us, t_wall), t_recv=t_wall))
-            self.processed += 1
+            if self.comp is not None: self.after_frame(t_wall, (frame.width, frame.height))
+            self.processed += 1; self.feed_busy = False; self.last_proc_wall = time.time()
             if self.a.max_s and t_mono - self.first_frame_t >= self.a.max_s:
                 print(f'[worker] --max-s {self.a.max_s} reached', flush=True); self.loop.call_soon_threadsafe(self.end, 'max_s reached'); break
 
@@ -573,6 +858,9 @@ class CoachJob:
             self.recap.on_event(ev)
             if t == 'session' and (ev.get('state') == 'done' or ev.get('done')):        # plan finished, caller still here: save + show the card
                 asyncio.create_task(self.recap.finish(self.room, show=self.room_connected()), name='session-finish')
+        if t == 'rep' and self.comp is not None and not self.closed:
+            try: self.comp.on_rep(ev, t=self.wall_of(ev['t']))
+            except Exception: log.exception('competition on_rep failed for rep %s', ev.get('n'))
         if t == 'rep':
             c = ev.get('confidence') or {}
             print(f"[event] rep {ev['exercise']} {ev['n']} (agree {c.get('agree')}, amp {c.get('amp')}) t={ev['t']:.2f}", flush=True)
@@ -676,15 +964,73 @@ def main(argv=None):
     resolve_mode(a, load_client=False)
     if rest and rest[0] not in LK_COMMANDS and rest[0].startswith('-'):
         print(f'[worker] unknown flag {rest[0]!r} (our flags go before the LiveKit subcommand: {", ".join(LK_COMMANDS)})', file=sys.stderr); return 2
+    err = check_competition(a)
+    if err:
+        print(f'[worker] CHALLENGE_MODE={challenge_mode()}: {err}', file=sys.stderr); return 2
     os.environ[ARGS_ENV] = json.dumps({k: v for k, v in vars(a).items() if k != 'help'})
     if a.vision and a.voice != 'gemini':
         print('[worker] --vision only does something with --voice gemini (the video goes to the model session); nothing is forwarded', flush=True)
     print(f'[worker] agent {a.agent_name!r}; mode {describe_mode(a)}; '
           f'audio {"OFF (events only)" if a.events_only else "cue player"}; voice {a.voice}{" (" + (a.voice_model or "default model") + ", " + a.voice_name + ")" if a.voice != "off" else ""}; '
           f'handlers {a.handlers or "none"}; data channel {"on" if a.publish_data else "off"}; events -> {a.event_log}', flush=True)
+    if is_competition() and rest and rest[0] in ('dev', 'start', 'connect'):
+        start_heartbeat()
     sys.argv = [sys.argv[0]] + rest                           # the LiveKit Agents CLI parses the rest (dev | start | connect | download-files)
     cli.run_app(worker_options(a))
     return 0
+
+
+def check_competition(a):
+    """Startup checks; logs the challenge mode. Returns an error message (the worker refuses to start) or None."""
+    mode = challenge_mode()
+    if mode not in CHALLENGE_MODES:
+        return f'unknown challenge mode (expected one of {", ".join(CHALLENGE_MODES)})'
+    if mode == 'demo':
+        print('[worker] challenge mode: demo (legacy path: DEMO_CLIENT_ID assignment / plan; no gatekeeping, nothing sent to the dispatcher)', flush=True)
+        return None
+    from challenge.worker.controller import UnsupportedMode, check_modes
+    if perception_off(a):
+        return 'competition needs perception (--perception on): the judge and the liveness challenge run on the pose'
+    missing = [k for k in ('DISPATCHER_URL', 'DISPATCHER_TOKEN') if not (os.environ.get(k) or '').strip()]
+    if missing:
+        return f'{" and ".join(missing)} not set: every call would be rejected (fail closed)'
+    hangup = (os.environ.get('HANGUP_MODE') or 'unverified').strip(); reveal = (os.environ.get('REVEAL_MODE') or 'audio_only').strip()
+    try:
+        notes = check_modes(hangup, reveal)
+    except UnsupportedMode as e:
+        return str(e)
+    try:
+        __import__('importlib').import_module('challenge.judge.liveness')   # the anti-replay check must exist before any call is scored
+    except ImportError as e:
+        return f'liveness challenge unavailable ({e})'
+    print(f'[worker] challenge mode: COMPETITION (line {os.environ.get("LINE_ID") or "line-1"}, dispatcher {os.environ["DISPATCHER_URL"]}, '
+          f'CALLER_ID_SOURCE {(os.environ.get("CALLER_ID_SOURCE") or "claim_window").strip()}, HANGUP_MODE {hangup}, REVEAL_MODE {reveal}); '
+          f'push-ups only, strict judge on, no DEMO_CLIENT_ID', flush=True)
+    for n in notes: print(f'[worker] {n}', flush=True)
+    return None
+
+
+def start_heartbeat(every_s=HEARTBEAT_EVERY_S):
+    """The worker's DB heartbeat (ch_heartbeat 'worker:<line>' and 'worker' via POST /calls/heartbeat) every 30 s from a
+    daemon thread of the supervisor process (alive while the worker is, between calls too). A failed beat is logged."""
+    from challenge.worker.client import DispatcherError, heartbeat_sync
+    url, token = os.environ['DISPATCHER_URL'], os.environ['DISPATCHER_TOKEN']; line = os.environ.get('LINE_ID') or 'line-1'
+    detail = dict(pid=os.getpid(), agent=os.environ.get('AGENT_NAME', 'brodie-coach'))
+
+    def loop():
+        fails = 0
+        while True:
+            healthy, job = supervisor_health()
+            if not healthy: log.error('worker job unhealthy: %s', job)
+            try:
+                heartbeat_sync(url, token, line, dict(detail, **job), healthy=healthy); fails = 0
+            except DispatcherError as e:
+                fails += 1
+                log.error('worker heartbeat failed (%d in a row): %s', fails, e)
+                if fails in (1, 10) or fails % 60 == 0: print(f'[worker] heartbeat failed ({fails} in a row): {e}', flush=True)
+            time.sleep(every_s)
+    t = threading.Thread(target=loop, daemon=True, name='worker-heartbeat'); t.start()
+    return t
 
 
 if __name__ == '__main__':

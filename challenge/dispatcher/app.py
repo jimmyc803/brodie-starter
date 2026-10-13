@@ -9,13 +9,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hmac
+import json
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Callable, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from challenge.config import Config
 from challenge.dispatcher import admin, postcall, web
@@ -36,6 +37,16 @@ class StartIn(BaseModel):
     call_id: str
     line_id: str
     handle: str | None = None
+
+
+HEARTBEAT_DETAIL_MAX = 2048  # bytes of JSON
+
+
+class HeartbeatIn(BaseModel):
+    line_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+    scope: Literal["supervisor", "job"] = "supervisor"
+    healthy: bool = True
+    detail: dict[str, Any] = {}
 
 
 class EventIn(BaseModel):
@@ -122,12 +133,35 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
                                               "p_actor": "dispatcher", "p_reason": "LINE_OFFLINE_GAP_S env flag"})
             logger.warning("line_offline_gap_s set to %s from LINE_OFFLINE_GAP_S", want)
 
+    live_cfg: list[Config] = []
+
+    def call_config() -> dict:
+        """The numbers the worker's call timeline and judge use (competition_config, cached 15 s; defaults on a DB error)."""
+        if not live_cfg:
+            live_cfg.append(Config(get_store()))
+        c = live_cfg[0]
+        return {"call_count_s": c.get("call_count_s"), "call_reveal_s": c.get("call_reveal_s"),
+                "judge_thresholds": c.get("judge_thresholds")}
+
+    def power_hour_active(now: datetime) -> bool | None:
+        try:
+            ph = get_store().rpc("ch_power_hour", {"p_now": now})
+        except StoreError as e:  # the call goes on; only the cue is lost
+            logger.error("power hour lookup failed: %s", e)
+            return None
+        return bool(isinstance(ph, dict) and ph.get("active"))
+
     @app.post("/calls/start", dependencies=[Depends(auth)])
     def calls_start(body: StartIn) -> dict:
+        """C4 + optional fields on accept (task 30, noted in PLAN): power_hour_active (bool, null when unknown) for the
+        in-call power hour cue, config {call_count_s, call_reveal_s, judge_thresholds} for the worker's timeline."""
         now = clock()
         r = rpc("ch_call_start", {"p_call_id": body.call_id, "p_line_id": body.line_id,
                                   "p_handle": body.handle, "p_mode": flags.CALLER_ID_SOURCE, "p_now": now})
         out = {"decision": r["decision"], "user_id": r.get("user_id"), "reason": r["reason"], "cue": r.get("cue")}
+        if r["decision"] == "accept":
+            out["power_hour_active"] = power_hour_active(now)
+            out["config"] = call_config()
         if flags.CALLER_ID_SOURCE == "chert_meta" and out["decision"] == "reject":
             out.update(_call_to_queue(body, out, now))
         return out
@@ -155,6 +189,27 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
         except (StoreError, KeyError, TypeError) as e:
             logger.error("call %s: auto-queue failed: %s", body.call_id, e)
             return {}
+
+    @app.post("/calls/heartbeat", dependencies=[Depends(auth)])
+    def calls_heartbeat(body: HeartbeatIn) -> dict:
+        """Worker liveness: ch_heartbeat('worker:<line_id>' for the supervisor, 'worker:<line_id>:job' for a job in a
+        call) with {detail, healthy}; the aggregate 'worker' row the alerts read is refreshed only by a healthy beat, so
+        a wedged job lets it go stale. detail <= 2 KB; line_id must be a line in line_state."""
+        if len(json.dumps(body.detail, default=str)) > HEARTBEAT_DETAIL_MAX:
+            raise HTTPException(413, "heartbeat detail too large")
+        now = clock()
+        lines = {x["line_id"] for x in rpc("ch_queue_view", {"p_now": now}).get("lines", [])}
+        if body.line_id not in lines:
+            raise HTTPException(404, "unknown line")
+        detail = {**body.detail, "line_id": body.line_id, "scope": body.scope, "healthy": body.healthy}
+        comps = [f"worker:{body.line_id}" + (":job" if body.scope == "job" else "")]
+        if body.healthy:
+            comps.append("worker")
+        else:
+            logger.error("worker heartbeat unhealthy: line %s scope %s detail %s", body.line_id, body.scope, body.detail)
+        for comp in comps:
+            rpc("ch_heartbeat", {"p_component": comp, "p_detail": detail, "p_now": now})
+        return {"ok": True, "healthy": body.healthy}
 
     @app.post("/calls/event", dependencies=[Depends(auth)])
     def calls_event(ev: EventIn) -> dict:

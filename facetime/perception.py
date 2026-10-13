@@ -161,6 +161,7 @@ class Perception:
         self._rc_t = {}; self._rc_last_i = None       # counter frame index -> service time, for turning_t on the event clock
         self._judge_off = None                        # pipeline judge clock - event clock (seconds), from the last judged frame
         self._windows = []; self._win_judge = None; self._win_done = 0   # challenge windows (event clock) and how many the judge has
+        self._win_at = []                             # judge-clock start each of those was registered at (update_challenge_window)
         self._seen = (None, -1e9)                     # exercise_seen: (name, t of the last event)
         self.hold = False                                              # set by the voice layer while a conversation is going; session.py pauses the rest/wait clock
         self._vis_emitted = None; self._vis_cand = (None, 0); self._paused = False; self.vis_hold = 5   # 0.5 s before a state change is reported (paused is hysteretic already)
@@ -208,12 +209,29 @@ class Perception:
         self._windows.append((t0, t1))
         return self._apply_windows()
 
+    def update_challenge_window(self, t0, t1):
+        """Set the window starting at t0 (event clock) to end at t1, or add it (a liveness FREEZE deadline shrinks after
+        start; C7.l). A window the judge already has is updated there at the judge-clock start it was registered at
+        (the clock offset drifts frame to frame). Returns True if applied now, False if queued."""
+        t0, t1 = float(t0), float(t1)
+        if t1 < t0: raise ValueError(f'challenge window ends before it starts: {t0} > {t1}')
+        for i, (a, _) in enumerate(self._windows):
+            if a != t0: continue
+            self._windows[i] = (t0, t1)
+            if i >= self._win_done: return self._apply_windows()
+            j = getattr(self.pipe, 'judge', None)
+            if j is None or id(j) != self._win_judge: return self._apply_windows()
+            j.update_challenge_window(self._win_at[i], self._win_at[i] + (t1 - t0))
+            return True
+        return self.set_challenge_window(t0, t1)
+
     def _apply_windows(self):
         j = getattr(self.pipe, 'judge', None)
         if j is None or self._judge_off is None: return False
-        if id(j) != self._win_judge: self._win_judge = id(j); self._win_done = 0      # a new judge gets every window
+        if id(j) != self._win_judge: self._win_judge = id(j); self._win_done = 0; self._win_at = []   # a new judge gets every window
         for t0, t1 in self._windows[self._win_done:]:
             j.set_challenge_window(t0 + self._judge_off, t1 + self._judge_off)
+            self._win_at.append(t0 + self._judge_off)
         self._win_done = len(self._windows)
         return True
 
