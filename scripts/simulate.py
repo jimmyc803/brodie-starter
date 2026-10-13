@@ -1,10 +1,13 @@
 """Compressed multi-day simulation of the Push-Up Challenge dispatcher (SPEC §11 P4 acceptance).
 
     PYTHONPATH=src:. .venv/bin/python scripts/simulate.py --users 60 --days 2 --lines 1 --seed 1
-        [--dsn DSN] [--report docs/challenge/SIMULATION_REPORT.md] [--no-report]
+        [--dsn SERVER_DSN] [--report docs/challenge/SIMULATION_REPORT.md] [--no-report]
 
-Drives the REAL code paths end to end against a local Postgres (a throwaway cluster from db/test/harness.py with
-every migration applied, unless --dsn is given):
+Drives the REAL code paths end to end against a local Postgres: a throwaway cluster from db/test/harness.py with
+every migration applied, or, with --dsn, a fresh `sim_<random>` database the script creates (shim + schema + every
+migration) on that LOCAL server (host localhost / 127.0.0.1 / ::1 / a unix socket; anything else is refused before
+connecting) and drops afterwards. The simulation never touches an existing database: it truncates tables, so it
+refuses to run in any database it did not name itself or whose clients table already has rows.
   * users text JOIN / YES / QUEUE / LEAVE / STOP / START / STATUS ... through POST /webhooks/mock of the dispatcher
     app (create_app, MESSAGING_PROVIDER=mock, CHALLENGE_ALLOW_MOCK_WEBHOOK=1) -> commands/handler -> outbox rows;
   * challenge.dispatcher.jobs.Jobs.run_due(now) runs every simulated 2 s step (ch_tick, power hours, freeze + final
@@ -59,7 +62,107 @@ REPLY_TEMPLATES = {"welcome", "join_confirm_prompt", "join_bad_name", "join_take
 QUIET_OK = {"youre_up", "post_call"} | REPLY_TEMPLATES | {"alert"}
 
 
+# ============================================================================ target database safety
+class UnsafeTarget(Exception):
+    """The simulation truncates tables: it must only ever run in a database it created on a local server."""
+
+
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+LOCAL_ADDRS = {"127.0.0.1", "::1"}
+SIM_DB = re.compile(r"^(simulation|sim_[0-9a-f]{12})$")
+
+
+def check_local_dsn(dsn: str, env: dict | None = None) -> dict:
+    """Refuse any DSN that could reach a non-local server (decided from the DSN + libpq env, before connecting)."""
+    from psycopg import ProgrammingError
+    from psycopg.conninfo import conninfo_to_dict
+    env = os.environ if env is None else env
+    try:
+        params = conninfo_to_dict(dsn)
+    except ProgrammingError as e:
+        raise UnsafeTarget(f"unparseable DSN: {e}") from e
+    if params.get("service") or env.get("PGSERVICE") or env.get("PGSERVICEFILE"):
+        raise UnsafeTarget("pg service definitions are not allowed (the host could not be checked)")
+    hosts = params.get("host") if params.get("host") is not None else env.get("PGHOST", "")
+    addrs = params.get("hostaddr") if params.get("hostaddr") is not None else env.get("PGHOSTADDR", "")
+    for h in str(hosts).split(","):
+        h = h.strip()
+        if not (h == "" or h.startswith(("/", "@")) or h.lower() in LOCAL_HOSTS):
+            raise UnsafeTarget(f"host {h!r} is not localhost / 127.0.0.1 / ::1 / a unix socket")
+    for a in str(addrs).split(","):
+        a = a.strip()
+        if a and a not in LOCAL_ADDRS:
+            raise UnsafeTarget(f"hostaddr {a!r} is not a loopback address")
+    return params
+
+
+def check_target_db(conn) -> None:
+    """Last guard before the simulation truncates anything: a database it named itself, with no clients."""
+    name = conn.execute("select current_database()").fetchone()[0]
+    if not SIM_DB.match(name):
+        raise UnsafeTarget(f"database {name!r} was not created by the simulation")
+    n = conn.execute("select count(*) from clients").fetchone()[0]
+    if n:
+        raise UnsafeTarget(f"database {name!r} already has {n} clients rows")
+
+
+def _psql() -> str:
+    import shutil
+
+    from db.test.harness import PG_BIN
+    exe = PG_BIN / "psql"
+    found = str(exe) if exe.exists() else shutil.which("psql")
+    if not found:
+        raise RuntimeError("psql not found (set PG_BIN)")
+    return found
+
+
+def create_sim_database(server_dsn: str) -> tuple[str, str]:
+    """Create `sim_<random>` on the local server of `server_dsn`, apply shim + schema + every migration (same as
+    db/test/harness.py), and return (dsn, name). The server DSN's own database is only used to run CREATE DATABASE."""
+    import secrets
+    import subprocess
+
+    import psycopg
+    from psycopg import sql
+    from psycopg.conninfo import make_conninfo
+
+    from db.test.harness import SCHEMA, SHIM, migration_files
+    check_local_dsn(server_dsn)
+    name = f"sim_{secrets.token_hex(6)}"
+    with psycopg.connect(server_dsn, autocommit=True) as c:
+        c.execute(sql.SQL("create database {}").format(sql.Identifier(name)))
+    dsn = make_conninfo(server_dsn, dbname=name)
+    try:
+        for path in [SHIM, SCHEMA, *migration_files()]:
+            proc = subprocess.run([_psql(), "-X", "-q", "-v", "ON_ERROR_STOP=1", "-d", dsn, "-f", str(path)],
+                                  capture_output=True, text=True, check=False)
+            if proc.returncode != 0:
+                raise RuntimeError(f"applying {path.name} to {name} failed:\n{proc.stderr}")
+        with psycopg.connect(dsn, autocommit=True) as c:
+            check_target_db(c)
+    except BaseException:
+        drop_sim_database(server_dsn, name)
+        raise
+    return dsn, name
+
+
+def drop_sim_database(server_dsn: str, name: str) -> None:
+    import psycopg
+    from psycopg import sql
+    if not SIM_DB.match(name) or name == "simulation":
+        raise UnsafeTarget(f"refusing to drop {name!r}: not a simulation database")
+    check_local_dsn(server_dsn)
+    with psycopg.connect(server_dsn, autocommit=True) as c:
+        c.execute(sql.SQL("drop database if exists {} with (force)").format(sql.Identifier(name)))
+
+
 # ============================================================================ plumbing
+def line_handle(line_id: str) -> str:
+    """The simulated FaceTime number of a line (lines.facetime_handle)."""
+    return f"+1555010{int(line_id.rsplit('-', 1)[1]):04d}"
+
+
 class ConnStore:
     """CONTRACTS C3 PgStore semantics over one persistent autocommit connection (PgStore opens one per call, which
     is too slow for ~10^5 simulated steps). Same SQL text and argument encoding as challenge.store.PgStore."""
@@ -134,6 +237,7 @@ class Agent:
     started: Counter = field(default_factory=Counter)  # ET day -> accepted calls
     name_attempts: list[str] = field(default_factory=list)
     stopper: bool = False
+    text_line: str | None = None  # line named by the last 'you're up' text (the number to FaceTime)
 
 
 class Sim:
@@ -150,8 +254,10 @@ class Sim:
 
         self.args, self.ET = args, ET
         self.rng = random.Random(args.seed)
+        check_local_dsn(dsn)
         self.st = ConnStore(dsn)
         self.n_lines = args.lines
+        check_target_db(self.st.conn)  # before _setup_db truncates anything
         self._setup_db()
         cfg = {k: v for k, v in self.st.q("select key, value from competition_config")}
         self.window_start = parse_ts(cfg["window_start"])
@@ -188,6 +294,8 @@ class Sim:
         self.metrics: Counter = Counter()
         self.waits: list[float] = []
         self.youre_up_latency: list[float] = []
+        self.claim_log: list[dict] = []  # every claim ch_tick made: {queue_id, user_id, line_id, at, until}
+        self.youre_up_at: dict[int, datetime] = {}  # queue_id -> first 'you're up' delivery
         self.line_time: dict[str, Counter] = {ln: Counter() for ln in self.lines}
         self.violations: dict[str, list[str]] = defaultdict(list)
         self.vcount: Counter = Counter()
@@ -201,6 +309,7 @@ class Sim:
     def _setup_db(self) -> None:
         from psycopg.types.json import Jsonb
         q = self.st.conn.execute
+        check_target_db(self.st.conn)
         q("truncate clients, calls, messages, audit_log, power_hours, join_pending, ch_event_log, ch_job_state,"
           " rank_state, heartbeats restart identity cascade")
         q("delete from line_state where line_id <> 'line-1'")
@@ -209,6 +318,8 @@ class Sim:
         for k in range(2, self.n_lines + 1):
             q("insert into lines (id, chert_agent_name, active) values (%s, %s, true)", (f"line-{k}", f"brodie{k}"))
             q("insert into line_state (line_id, state, updated_at) values (%s, 'idle', now())", (f"line-{k}",))
+        for k in range(1, self.n_lines + 1):  # each line's own FaceTime number, named in 'you're up' (C7.s)
+            q("update lines set facetime_handle = %s where id = %s", (line_handle(f"line-{k}"), f"line-{k}"))
         q("update line_state set state='idle', user_id=null, call_id=null, claimed_until=null, offline_until=null,"
           " in_call_since=null, version=0, updated_at=now()")
         q("delete from competition_config where key = 'frozen_at'")
@@ -416,6 +527,8 @@ class Sim:
 
     def on_delivered(self, agent: Agent, tpl: str, ctx: dict, sent_at: datetime) -> None:
         self.metrics["delivered:" + tpl] += 1
+        if tpl == "youre_up" and ctx.get("queue_id") is not None:
+            self.youre_up_at.setdefault(int(ctx["queue_id"]), self.now)
         if tpl == "youre_up" and ctx.get("claimed_until"):
             until = datetime.fromisoformat(ctx["claimed_until"])
             self.youre_up_latency.append((self.now - (until - timedelta(seconds=CLAIM_S))).total_seconds())
@@ -486,6 +599,9 @@ class Sim:
 
     # ------------------------------------------------------------------ calls (Chert router + fake worker)
     def route(self, agent: Agent | None, lines: dict) -> str:
+        if agent and agent.text_line in lines:  # FaceTime the number the 'you're up' text named
+            lid, agent.text_line = agent.text_line, None
+            return lid
         uid = agent.uid if agent else None
         for lid, l in lines.items():
             if uid and l["user_id"] == uid and l["state"] == "claimed":
@@ -952,6 +1068,8 @@ class Sim:
             if a and a.banned_at:
                 self.fail("opt_out_ban", f"banned {a.name} popped")
             self.claims[c["line_id"]] = {"queue_id": c["queue_id"], "user_id": c["user_id"], "at": t, "until": until}
+            self.claim_log.append({"queue_id": c["queue_id"], "user_id": c["user_id"], "line_id": c["line_id"],
+                                   "at": t, "until": until})
         for lid, l in lines.items():
             if l["state"] == "claimed" and l["claimed_until"] <= t:
                 self.fail("stuck_lines", f"{lid} claimed past claimed_until after tick")
@@ -994,10 +1112,43 @@ class Sim:
                 self.fail("dup_texts", f"provider sent {s['id']} with no messages row")
                 continue
             a = self.by_handle.get(s["handle"])
+            if row[1] == "youre_up":
+                ctx = row[2] or {}
+                named = [lid for lid in self.lines if line_handle(lid) in s["body"]]
+                if named != [ctx.get("line_id")]:
+                    self.fail("youre_up_line", f"'you're up' for {ctx.get('line_id')} names {named}: {s['body']!r}")
+                if a and len(named) == 1:
+                    a.text_line = named[0]
             if a:
                 self.on_delivered(a, row[1], row[2] or {}, row[4])
 
     # ================================================================== final verification
+    def verify_youre_up(self) -> None:
+        """Reconcile EVERY claim with a delivered 'you're up' before its claimed_until. A missing, suppressed, failed
+        or late text is a FAIL, unless the user gave the claim up first (LEAVE / connected / STOP / banned, i.e. the
+        entry left 'notified' by the user's or an admin's action, or the outbox dropped it as opted_out_or_banned)."""
+        q = self.st.q
+        status = {r[0]: r[1] for r in q("select id, status from queue where id = any(%s::bigint[])",
+                                        ([c["queue_id"] for c in self.claim_log],))}
+        opted = {int(r[0]) for r in q("select target from audit_log where action = 'opt_out_queue_remove'")}
+        msg = {r[0]: (r[1], r[2]) for r in q("select dedupe_key, status, last_error from messages"
+                                             " where template = 'youre_up'")}
+        for c in self.claim_log:
+            qid = c["queue_id"]
+            got = self.youre_up_at.get(qid)
+            if got is not None:
+                self.metrics["youre_up_on_time" if got < c["until"] else "youre_up_late"] += 1
+                continue  # a late one was already reported at delivery
+            m_status, m_err = msg.get(f"youre_up:{qid}", (None, None))
+            if status.get(qid) in ("connected", "left") or qid in opted or m_err == "opted_out_or_banned":
+                self.metrics["youre_up_excused"] += 1
+                continue
+            self.metrics["youre_up_missing"] += 1
+            a = self.by_uid.get(c["user_id"])
+            self.fail("youre_up_latency", f"claim q{qid} on {c['line_id']} for {a.name if a else c['user_id']} "
+                      f"({self.fmt(c['at'])}..{self.fmt(c['until'])}) never got 'you're up': message "
+                      f"{m_status or 'missing'}{f' ({m_err})' if m_err else ''}, entry {status.get(qid)}")
+
     def verify(self) -> None:
         from challenge.scoring import rank_order, rep_points
         from challenge.timeutil import in_quiet_hours, parse_ts
@@ -1007,6 +1158,7 @@ class Sim:
         lines = self.snap_lines()
         if any(l["state"] != "idle" for l in lines.values()):
             self.fail("end_state", f"lines not idle at end: {[(k, v['state']) for k, v in lines.items()]}")
+        self.verify_youre_up()
         left = q("select id, status, entered_at from queue where status in ('waiting','notified')")
         if left:
             self.fail("freeze", f"queue not closed after freeze: {len(left)} active entries remain "
@@ -1256,7 +1408,8 @@ CHECKS = [
     ("events_idem", "Worker events and /calls/start are idempotent (replays return the stored result, no double effect)"),
     ("end_state", "End state: lines idle, every accepted call ended + committed + post-processed, outbox drained, nothing failed"),
     ("power_hours", "Power hours: one per ET day, whole hour inside 12:00-22:00 ET, different hour on consecutive days"),
-    ("youre_up_latency", "'You're up' delivered before the claim expired"),
+    ("youre_up_latency", "Every claim's 'You're up' delivered before the claim expired (missing / suppressed / late = FAIL unless the user left, connected, STOPped or was banned first)"),
+    ("youre_up_line", "Every 'You're up' names the FaceTime number of exactly the line the user was popped on (users call that number)"),
     ("jobs_errors", "No Jobs.run_due step raised"),
     ("webhook", "Every inbound webhook accepted"),
     ("coverage", "Required scenarios occurred (spans of power hour / midnight / window_end, no-shows, walk-ins, every reject reason, STOP, bans, crash reconcile, ...)"),
@@ -1320,6 +1473,8 @@ def render_section(sim: Sim, args: argparse.Namespace, fingerprint: str) -> tupl
               f"| Bans (while waiting / while holding a claim) | {m['bans']} ({m['ban_while_waiting']} / {m['ban_while_claimed']}) |",
               f"| Queue wait to you're up, min (median / p90 / max) | {pct(w, .5):.0f} / {pct(w, .9):.0f} / {(w[-1] if w else 0):.0f} |",
               f"| You're up delivery latency, s (median / p99 / max) | {pct(lat, .5):.0f} / {pct(lat, .99):.0f} / {(lat[-1] if lat else 0):.0f} |",
+              f"| Claims reconciled: you're up on time / late / excused (user gave it up first) / missing | "
+              f"{m['youre_up_on_time']} / {m['youre_up_late']} / {m['youre_up_excused']} / {m['youre_up_missing']} |",
               f"| Texts sent / suppressed / held by quiet hours | {m['texts_out_sent']} / {m['texts_suppressed']} / {m['texts_deferred_by_quiet_hours']} |",
               f"| Texts sent by template | {', '.join(f'{k} {v}' for k, v in sorted(sent.items()))} |",
               f"| Power hours (ET) | {', '.join(f'{k} {v}' for k, v in sim.ph.items())} |",
@@ -1345,33 +1500,39 @@ Reproduce: `PYTHONPATH=src:. .venv/bin/python scripts/simulate.py --users 60 --d
 (and `--lines 2`). Exit code 0 iff every check passes.
 
 Hypothesis property tests for the scheduler/state machine: `tests/challenge/test_scheduler_properties.py`
-(1-line and 2-line RuleBasedStateMachine, 200 examples each).
+(1-line and 2-line RuleBasedStateMachine, 250 examples each, plus
+variants that toggle the admin pause).
 
 ## Findings
 
-Bugs found by the simulation and fixed in `db/migrations/20261019_challenge_sim_fixes.sql` (regression tests in
-`tests/challenge/test_scheduler_properties.py`; with the migration removed, seed 1 fails both checks):
+Bugs found by the simulation and fixed in `db/migrations/20261019_challenge_sim_fixes.sql` (CONTRACTS C7.s; regression
+tests in `tests/challenge/test_scheduler_properties.py` and `tests/challenge/test_db_sim_fixes.py`):
 
-1. **The freeze did not close the queue** (SPEC §7 "Freeze at window_end: stop popping, close queue"). `ch_tick` stopped
-   popping but left entries `waiting` forever. Now step 2 also expires every waiting entry once
-   `ch_calls_frozen(p_now)`, with audit reason `frozen` (`test_freeze_closes_queue`).
+1. **window_end did not close the queue** (SPEC §7 "Freeze at window_end: stop popping, close queue"). `ch_tick`
+   stopped popping but left entries `waiting` forever. Now every waiting entry is expired once p_now >= window_end
+   (audit reason `frozen`). A manual `competition_frozen` (admin pause) only stops popping and keeps the queue; a
+   claim that expires during a pause goes back to `waiting` with its place kept (`test_freeze_closes_queue`,
+   `test_admin_pause_keeps_queue_window_end_closes_it_without_missed_slot`, stateful pause/close invariants).
 2. **'You're up' starved behind bulk texts.** `ch_outbox_claim` was strict FIFO. A pop during a bulk send (power-hour
    start + ending-soon to every user at `outbound_rate_per_min` 20) delivered 'you're up' 158 s late, after the
-   90 s claim had expired, so the user lost the slot without being told in time. Due `youre_up` rows are now
-   claimed first (`test_youre_up_not_starved_by_bulk_texts`).
+   90 s claim had expired. Claims are now earliest-deadline-first (youre_up: its claimed_until; other rows: due
+   time + 300 s), so 'you're up' overtakes fresh bulk rows but cannot starve ordinary texts, and a 'you're up'
+   whose claim is gone is suppressed instead of sent late (`test_youre_up_not_starved_by_bulk_texts`,
+   `test_youre_up_churn_cannot_starve_ordinary_texts`). The run reconciles every claim against a delivered
+   'you're up' before its deadline.
+3. **'You're up' did not say which line to call.** The text now names the line's FaceTime number
+   (`lines.facetime_handle`; with one line `brodie_number`). Simulated users FaceTime the number in the text.
+4. **A claim that expired at the freeze still sent missed_slot** ("Text QUEUE…") when QUEUE is refused. No longer.
+5. `ch_set_opt` (STOP) and `ch_admin_queue_remove` freed claimed lines without the `line:claimed->idle` audit row;
+   they now go through `ch_calls_line_set`. `ch_admin_ban/unban` gained a `p_now` overload (the simulation and
+   property tests pass the simulated clock; the 3-arg admin-site form keeps `now()`).
 
-Observations, not fixed (product or ops decisions):
+Observation, not fixed (product decision): queue-position updates are about 40 % of all outbound texts and share
+the 20/min outbox with everything else.
 
-- The 'you're up' text does not say which line. With 2 lines the simulation assumes Chert routes the claim holder to
-  the claimed line's agent; a holder who reaches the other line is rejected `not_your_turn`.
-- A claim that expires at the freeze still sends `missed_slot` ("Text QUEUE when you're ready…") after the
-  competition is over (`ch_tick` step 1 does not check the freeze).
-- Queue-position updates make up about 40 % of all outbound texts (1,165 of 2,879 for 60 users in run 1-line/seed 1).
-  They go through the same 20/min outbox as everything else.
-- `ch_set_opt` (STOP) and `ch_admin_queue_remove` set a claimed line to idle with a direct update. They write no
-  `line:claimed->idle` audit row, although every other line transition writes one.
-- `ch_admin_set_ban` stamps `banned_at` with the wall clock `now()`, not an injected time. Logic only checks
-  `banned_at is not null`, so behaviour is unaffected.
+Safety: the script only runs in a database it creates (`sim_<random>` on a localhost / unix-socket server given by
+`--dsn`, dropped afterwards, or a throwaway cluster) and refuses a non-empty `clients` table
+(`tests/challenge/test_simulate_safety.py`).
 """
 
 
@@ -1405,12 +1566,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--days", type=int, default=2)
     ap.add_argument("--lines", type=int, choices=(1, 2), default=1)
     ap.add_argument("--seed", type=int, default=1)
-    ap.add_argument("--dsn", help="existing migrated database (default: throwaway local cluster)")
+    ap.add_argument("--dsn", help="LOCAL server to create (and drop) a fresh sim_<random> database on, e.g. "
+                    "'host=/tmp dbname=postgres' or postgresql://postgres@127.0.0.1/postgres (default: throwaway "
+                    "cluster). Non-local hosts are refused; an existing database is never used.")
     ap.add_argument("--report", default=str(ROOT / "docs" / "challenge" / "SIMULATION_REPORT.md"))
     ap.add_argument("--no-report", action="store_true")
     args = ap.parse_args(argv)
     if args.days < 1 or args.days > 6 or args.users < 10:
         ap.error("--days must be 1..6 and --users >= 10")
+    if args.dsn:
+        try:
+            check_local_dsn(args.dsn)  # refuse before connecting or touching the environment
+        except UnsafeTarget as e:
+            print(f"simulate: refusing --dsn: {e}", file=sys.stderr)
+            return 2
 
     os.environ.update({"JOBS_ENABLED": "0", "MESSAGING_PROVIDER": "mock", "CHALLENGE_ALLOW_MOCK_WEBHOOK": "1",
                        "CHALLENGE_MODE": "test", "POWER_HOUR_SECRET": f"simulation-seed-{args.seed:08d}",
@@ -1421,8 +1590,14 @@ def main(argv: list[str] | None = None) -> int:
     logging.disable(logging.CRITICAL)  # the run is judged by its checks, not by log noise
 
     cluster = None
-    dsn = args.dsn
-    if not dsn:
+    created = None
+    if args.dsn:
+        try:
+            dsn, created = create_sim_database(args.dsn)
+        except UnsafeTarget as e:
+            print(f"simulate: refusing --dsn: {e}", file=sys.stderr)
+            return 2
+    else:
         from db.test.harness import PgCluster
         cluster = PgCluster.start()
         cluster.build_template()
@@ -1443,6 +1618,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{'PASS' if ok else 'FAIL'} fingerprint={fp}")
         return 0 if ok else 1
     finally:
+        if created:
+            drop_sim_database(args.dsn, created)  # with (force): closes the simulation's own connections
         if cluster:
             cluster.stop()
 

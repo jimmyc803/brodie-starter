@@ -320,7 +320,7 @@ PROACTIVE = """welcome youre_up missed_slot queue_update post_call rank_drop str
 ph_announce ph_warn ph_start daily_recap ending_soon final_results""".split()
 CTX = {
     "display_name": "Coach_1", "position": 3, "eta": "10 min", "calls_left": 2,
-    "claim_window_s": 90, "points": 120, "valid_reps": 20, "rank": 7, "streak": 3,
+    "claim_window_s": 90, "line_handle": "+15550001111", "points": 120, "valid_reps": 20, "rank": 7, "streak": 3,
     "power_hour": "16:00–17:00", "daily_call_cap": 5,
     "leaders": "1. Ace 500; 2. Bee 450; 3. Cee 400; 4. Dee 350; 5. Eve 300",
     "rejected_reps": 2, "points_earned": 40, "old_rank": 4, "next_rank": 6,
@@ -350,6 +350,7 @@ def test_template_content_and_length():
     for field in ("120", "20", "7", "2", "3", "16:00–17:00"):
         assert field in render("status", CTX, False)
     assert "90s" in render("youre_up", CTX, False)
+    assert "FaceTime +15550001111 now" in render("youre_up", CTX, False)  # names the line to call
     long = {**CTX, "display_name": "A" * 1000, "leaders": "Runner 100 points; " * 100}
     for key in ("welcome", "top"):
         text = render(key, long, True)

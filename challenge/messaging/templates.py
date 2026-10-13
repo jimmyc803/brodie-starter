@@ -16,7 +16,7 @@ TEMPLATES: dict[str, str] = {
     "call_queued": "Line's busy, so you're in line: #{position}, ETA {eta}. We'll text you when you're up, then FaceTime back. {calls_left} calls left today.",
     "queue_already": "You're already in line: #{position}, ETA {eta}. Stay ready!",
     "queue_in_call": "You're already in a call. Focus on those clean reps — you've got this!",
-    "youre_up": "You're up! FaceTime now — you've got {claim_window_s}s to claim your turn. Let's go!",
+    "youre_up": "You're up! FaceTime {line_handle} now — you've got {claim_window_s}s to claim your turn. Let's go!",
     "missed_slot": "Missed your slot? No sweat. Text QUEUE when you're ready to jump back in.",
     "queue_update": "Moving up! You're #{position} in line, ETA {eta}. Stay loose, stay ready!",
     "left_queue": "You're out of the queue. Text QUEUE when you're ready for another round.",

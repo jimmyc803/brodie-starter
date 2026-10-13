@@ -167,7 +167,7 @@ def test_quiet_boundary_release_and_bypass(env):
     release = (T0 + timedelta(days=1)).replace(hour=9)
     assert conn.execute("select not_before from messages where dedupe_key='quiet'").fetchone()[0] == release
     enqueue(env, "reply")
-    enqueue(env, "turn", "youre_up", True, {"claim_window_s": 90})
+    enqueue(env, "turn", "youre_up", True, {"claim_window_s": 90, "line_handle": "+15550001111"})
     enqueue(env, "post", "post_call", True, {"valid_reps": 10, "rejected_reps": 1,
             "points_earned": 10, "points": 10, "rank": 1, "streak": 1, "result_url": "https://example.test/r/1"})
     assert outbox.run_once(clock["now"]) == 3

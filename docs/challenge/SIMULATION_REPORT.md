@@ -14,38 +14,44 @@ Reproduce: `PYTHONPATH=src:. .venv/bin/python scripts/simulate.py --users 60 --d
 (and `--lines 2`). Exit code 0 iff every check passes.
 
 Hypothesis property tests for the scheduler/state machine: `tests/challenge/test_scheduler_properties.py`
-(1-line and 2-line RuleBasedStateMachine, 200 examples each).
+(1-line and 2-line RuleBasedStateMachine, 250 examples each, plus
+variants that toggle the admin pause).
 
 ## Findings
 
-Bugs found by the simulation and fixed in `db/migrations/20261019_challenge_sim_fixes.sql` (regression tests in
-`tests/challenge/test_scheduler_properties.py`; with the migration removed, seed 1 fails both checks):
+Bugs found by the simulation and fixed in `db/migrations/20261019_challenge_sim_fixes.sql` (CONTRACTS C7.s; regression
+tests in `tests/challenge/test_scheduler_properties.py` and `tests/challenge/test_db_sim_fixes.py`):
 
-1. **The freeze did not close the queue** (SPEC §7 "Freeze at window_end: stop popping, close queue"). `ch_tick` stopped
-   popping but left entries `waiting` forever. Now step 2 also expires every waiting entry once
-   `ch_calls_frozen(p_now)`, with audit reason `frozen` (`test_freeze_closes_queue`).
+1. **window_end did not close the queue** (SPEC §7 "Freeze at window_end: stop popping, close queue"). `ch_tick`
+   stopped popping but left entries `waiting` forever. Now every waiting entry is expired once p_now >= window_end
+   (audit reason `frozen`). A manual `competition_frozen` (admin pause) only stops popping and keeps the queue; a
+   claim that expires during a pause goes back to `waiting` with its place kept (`test_freeze_closes_queue`,
+   `test_admin_pause_keeps_queue_window_end_closes_it_without_missed_slot`, stateful pause/close invariants).
 2. **'You're up' starved behind bulk texts.** `ch_outbox_claim` was strict FIFO. A pop during a bulk send (power-hour
    start + ending-soon to every user at `outbound_rate_per_min` 20) delivered 'you're up' 158 s late, after the
-   90 s claim had expired, so the user lost the slot without being told in time. Due `youre_up` rows are now
-   claimed first (`test_youre_up_not_starved_by_bulk_texts`).
+   90 s claim had expired. Claims are now earliest-deadline-first (youre_up: its claimed_until; other rows: due
+   time + 300 s), so 'you're up' overtakes fresh bulk rows but cannot starve ordinary texts, and a 'you're up'
+   whose claim is gone is suppressed instead of sent late (`test_youre_up_not_starved_by_bulk_texts`,
+   `test_youre_up_churn_cannot_starve_ordinary_texts`). The run reconciles every claim against a delivered
+   'you're up' before its deadline.
+3. **'You're up' did not say which line to call.** The text now names the line's FaceTime number
+   (`lines.facetime_handle`; with one line `brodie_number`). Simulated users FaceTime the number in the text.
+4. **A claim that expired at the freeze still sent missed_slot** ("Text QUEUE…") when QUEUE is refused. No longer.
+5. `ch_set_opt` (STOP) and `ch_admin_queue_remove` freed claimed lines without the `line:claimed->idle` audit row;
+   they now go through `ch_calls_line_set`. `ch_admin_ban/unban` gained a `p_now` overload (the simulation and
+   property tests pass the simulated clock; the 3-arg admin-site form keeps `now()`).
 
-Observations, not fixed (product or ops decisions):
+Observation, not fixed (product decision): queue-position updates are about 40 % of all outbound texts and share
+the 20/min outbox with everything else.
 
-- The 'you're up' text does not say which line. With 2 lines the simulation assumes Chert routes the claim holder to
-  the claimed line's agent; a holder who reaches the other line is rejected `not_your_turn`.
-- A claim that expires at the freeze still sends `missed_slot` ("Text QUEUE when you're ready…") after the
-  competition is over (`ch_tick` step 1 does not check the freeze).
-- Queue-position updates make up about 40 % of all outbound texts (1,165 of 2,879 for 60 users in run 1-line/seed 1).
-  They go through the same 20/min outbox as everything else.
-- `ch_set_opt` (STOP) and `ch_admin_queue_remove` set a claimed line to idle with a direct update. They write no
-  `line:claimed->idle` audit row, although every other line transition writes one.
-- `ch_admin_set_ban` stamps `banned_at` with the wall clock `now()`, not an injected time. Logic only checks
-  `banned_at is not null`, so behaviour is unaffected.
+Safety: the script only runs in a database it creates (`sim_<random>` on a localhost / unix-socket server given by
+`--dsn`, dropped afterwards, or a throwaway cluster) and refuses a non-empty `clients` table
+(`tests/challenge/test_simulate_safety.py`).
 
 <!-- run:users=60,days=2,lines=1,seed=1 -->
 ## Run: --users 60 --days 2 --lines 1 --seed 1 — PASS
 
-Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end Sun 2026-10-18 23:59:59 ET). Jobs.run_due calls: 57,770; 2 s steps skipped while quiescent: 46,630; RPCs: 305,671; wall clock 86 s. Fingerprint `0ba6470720786b5f`.
+Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end Sun 2026-10-18 23:59:59 ET). Jobs.run_due calls: 58,172; 2 s steps skipped while quiescent: 46,228; RPCs: 307,088; wall clock 93 s. Fingerprint `d0e246cba168b471`.
 
 | Check | Result | Violations |
 |---|---|---|
@@ -67,7 +73,8 @@ Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end S
 | Worker events and /calls/start are idempotent (replays return the stored result, no double effect) | PASS | 0 |
 | End state: lines idle, every accepted call ended + committed + post-processed, outbox drained, nothing failed | PASS | 0 |
 | Power hours: one per ET day, whole hour inside 12:00-22:00 ET, different hour on consecutive days | PASS | 0 |
-| 'You're up' delivered before the claim expired | PASS | 0 |
+| Every claim's 'You're up' delivered before the claim expired (missing / suppressed / late = FAIL unless the user left, connected, STOPped or was banned first) | PASS | 0 |
+| Every 'You're up' names the FaceTime number of exactly the line the user was popped on (users call that number) | PASS | 0 |
 | No Jobs.run_due step raised | PASS | 0 |
 | Every inbound webhook accepted | PASS | 0 |
 | Required scenarios occurred (spans of power hour / midnight / window_end, no-shows, walk-ins, every reject reason, STOP, bans, crash reconcile, ...) | PASS | 0 |
@@ -75,33 +82,34 @@ Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end S
 | Metric | Value |
 |---|---|
 | Users (joined / never confirmed) | 58 / 2 |
-| Inbound texts (webhook re-deliveries) | 686 (31) |
-| QUEUE replies: joined / already / line open / at cap / in call | 365 / 11 / 12 / 8 / 0 |
-| Pops (you're up) / no-shows (19.2%) | 339 / 65 |
-| /calls/start attempts / accepted / walk-ins | 361 / 278 / 5 |
-| Gatekeeper rejects | at_cap 7, banned 3, frozen 6, not_registered 20, not_your_turn 47 |
-| Accepted call kinds | early_leave 22, full 217, short 13, steered 6, timed 9, zero_reps 11 |
-| Counted calls / max per user per ET day / user-days at cap / capped then called next day | 274 / 5 / 8 / 1 |
-| Worker crashes (tick timeouts / reconciled) | 13 (13 / 13) |
-| Event replays / /calls/start replays | 48 / 11 |
-| Reps total / valid / 2x (power hour) / points | 6721 / 4880 / 301 / 5181 |
-| Rejected reps by reason | after_count 14, after_freeze 27, in_challenge 167, judge 1285, liveness_fail 348 |
+| Inbound texts (webhook re-deliveries) | 692 (34) |
+| QUEUE replies: joined / already / line open / at cap / in call | 362 / 7 / 18 / 10 / 0 |
+| Pops (you're up) / no-shows (16.2%) | 340 / 55 |
+| /calls/start attempts / accepted / walk-ins | 368 / 288 / 4 |
+| Gatekeeper rejects | at_cap 4, banned 3, frozen 6, not_registered 20, not_your_turn 47 |
+| Accepted call kinds | early_leave 21, full 219, short 24, steered 6, timed 11, zero_reps 7 |
+| Counted calls / max per user per ET day / user-days at cap / capped then called next day | 273 / 5 / 10 / 2 |
+| Worker crashes (tick timeouts / reconciled) | 6 (6 / 6) |
+| Event replays / /calls/start replays | 36 / 13 |
+| Reps total / valid / 2x (power hour) / points | 7017 / 5154 / 331 / 5485 |
+| Rejected reps by reason | after_count 15, after_freeze 22, in_challenge 133, judge 1335, liveness_fail 358 |
 | Calls spanning power-hour start / end / with 1x+2x reps | 2 / 2 / 4 |
-| Calls spanning ET midnight / window_end (reps before / after) | 1 / 1 (10 / 27) |
-| STOP mid-queue (waiting / claimed) / LEAVE mid-queue / impatient LEAVE | 7 (7 / 0) / 3 / 21 |
+| Calls spanning ET midnight / window_end (reps before / after) | 1 / 1 (23 / 22) |
+| STOP mid-queue (waiting / claimed) / LEAVE mid-queue / impatient LEAVE | 7 (7 / 0) / 3 / 23 |
 | Bans (while waiting / while holding a claim) | 2 (1 / 1) |
-| Queue wait to you're up, min (median / p90 / max) | 37 / 125 / 232 |
-| You're up delivery latency, s (median / p99 / max) | 0 / 0 / 40 |
-| Texts sent / suppressed / held by quiet hours | 2879 / 0 / 62 |
-| Texts sent by template | daily_recap 71, ending_soon 56, final_results 56, help 46, join_bad_name 3, join_confirm_prompt 60, join_taken 3, left_queue 24, missed_slot 65, not_registered 3, ph_start 82, ph_warn 81, post_call 278, power 7, queue_already 11, queue_at_cap 8, queue_joined 365, queue_line_open 12, queue_update 1165, rules 5, start_ack 5, status 39, stop_ack 7, top 15, unknown 15, welcome 58, youre_up 339 |
+| Queue wait to you're up, min (median / p90 / max) | 28 / 123 / 1518 |
+| You're up delivery latency, s (median / p99 / max) | 0 / 0 / 14 |
+| Claims reconciled: you're up on time / late / excused (user gave it up first) / missing | 340 / 0 / 0 / 0 |
+| Texts sent / suppressed / held by quiet hours | 2738 / 0 / 62 |
+| Texts sent by template | daily_recap 70, ending_soon 56, final_results 56, help 46, join_bad_name 3, join_confirm_prompt 60, join_taken 3, left_queue 26, missed_slot 55, not_registered 4, ph_start 82, ph_warn 81, post_call 288, power 8, queue_already 7, queue_at_cap 10, queue_joined 362, queue_line_open 18, queue_update 1018, rules 6, start_ack 5, status 39, stop_ack 7, top 15, unknown 15, welcome 58, youre_up 340 |
 | Power hours (ET) | 2026-10-17 12:00–13:00, 2026-10-18 20:00–21:00 |
-| Line time share | line-1: in_call 24%, offline 24%, claimed 7%, idle 45% |
-| Top 5 (name, points, valid reps) | Lifter_26 258/258, Lifter_50 241/198, Lifter_45 224/224, Lifter_54 198/198, Lifter_40 172/144 |
+| Line time share | line-1: in_call 24%, offline 25%, claimed 7%, idle 45% |
+| Top 5 (name, points, valid reps) | Lifter_26 231/200, Lifter_07 184/168, Lifter_30x 182/163, Lifter_21 173/157, Lifter_03 172/172 |
 <!-- /run -->
 <!-- run:users=60,days=2,lines=2,seed=1 -->
 ## Run: --users 60 --days 2 --lines 2 --seed 1 — PASS
 
-Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end Sun 2026-10-18 23:59:59 ET). Jobs.run_due calls: 40,792; 2 s steps skipped while quiescent: 63,608; RPCs: 220,857; wall clock 76 s. Fingerprint `07ce497b15453d23`.
+Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end Sun 2026-10-18 23:59:59 ET). Jobs.run_due calls: 42,029; 2 s steps skipped while quiescent: 62,371; RPCs: 227,667; wall clock 83 s. Fingerprint `41aeca2dfa63ea3e`.
 
 | Check | Result | Violations |
 |---|---|---|
@@ -123,7 +131,8 @@ Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end S
 | Worker events and /calls/start are idempotent (replays return the stored result, no double effect) | PASS | 0 |
 | End state: lines idle, every accepted call ended + committed + post-processed, outbox drained, nothing failed | PASS | 0 |
 | Power hours: one per ET day, whole hour inside 12:00-22:00 ET, different hour on consecutive days | PASS | 0 |
-| 'You're up' delivered before the claim expired | PASS | 0 |
+| Every claim's 'You're up' delivered before the claim expired (missing / suppressed / late = FAIL unless the user left, connected, STOPped or was banned first) | PASS | 0 |
+| Every 'You're up' names the FaceTime number of exactly the line the user was popped on (users call that number) | PASS | 0 |
 | No Jobs.run_due step raised | PASS | 0 |
 | Every inbound webhook accepted | PASS | 0 |
 | Required scenarios occurred (spans of power hour / midnight / window_end, no-shows, walk-ins, every reject reason, STOP, bans, crash reconcile, ...) | PASS | 0 |
@@ -131,26 +140,27 @@ Simulated Sat 00:00:00 → Mon 10:00:00 ET (2026-10-17, 2026-10-18; window_end S
 | Metric | Value |
 |---|---|
 | Users (joined / never confirmed) | 58 / 2 |
-| Inbound texts (webhook re-deliveries) | 661 (31) |
-| QUEUE replies: joined / already / line open / at cap / in call | 268 / 3 / 108 / 13 / 0 |
-| Pops (you're up) / no-shows (12.6%) | 366 / 46 |
-| /calls/start attempts / accepted / walk-ins | 476 / 340 / 20 |
-| Gatekeeper rejects | at_cap 7, banned 2, frozen 6, not_registered 20, not_your_turn 101 |
-| Accepted call kinds | early_leave 21, full 257, short 31, steered 11, timed 12, zero_reps 8 |
-| Counted calls / max per user per ET day / user-days at cap / capped then called next day | 319 / 5 / 24 / 10 |
-| Worker crashes (tick timeouts / reconciled) | 5 (5 / 5) |
-| Event replays / /calls/start replays | 54 / 11 |
-| Reps total / valid / 2x (power hour) / points | 7590 / 5656 / 359 / 6015 |
-| Rejected reps by reason | after_count 17, after_freeze 40, in_challenge 183, judge 1586, liveness_fail 108 |
-| Calls spanning power-hour start / end / with 1x+2x reps | 4 / 3 / 7 |
-| Calls spanning ET midnight / window_end (reps before / after) | 2 / 2 (37 / 40) |
-| STOP mid-queue (waiting / claimed) / LEAVE mid-queue / impatient LEAVE | 7 (7 / 0) / 0 / 2 |
+| Inbound texts (webhook re-deliveries) | 686 (32) |
+| QUEUE replies: joined / already / line open / at cap / in call | 296 / 2 / 94 / 19 / 0 |
+| Pops (you're up) / no-shows (12.1%) | 381 / 46 |
+| /calls/start attempts / accepted / walk-ins | 484 / 351 / 18 |
+| Gatekeeper rejects | at_cap 8, banned 3, frozen 6, not_registered 20, not_your_turn 96 |
+| Accepted call kinds | early_leave 27, full 271, short 27, steered 10, timed 9, zero_reps 7 |
+| Counted calls / max per user per ET day / user-days at cap / capped then called next day | 333 / 5 / 28 / 10 |
+| Worker crashes (tick timeouts / reconciled) | 12 (12 / 12) |
+| Event replays / /calls/start replays | 62 / 11 |
+| Reps total / valid / 2x (power hour) / points | 8526 / 6316 / 370 / 6686 |
+| Rejected reps by reason | after_count 27, after_freeze 45, in_challenge 187, judge 1647, liveness_fail 304 |
+| Calls spanning power-hour start / end / with 1x+2x reps | 3 / 3 / 6 |
+| Calls spanning ET midnight / window_end (reps before / after) | 2 / 2 (33 / 45) |
+| STOP mid-queue (waiting / claimed) / LEAVE mid-queue / impatient LEAVE | 7 (6 / 1) / 0 / 2 |
 | Bans (while waiting / while holding a claim) | 2 (1 / 1) |
-| Queue wait to you're up, min (median / p90 / max) | 4 / 51 / 177 |
-| You're up delivery latency, s (median / p99 / max) | 0 / 0 / 4 |
-| Texts sent / suppressed / held by quiet hours | 2189 / 1 / 63 |
-| Texts sent by template | daily_recap 72, ending_soon 56, final_results 56, help 49, join_bad_name 3, join_confirm_prompt 60, join_taken 3, left_queue 2, missed_slot 45, not_registered 3, ph_start 82, ph_warn 81, post_call 340, power 7, queue_already 3, queue_at_cap 13, queue_joined 268, queue_line_open 108, queue_update 430, rules 6, start_ack 3, status 39, stop_ack 7, top 15, unknown 14, welcome 58, youre_up 366 |
+| Queue wait to you're up, min (median / p90 / max) | 6 / 56 / 182 |
+| You're up delivery latency, s (median / p99 / max) | 0 / 0 / 14 |
+| Claims reconciled: you're up on time / late / excused (user gave it up first) / missing | 381 / 0 / 0 / 0 |
+| Texts sent / suppressed / held by quiet hours | 2322 / 1 / 60 |
+| Texts sent by template | daily_recap 70, ending_soon 54, final_results 54, help 53, join_bad_name 3, join_confirm_prompt 60, join_taken 3, left_queue 2, missed_slot 46, not_registered 4, ph_start 80, ph_warn 79, post_call 350, power 8, queue_already 2, queue_at_cap 19, queue_joined 296, queue_line_open 94, queue_update 522, rules 6, start_ack 2, status 39, stop_ack 7, top 15, unknown 15, welcome 58, youre_up 381 |
 | Power hours (ET) | 2026-10-17 12:00–13:00, 2026-10-18 20:00–21:00 |
-| Line time share | line-1: in_call 16%, offline 16%, claimed 3%, idle 65%; line-2: in_call 12%, offline 13%, claimed 3%, idle 72% |
-| Top 5 (name, points, valid reps) | Lifter_13 294/250, Lifter_35 284/216, Lifter_45 232/211, Lifter_22 217/204, Lifter_04 186/186 |
+| Line time share | line-1: in_call 16%, offline 16%, claimed 3%, idle 64%; line-2: in_call 13%, offline 14%, claimed 3%, idle 70% |
+| Top 5 (name, points, valid reps) | Lifter_08 256/225, Lifter_45 237/237, Lifter_40 217/175, Lifter_20 196/196, Lifter_13 193/184 |
 <!-- /run -->

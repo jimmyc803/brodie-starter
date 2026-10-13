@@ -14,7 +14,11 @@ invariants are checked after every step:
   * a claim never lasts longer than claim_window_s (claimed_until - claim start <= claim_window_s and no claim
     survives a tick past claimed_until), so a no-show never blocks a line longer than claim_window_s;
   * <=1 in_call per line and every in_call line points at a live accepted call on that line;
-  * gatekeeper-rejected calls never count toward the cap; no pop and no accept at/after window_end (freeze).
+  * <=1 open (unended) accepted call per line, and a line has one exactly when it is in_call (with that call_id);
+  * gatekeeper-rejected calls never count toward the cap; no pop and no accept at/after window_end (freeze);
+  * freeze vs pause (C7.s): after a tick at/after window_end no waiting entry remains and no "text QUEUE"
+    missed_slot is written while frozen; a manual competition_frozen (toggled by the machine) stops popping but
+    never expires an eligible waiting entry.
 Seeded: derandomize=True, no example database.
 """
 from __future__ import annotations
@@ -42,7 +46,7 @@ CLAIM_S = 90
 GAP_S = 30
 COUNT_S, REVEAL_S, EXTRA_S = 180, 15, 60
 MIN_COUNTED_S = 30
-SETTINGS = settings(max_examples=200, stateful_step_count=40, deadline=None, derandomize=True, database=None,
+SETTINGS = settings(max_examples=250, stateful_step_count=40, deadline=None, derandomize=True, database=None,
                     suppress_health_check=[HealthCheck.too_slow, HealthCheck.filter_too_much,
                                            HealthCheck.data_too_large])
 
@@ -81,12 +85,14 @@ def pconn(db):
     conn.execute("delete from lines where id <> 'line-1'")
     for k, v in saved:
         _cfg(conn, k, v)
+    conn.execute("delete from competition_config where key = 'frozen_at'")
     conn.close()
 
 
 class SchedulerMachine(RuleBasedStateMachine):
     conn: psycopg.Connection
     n_lines = 1
+    pausing = False  # the admin pause rule is enabled only on the *Pausing machines
     stats: Counter
 
     def __init__(self):
@@ -116,6 +122,9 @@ class SchedulerMachine(RuleBasedStateMachine):
                       (h, uid))
             self.users.append(str(uid))
             self.handles.append(h)
+        _cfg(c, "competition_frozen", False)
+        c.execute("delete from competition_config where key = 'frozen_at'")
+        self.paused = False
         self.now = BASE
         self.window_end = BASE + timedelta(days=30)
         self.claim_start: dict[str, datetime] = {}  # line -> time its current claim was made
@@ -145,7 +154,7 @@ class SchedulerMachine(RuleBasedStateMachine):
         return sum(1 for x in s["calls"] if x["user_id"] == uid and x["counted"] and et_day(x["connected_at"]) == day)
 
     def frozen(self, now: datetime) -> bool:
-        return now >= self.window_end
+        return now >= self.window_end or self.paused
 
     def holds(self, s: dict, uid: str) -> list[str]:
         return [lid for lid, l in s["lines"].items() if l["user_id"] == uid and l["state"] in ("claimed", "in_call")]
@@ -186,8 +195,10 @@ class SchedulerMachine(RuleBasedStateMachine):
     def tick(self):
         now = self.now
         before = self.snap()
+        missed_before = self.conn.execute("select count(*) from messages where template = 'missed_slot'").fetchone()[0]
         r = self.st.rpc("ch_tick", {"p_now": now})
         after = self.snap()
+        self.check_close(before, after, now, missed_before)
         # Pop model: waiting entries as they were before the tick; calls_today after the tick's in_call timeouts
         # (they can finalize a call as counted before popping); line holders as after the timers, i.e. the
         # post-tick lines with this tick's new claims undone.
@@ -222,6 +233,43 @@ class SchedulerMachine(RuleBasedStateMachine):
         if not self.frozen(now) and any(l["state"] == "idle" for l in after["lines"].values()):
             left = self.eligible_waiting(after, now, set())
             assert not left, f"idle line while eligible users wait: {[q['id'] for q in left]}"
+        if self.paused:  # the admin lifts the pause after the chosen number of ticks
+            self.pause_ticks -= 1
+            if self.pause_ticks <= 0:
+                _cfg(self.conn, "competition_frozen", False)
+                self.paused = False
+
+    def check_close(self, before: dict, after: dict, now: datetime, missed_before: int) -> None:
+        """window_end closes the queue; an admin pause (competition_frozen) only stops popping (C7.s)."""
+        c = self.conn
+        waiting_ids = [q["id"] for q in before["active"] if q["status"] == "waiting"]
+        status = dict(c.execute("select id, status from queue where id = any(%s::bigint[])", (waiting_ids,)).fetchall())
+        if now >= self.window_end:
+            self.stats["closed_ticks"] += 1
+            left = c.execute("select id from queue where status = 'waiting'").fetchall()
+            assert not left, f"waiting entries survived a tick at/after window_end: {left}"
+        else:
+            if self.paused:
+                self.stats["paused_ticks"] += 1
+                for q in before["active"]:
+                    if q["status"] == "notified" and status_of(c, q["id"]) == "waiting":
+                        self.stats["pause_requeued"] += 1  # claim expired during the pause: place kept
+            for q in before["active"]:
+                if q["status"] == "waiting" and status[q["id"]] == "expired":
+                    cl = after["clients"][q["user_id"]]
+                    assert cl["banned"] or cl["opted_out"] or self.calls_today(after, q["user_id"], now) >= CAP, \
+                        f"eligible waiting entry {q['id']} expired before window_end (paused={self.paused})"
+        if self.frozen(now):
+            missed = c.execute("select count(*) from messages where template = 'missed_slot'").fetchone()[0]
+            assert missed == missed_before, "missed_slot ('text QUEUE') written while frozen"
+
+    @precondition(lambda self: self.pausing and not self.paused)
+    @rule(ticks=st.integers(1, 3))
+    def pause(self, ticks):
+        """Admin "freeze early" / pause (competition_frozen), independent of window_end (pausing machines only).
+        Other rules (joins, calls, clock advances) keep running while paused; the admin lifts it after `ticks` ticks."""
+        _cfg(self.conn, "competition_frozen", True)
+        self.paused, self.pause_ticks = True, ticks
 
     @rule(dt=st.integers(1, 400))
     def advance_and_tick(self, dt):
@@ -293,8 +341,10 @@ class SchedulerMachine(RuleBasedStateMachine):
     @rule(u=st.integers(0, N_USERS - 1))
     def ban(self, u):
         self._banned_once = True
-        r = self.st.rpc("ch_admin_ban", {"p_user_id": self.users[u], "p_reason": "property test", "p_actor": "t@x"})
+        r = self.st.rpc("ch_admin_ban", {"p_user_id": self.users[u], "p_reason": "property test", "p_actor": "t@x",
+                                         "p_now": self.now})
         assert r["ok"]
+        assert self.conn.execute("select banned_at from clients where id = %s", (self.users[u],)).fetchone()[0] == self.now
 
     @rule(u=st.integers(-1, N_USERS - 1), line=st.integers(0, 1),
           mode=st.sampled_from(["chert_meta", "chert_meta", "claim_window"]))
@@ -392,6 +442,18 @@ class SchedulerMachine(RuleBasedStateMachine):
             if q["status"] == "notified":
                 l = s["lines"].get(q["line_id"])
                 assert l and l["state"] == "claimed" and l["user_id"] == q["user_id"], "orphan notified entry"
+        open_calls: dict[str, list[str]] = {}
+        for x in s["calls"]:
+            if x["decision"] == "accept" and x["ended_at"] is None:
+                open_calls.setdefault(x["line_id"], []).append(x["id"])
+        for lid in set(open_calls) | set(s["lines"]):
+            ids = open_calls.get(lid, [])
+            assert len(ids) <= 1, f"{lid} has {len(ids)} open accepted calls: {ids}"
+            l = s["lines"].get(lid)
+            assert (l is not None and l["state"] == "in_call") == bool(ids), \
+                f"{lid} state={l and l['state']} but open accepted calls={ids}"
+            if ids:
+                assert l["call_id"] == ids[0], f"{lid} in_call with {l['call_id']} but open call is {ids[0]}"
         in_call_ids = [l["call_id"] for l in s["lines"].values() if l["state"] == "in_call"]
         assert len(in_call_ids) == len(set(in_call_ids)), "one call in_call on two lines"
         for x in s["calls"]:
@@ -409,6 +471,20 @@ class TwoLines(SchedulerMachine):
     n_lines = 2
 
 
+class OneLinePausing(SchedulerMachine):
+    n_lines = 1
+    pausing = True
+
+
+class TwoLinesPausing(SchedulerMachine):
+    n_lines = 2
+    pausing = True
+
+
+def status_of(c, qid: int) -> str:
+    return c.execute("select status from queue where id = %s", (qid,)).fetchone()[0]
+
+
 @pytest.mark.parametrize("machine", [OneLine, TwoLines], ids=["1-line", "2-lines"])
 def test_scheduler_state_machine(pconn, machine):
     machine.conn = pconn
@@ -419,13 +495,28 @@ def test_scheduler_state_machine(pconn, machine):
     assert st_["examples"] >= 200, st_
     assert st_["pops"] >= 200 and st_["tiered_pops"] >= 10, st_
     assert all(st_["start:" + k] > 0 for k in ("ok", "not_your_turn", "at_cap", "banned", "frozen", "not_registered")), st_
+    assert st_["closed_ticks"] > 0, st_
+
+
+@pytest.mark.parametrize("machine", [OneLinePausing, TwoLinesPausing], ids=["1-line", "2-lines"])
+def test_scheduler_state_machine_with_admin_pause(pconn, machine):
+    """Same machine plus the admin pause (competition_frozen toggled on and off): a pause stops popping but never
+    closes the queue; only window_end does (C7.s)."""
+    machine.conn = pconn
+    machine.stats = Counter()
+    run_state_machine_as_test(machine, settings=SETTINGS)
+    st_ = machine.stats
+    assert st_["examples"] >= 200, st_
+    assert st_["pops"] >= 100 and st_["paused_ticks"] >= 50 and st_["closed_ticks"] > 0, st_
+    assert st_["pause_requeued"] > 0, st_
 
 
 def test_youre_up_not_starved_by_bulk_texts(pconn, db):
     """Found by scripts/simulate.py (seed 1, Sun 20:00 ET): a pop that lands during a bulk send (power-hour start +
     ending-soon to every user at outbound_rate_per_min=20) queued its 'you're up' FIFO behind ~130 texts; it went
     out 158 s later, after the 90 s claim had expired, so the user lost the slot without ever being told in time.
-    'you're up' must be claimed ahead of already-due bulk rows."""
+    'you're up' must be claimed ahead of already-due bulk rows (the youre_up comes from a real pop, so its claim is
+    live: C7.s suppresses youre_up rows whose claim is gone)."""
     from challenge.config import Config
     from challenge.messaging.outbox import Outbox
     from challenge.messaging.providers import MockProvider
@@ -445,10 +536,14 @@ def test_youre_up_not_starved_by_bulk_texts(pconn, db):
         st_.rpc("ch_outbox_enqueue", {"p_handle": "+17770009999", "p_user_id": str(uid), "p_template": "ph_start",
                                       "p_body": None, "p_media_url": None, "p_dedupe_key": f"bulk:{k}",
                                       "p_not_before": now, "p_now": now, "p_ctx": {"power_hour": "8–9 PM"}})
-    st_.rpc("ch_outbox_enqueue", {"p_handle": "+17770009999", "p_user_id": str(uid), "p_template": "youre_up",
-                                  "p_body": None, "p_media_url": None, "p_dedupe_key": "youre_up:1",
-                                  "p_not_before": now, "p_now": now + timedelta(seconds=1),
-                                  "p_ctx": {"queue_id": 1, "line_id": "line-1", "claim_window_s": CLAIM_S}})
+    c.execute("delete from line_state where line_id <> 'line-1'")
+    c.execute("delete from lines where id <> 'line-1'")
+    c.execute("update line_state set state='idle', user_id=null, call_id=null, claimed_until=null, offline_until=null,"
+              " in_call_since=null, updated_at=now()")
+    _cfg(c, "competition_frozen", False)
+    _cfg(c, "window_end", "2026-10-18T23:59:59-04:00")
+    assert st_.rpc("ch_queue_join", {"p_user_id": str(uid), "p_now": now})["ok"]
+    assert len(st_.rpc("ch_tick", {"p_now": now + timedelta(seconds=1)})["claims"]) == 1  # queues the 'youre_up'
     clock = {"t": now}
     provider = MockProvider()
     store = PgStore(db)

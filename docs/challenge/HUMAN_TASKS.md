@@ -201,6 +201,9 @@ SELECT ch_config_set('brodie_number', '"+15551234567"'::jsonb, 'you@example.com'
 ```
 Goes to: `competition_config.brodie_number` (shown by the site view). Also set `site_url` the same way if your site URL differs
 from the default `https://brodie-pushups.vercel.app`: `SELECT ch_config_set('site_url', '"https://your-site"'::jsonb, 'you@example.com', 'site url');`
+The "You're up! FaceTime <number> now" text names the line's number: with one active line it uses `brodie_number`.
+If you run a second line, set each line's own FaceTime number (otherwise the text falls back to the Chert agent name):
+`UPDATE lines SET facetime_handle = '+15551234567' WHERE id = 'line-1';` (and the same for `line-2`).
 
 ---
 
