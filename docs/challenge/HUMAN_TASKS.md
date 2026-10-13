@@ -199,16 +199,13 @@ from the default `https://brodie-pushups.vercel.app`: `SELECT ch_config_set('sit
 
 ---
 
-## 9. Prizes: raffle prize, UFC fighter, first prize (SPEC 13)
+## 9. Prizes: first prize and UFC fighter (SPEC 13)
 
 Who: you. Unblocks: accurate prize display on the site and texts.
-- Raffle prize (config key `raffle_prize`, currently `"TBD"`):
-  `SELECT ch_config_set('raffle_prize', '"A signed glove"'::jsonb, 'you@example.com', 'raffle prize decided');`
-- First prize ($100) and the UFC fighter name are NOT config keys; they are written in page text:
-  `pushup-web/app/(board)/page.tsx` (search `Group call with a UFC fighter`) and `pushup-web/app/rules/page.tsx` (same text and the
-  `$100` line). Edit those strings to add the fighter's name or change the amount, commit, and redeploy Vercel. If you want these
-  editable live, that is a follow-up code change; it is not built.
-- Raffle eligibility threshold is `raffle_min_valid_reps` (default 100): change with `ch_config_set` if needed.
+- First prize (config key `first_prize`, default `"$100"`):
+  `SELECT ch_config_set('first_prize', '"$100"'::jsonb, 'you@example.com', 'first prize confirmed');`
+- UFC fighter for the top-3 group call (config key `ufc_fighter`, default null, shown as "a UFC fighter" until set):
+  `SELECT ch_config_set('ufc_fighter', '"Max Holloway"'::jsonb, 'you@example.com', 'fighter confirmed');`
 
 ---
 

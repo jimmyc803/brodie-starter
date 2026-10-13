@@ -13,8 +13,6 @@ select (select (value #>> '{}')::timestamptz from k where key = 'window_start') 
        (select (value #>> '{}')::timestamptz from k where key = 'window_end') as window_end,
        (coalesce((select value = 'true'::jsonb from k where key = 'competition_frozen'), false)
         or coalesce(now() >= (select (value #>> '{}')::timestamptz from k where key = 'window_end'), false)) as frozen,
-       (select value #>> '{}' from k where key = 'raffle_prize') as raffle_prize,
-       (select (value #>> '{}')::int from k where key = 'raffle_min_valid_reps') as raffle_min_valid_reps,
        (select value #>> '{}' from k where key = 'brodie_number') as brodie_number,
        (select value #>> '{}' from k where key = 'site_url') as site_url,
        (select value from k where key = 'avatar_level_thresholds') as avatar_level_thresholds,

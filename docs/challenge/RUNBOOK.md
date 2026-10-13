@@ -257,7 +257,7 @@ SELECT ch_admin_void_call('call-id', 'invalid setup reviewed', 'admin@example.co
 SELECT ch_config_set('competition_frozen', 'true'::jsonb, 'admin@example.com', 'early freeze approved');
 ```
 
-Rejudge and raffle use C4 admin endpoints with an allowlisted admin email.
+Rejudge uses the C4 admin endpoint with an allowlisted admin email.
 Load the token only inside the root environment wrapper:
 
 ```bash
@@ -266,14 +266,9 @@ sudo python3 /opt/brodie/current/infra/with-env.py bash -c 'curl --fail-with-bod
  -H "Content-Type: application/json" -d '\''{"apply":false}'\'' \
  http://127.0.0.1:8080/admin/rejudge'
 # Review the diff before repeating with apply:true.
-sudo python3 /opt/brodie/current/infra/with-env.py bash -c 'curl --fail-with-body -sS \
- -H "X-Brodie-Token: $DISPATCHER_TOKEN" -H "X-Admin-Email: admin@example.com" \
- -H "Content-Type: application/json" -d '\''{"seed":"recorded-public-draw-seed"}'\'' \
- http://127.0.0.1:8080/admin/raffle'
 ```
 
-Record the raffle seed and returned results. Freeze and settle all calls before
-the official draw. Rejudge apply, bans, voids and freeze change contestant
+Rejudge apply, bans, voids and freeze change contestant
 outcomes; execute only the incident's approved action and retain the audit trail.
 
 ## Rotate keys

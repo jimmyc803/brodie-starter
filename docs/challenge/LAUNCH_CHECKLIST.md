@@ -19,7 +19,7 @@ Times are relative to the competition start `window_start` (config; default 2026
 - [ ] Clip set recorded and ship gate passes (HUMAN_TASKS 10). Verify: `PYTHONPATH=src:. .venv/bin/python -m judge_eval.run --bench; echo exit=$?` prints `exit=0`. If exit=1/INCOMPLETE, written go/no-go decision recorded in `BLOCKERS.md` B3
 - [ ] Cue audio rendered and on EC2 (HUMAN_TASKS 11). Verify: `PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini --dry-run` lists nothing missing
 - [ ] Chert flags decided (HUMAN_TASKS 2, 13). Verify: `curl -s https://$DOMAIN/health` shows the five flags and any `fallbacks` you accept
-- [ ] Config values set: `brodie_number`, `team_alert_handles`, `raffle_prize`, `site_url` (HUMAN_TASKS 7-9). Verify (psql): `SELECT ch_config_get();`
+- [ ] Config values set: `brodie_number`, `team_alert_handles`, `site_url`, `first_prize`, `ufc_fighter` (HUMAN_TASKS 7-9). Verify (psql): `SELECT ch_config_get();`
 - [ ] Offline test suites green. Verify: `PYTHONPATH=src:. .venv/bin/python -m pytest -q -p no:cacheprovider tests/challenge infra`
 
 ## T-24h: rehearsal
@@ -49,5 +49,4 @@ Times are relative to the competition start `window_start` (config; default 2026
 - [ ] No open calls. Verify: `curl -s https://$DOMAIN/health` line states are idle/offline
 - [ ] Rejudge dry run, review, apply only if approved (RUNBOOK "Live configuration and moderation")
 - [ ] Top 3 verification call completed before payout
-- [ ] Publish a raffle seed before the draw, then run the draw (RUNBOOK); save the seed and results
 - [ ] Final backup taken and restore-tested; export the audit log; delete tester data; shut down EC2 or keep per your decision

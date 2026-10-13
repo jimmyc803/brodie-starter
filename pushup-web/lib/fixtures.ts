@@ -78,8 +78,6 @@ export function fixtureCompetition(frozen: boolean): CompetitionPublic {
     windowStart: "2026-10-12T04:00:00.000Z",
     windowEnd: "2026-10-19T03:59:59.000Z",
     frozen,
-    rafflePrize: "Signed Brodie gloves",
-    raffleMinValidReps: 100,
     ufcFighter: null,
     firstPrize: "$100",
     // Short code style number: keeps the demo free of anything phone-shaped.

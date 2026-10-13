@@ -140,15 +140,6 @@ export default async function Home() {
                 <span className="text-ink-2">Top 3</span>
                 <span className="text-right font-semibold">Group call with {ufcFighterCopy(comp?.ufcFighter)}</span>
               </li>
-              <li className="flex items-center justify-between gap-3 px-5 py-3">
-                <span className="text-ink-2">Raffle</span>
-                <span className="text-right font-semibold">
-                  {comp?.rafflePrize ?? "TBD"}
-                  <span className="block text-xs font-normal text-ink-3">
-                    {comp?.raffleMinValidReps ?? 100}+ valid reps to enter
-                  </span>
-                </span>
-              </li>
             </ul>
           </div>
           <div className="card p-5">

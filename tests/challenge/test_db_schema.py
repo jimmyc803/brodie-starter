@@ -86,7 +86,7 @@ def test_migration_applies_twice_without_duplicate_seed(pg_cluster, db):
         assert {"window_start", "window_end", "call_count_s", "call_reveal_s", "daily_call_cap", "claim_window_s",
                 "line_offline_gap_s", "min_counted_call_s", "in_call_timeout_extra_s", "power_hour_window",
                 "power_multiplier", "rank_drop_min", "rank_drop_throttle_h", "quiet_hours", "recap_hour",
-                "streak_risk_hour", "raffle_min_valid_reps", "raffle_prize", "avatar_level_thresholds",
+                "streak_risk_hour", "avatar_level_thresholds",
                 "judge_thresholds", "registration_open", "competition_frozen", "swearing", "site_url",
                 "brodie_number", "team_alert_handles", "challenge_coach_id", "outbound_rate_per_min",
                 "ufc_fighter", "first_prize"} == keys

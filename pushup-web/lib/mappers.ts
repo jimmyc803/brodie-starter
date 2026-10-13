@@ -45,8 +45,6 @@ export function mapCompetition(r: Raw): CompetitionPublic {
     windowStart: str(r.window_start),
     windowEnd: str(r.window_end),
     frozen: r.frozen === true,
-    rafflePrize: str(r.raffle_prize, "TBD"),
-    raffleMinValidReps: num(r.raffle_min_valid_reps, 100),
     ufcFighter: strOrNull(r.ufc_fighter),
     firstPrize: str(r.first_prize, "$100"),
     brodieNumber: strOrNull(r.brodie_number),

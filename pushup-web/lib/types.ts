@@ -26,8 +26,6 @@ export type CompetitionPublic = {
   windowStart: string;
   windowEnd: string;
   frozen: boolean;
-  rafflePrize: string;
-  raffleMinValidReps: number;
   ufcFighter: string | null;
   firstPrize: string;
   brodieNumber: string | null;

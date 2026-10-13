@@ -23,8 +23,6 @@ DEFAULTS: dict[str, Any] = {
     "quiet_hours": [23, 9],
     "recap_hour": 10,
     "streak_risk_hour": 20,
-    "raffle_min_valid_reps": 100,
-    "raffle_prize": "TBD",
     "avatar_level_thresholds": [0, 25, 60, 120, 200, 300, 450, 650, 900, 1200],
     "judge_thresholds": {
         "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 160, "knee_floor_margin": 0.04,

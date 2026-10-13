@@ -36,7 +36,6 @@ import {
   requireReason,
 } from "@/lib/admin";
 import {
-  drawRaffle,
   removeQueueEntry,
   sendBroadcast,
   sendLoginCode,
@@ -156,7 +155,7 @@ describe("allowlist guard", () => {
     cookieJar.set(ACCESS_COOKIE, "tok-rando");
     expect(await setBan(PREV, fd)).toMatchObject({ ok: false, status: 403 });
     expect(await removeQueueEntry(PREV, form({ queue_id: "5", reason: "spam entry" }))).toMatchObject({ status: 403 });
-    expect(await drawRaffle(PREV, form({ seed: "42", reason: "final draw", confirm: "yes" }))).toMatchObject({
+    expect(await sendBroadcast(PREV, form({ body: "hello", reason: "launch note", confirm: "yes" }))).toMatchObject({
       status: 403,
     });
     expect(rpcCalls()).toHaveLength(0);
@@ -338,7 +337,6 @@ describe("reason validation", () => {
       () => removeQueueEntry(PREV, form({ queue_id: "7" })),
       () => setConfigValue(PREV, form({ key: "daily_call_cap", value: "6", reason: "" })),
       () => sendBroadcast(PREV, form({ body: "hello", confirm: "yes", reason: "" })),
-      () => drawRaffle(PREV, form({ seed: "42", confirm: "yes", reason: "no" })),
     ];
     for (const run of cases) {
       const r = await run();
@@ -365,17 +363,17 @@ describe("reason validation", () => {
 
   it("dispatcher mutations are audited before the call and carry the admin email", async () => {
     cookieJar.set(ACCESS_COOKIE, "tok-boss");
-    const r = await drawRaffle(PREV, form({ seed: "2026-10-19", reason: "final draw", confirm: "yes" }));
+    const r = await sendBroadcast(PREV, form({ body: "hello", reason: "launch note", confirm: "yes" }));
     expect(r).toMatchObject({ ok: true, status: 200 });
     const idx = (pred: (c: Call) => boolean) => calls.findIndex(pred);
     const firstAudit = idx((c) => c.url.endsWith("/audit_log"));
-    const disp = idx((c) => c.url === `${DISP}/admin/raffle`);
+    const disp = idx((c) => c.url === `${DISP}/admin/broadcast`);
     expect(firstAudit).toBeGreaterThan(-1);
     expect(firstAudit).toBeLessThan(disp);
     expect(calls[disp].headers["X-Admin-Email"]).toBe("boss@example.com");
-    expect(calls[disp].body).toEqual({ seed: "2026-10-19" });
+    expect(calls[disp].body).toEqual({ body: "hello", dry_run: false });
     expect(calls.filter((c) => c.url.endsWith("/audit_log"))).toHaveLength(2);
-    expect(calls[firstAudit].body).toMatchObject({ actor: "boss@example.com", action: "admin_raffle", reason: "final draw" });
+    expect(calls[firstAudit].body).toMatchObject({ actor: "boss@example.com", action: "admin_broadcast", reason: "launch note" });
   });
 });
 

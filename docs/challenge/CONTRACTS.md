@@ -13,7 +13,7 @@ SPEC = docs/challenge/SPEC.md.
   - `challenge/worker/` — competition call controller used by facetime/worker.py.
 - `db/migrations/2026101[2-9]_challenge_*.sql` — migrations (idempotent: `create … if not exists`, `create or replace`, guarded `alter … add column if not exists`).
 - `db/test/` — local Postgres harness (Supabase role/auth shims) for tests.
-- `judge_eval/` — harness (clips gitignored). `scripts/rejudge.py`, `scripts/raffle.py`, `scripts/discover_chert.py`, `scripts/reconcile_sessions.py`.
+- `judge_eval/` — harness (clips gitignored). `scripts/rejudge.py`, `scripts/discover_chert.py`, `scripts/reconcile_sessions.py`.
 - `pushup-web/` — NEW Next.js app (separate Vercel project) for the public site + admin. The existing `web/` coach app is untouched.
 - `infra/` — EC2 setup, systemd units, Caddyfile, deploy/rollback/backup scripts.
 - Tests: `tests/challenge/test_*.py`, run with `PYTHONPATH=src:. .venv/bin/python -m pytest tests/challenge -q -n auto --dist loadfile`.
@@ -75,7 +75,7 @@ site_pulse(id int primary key default 1, bumped_at timestamptz not null)   -- an
 Config keys + seed values (`competition_config`): `window_start` "2026-10-12T20:00:00-04:00", `window_end` "2026-10-18T23:59:59-04:00",
 `call_count_s` 180, `call_reveal_s` 15, `daily_call_cap` 5, `claim_window_s` 90, `line_offline_gap_s` 180, `min_counted_call_s` 30,
 `in_call_timeout_extra_s` 60, `power_hour_window` [12,22], `power_multiplier` 2, `rank_drop_min` 2, `rank_drop_throttle_h` 3,
-`quiet_hours` [23,9], `recap_hour` 10, `streak_risk_hour` 20, `raffle_min_valid_reps` 100, `raffle_prize` "TBD",
+`quiet_hours` [23,9], `recap_hour` 10, `streak_risk_hour` 20,
 `avatar_level_thresholds` [0,25,60,120,200,300,450,650,900,1200] (points for level 1..10), `judge_thresholds` (see C5),
 `registration_open` true, `competition_frozen` false, `swearing` false, `site_url` "https://brodie-pushups.vercel.app",
 `brodie_number` null, `team_alert_handles` [], `challenge_coach_id` (uuid), `outbound_rate_per_min` 20.
@@ -136,7 +136,7 @@ Line/queue mutations lock rows `select … for update` (line_state rows, then th
 `user_daily_public(display_name, date_et, points, valid_reps, calls)`,
 `call_result_public(call_id, display_name, connected_at, valid_reps, rejected_reps, points, reasons jsonb /* {reason: count} */, liveness_result, void, rank_after, total_points_after)`,
 `line_status_public(state_summary /* idle|in_call|offline|claimed|closed */, queue_length, lines_active, eta_cycle_s, updated_at)`,
-`power_hour_public(date_et, starts_at, ends_at)`, `competition_public(window_start, window_end, frozen, raffle_prize, raffle_min_valid_reps, brodie_number, site_url)`.
+`power_hour_public(date_et, starts_at, ends_at)`, `competition_public(window_start, window_end, frozen, brodie_number, site_url)`.
 Anon has NO grants on base tables. RLS enabled on every new table, no anon policies (except `site_pulse` select). Realtime publication includes `site_pulse`.
 
 ## C3. Store (challenge/store.py)
@@ -155,7 +155,7 @@ Auth: worker endpoints require header `X-Brodie-Token: $DISPATCHER_TOKEN`; admin
 - `POST /calls/event` `{kind: 'call_started'|'call_ended'|'reps_committed', call_id, idem_key, at, payload}` → `{ok}`.
   `call_ended.payload = {ended_at, count_end_at, rep_count}`; `reps_committed.payload` = ch_commit_reps payload (dispatcher calls ch_commit_reps, then post-call processing: result text/card, rank deltas).
 - `POST /webhooks/chert` (provider-specific body) → 200; `POST /web/queue` `{action:'join'|'leave'}` + `Authorization: Bearer <supabase user jwt>` (web_only mode); `GET /web/me` same auth.
-- `POST /admin/broadcast` `{body, dry_run}` → `{recipients, preview}`; `POST /admin/rejudge` `{thresholds?, apply}`; `POST /admin/raffle` `{seed}`.
+- `POST /admin/broadcast` `{body, dry_run}` → `{recipients, preview}`; `POST /admin/rejudge` `{thresholds?, apply}`.
 - `GET /health` → `{ok, db, provider, flags:{CALLER_ID_SOURCE, MESSAGING_PROVIDER, HANGUP_MODE, REVEAL_MODE, CARD_DELIVERY}, line_states}`.
 
 Env flags (read once at startup, logged, echoed in /health and admin): `CALLER_ID_SOURCE` (default claim_window), `MESSAGING_PROVIDER` (default mock),

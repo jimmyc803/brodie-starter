@@ -31,7 +31,7 @@
 -- ch_score_events (internal view): one row per scoring event: valid_final rep of a non-void accepted call
 --   (at = reps.at, fallback calls.connected_at) or a score_adjustment (at = score_adjustments.at). Historical standings
 --   in call_result_public filter these events by time.
--- Badges (leaderboard_public.badges): 'streak' when streak >= 2, 'raffle' when valid_reps >= raffle_min_valid_reps.
+-- Badges (leaderboard_public.badges): 'streak' when streak >= 2.
 -- competition_public.frozen = competition_frozen OR now() >= window_end.
 -- site_pulse is bumped once per transaction, at commit (deferred constraint triggers), by writes to calls, reps,
 --   line_state, queue, score_adjustments, competition_config, power_hours, clients. Deferring keeps the single-row
@@ -252,8 +252,6 @@ insert into competition_config (key, value) values
   ('quiet_hours',             '[23, 9]'),
   ('recap_hour',              '10'),
   ('streak_risk_hour',        '20'),
-  ('raffle_min_valid_reps',   '100'),
-  ('raffle_prize',            '"TBD"'),
   ('avatar_level_thresholds', '[0, 25, 60, 120, 200, 300, 450, 650, 900, 1200]'),
   ('judge_thresholds',        '{"min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 160, "knee_floor_margin": 0.04,
                                 "hip_line_max_dev_deg": 15, "depth_elbow_max_deg": 90, "depth_margin": 0.05,
@@ -472,9 +470,7 @@ create or replace view leaderboard_public with (security_barrier = true) as
 select s.rank, md5(s.user_id::text) as public_id, s.display_name, s.points, s.valid_reps,
        ch_streak_days(s.streak_days, ch_et_day(now())) as streak, s.avatar_level,
        array_remove(array[
-         case when ch_streak_days(s.streak_days, ch_et_day(now())) >= 2 then 'streak' end,
-         case when s.valid_reps >= coalesce((select (value #>> '{}')::int from competition_config
-                                             where key = 'raffle_min_valid_reps'), 100) then 'raffle' end
+         case when ch_streak_days(s.streak_days, ch_et_day(now())) >= 2 then 'streak' end
        ], null)::text[] as badges,
        s.reached_at
 from ch_user_stats s
@@ -593,8 +589,6 @@ select (select (value #>> '{}')::timestamptz from k where key = 'window_start') 
        (select (value #>> '{}')::timestamptz from k where key = 'window_end') as window_end,
        (coalesce((select value = 'true'::jsonb from k where key = 'competition_frozen'), false)
         or coalesce(now() >= (select (value #>> '{}')::timestamptz from k where key = 'window_end'), false)) as frozen,
-       (select value #>> '{}' from k where key = 'raffle_prize') as raffle_prize,
-       (select (value #>> '{}')::int from k where key = 'raffle_min_valid_reps') as raffle_min_valid_reps,
        (select value #>> '{}' from k where key = 'brodie_number') as brodie_number,
        (select value #>> '{}' from k where key = 'site_url') as site_url,
        (select value from k where key = 'avatar_level_thresholds') as avatar_level_thresholds;

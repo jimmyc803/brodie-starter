@@ -49,8 +49,6 @@ function Block({ id, index, title, children }: { id: string; index: string; titl
 
 export default async function RulesPage() {
   const comp = await getCompetition();
-  const minReps = comp?.raffleMinValidReps ?? 100;
-  const rafflePrize = comp?.rafflePrize ?? "TBD";
   const deadline = formatEtDeadline(comp?.windowEnd ?? null) ?? "Sun Oct 18 · 11:59 PM ET";
 
   return (
@@ -145,7 +143,7 @@ export default async function RulesPage() {
       </Block>
 
       <Block id="prizes" index="05" title="Prizes">
-        <ul className="grid gap-2 sm:grid-cols-3">
+        <ul className="grid gap-2 sm:grid-cols-2">
           <li className="card p-5">
             <p className="eyebrow">1st place</p>
             <p className="mt-2 font-display text-5xl font-extrabold text-accent">{comp?.firstPrize ?? "$100"}</p>
@@ -153,11 +151,6 @@ export default async function RulesPage() {
           <li className="card p-5">
             <p className="eyebrow">Top 3</p>
             <p className="mt-2 font-display text-2xl font-extrabold uppercase leading-tight">Group call with {ufcFighterCopy(comp?.ufcFighter)}</p>
-          </li>
-          <li className="card p-5">
-            <p className="eyebrow">Raffle · {minReps}+ valid reps</p>
-            <p className="mt-2 font-display text-2xl font-extrabold uppercase leading-tight">{rafflePrize}</p>
-            <p className="mt-1 text-sm text-ink-3">Reps, not points. Reproducible, logged draw.</p>
           </li>
         </ul>
       </Block>

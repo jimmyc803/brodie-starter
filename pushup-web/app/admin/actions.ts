@@ -280,17 +280,3 @@ export async function rejudgeApply(_prev: Prev, fd: FormData): Promise<ActionRes
     }),
   );
 }
-
-export async function drawRaffle(_prev: Prev, fd: FormData): Promise<ActionResult> {
-  return done(
-    await runAdminAction(async ({ email }) => {
-      const seed = parseText(fd.get("seed"), "Seed", 200);
-      const reason = requireReason(fd.get("reason"));
-      if (fd.get("confirm") !== "yes") throw new AdminInputError("Tick the confirmation box to draw.");
-      const res = await auditedDispatch(email, "admin_raffle", seed, reason, { seed }, () =>
-        dispatcherRequest("POST", "/admin/raffle", { email, reason, body: { seed } }),
-      );
-      return { ok: true, message: "Raffle drawn and logged.", data: { seed, result: res } };
-    }),
-  );
-}

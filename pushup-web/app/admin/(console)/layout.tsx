@@ -12,7 +12,6 @@ const sections = [
   { href: "/admin/config", label: "Config" },
   { href: "/admin/broadcast", label: "Broadcast" },
   { href: "/admin/rejudge", label: "Rejudge" },
-  { href: "/admin/raffle", label: "Raffle" },
   { href: "/admin/highlights", label: "Highlights" },
   { href: "/admin/health", label: "Health" },
 ];

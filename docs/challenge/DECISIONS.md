@@ -10,7 +10,7 @@ Source of record: `.orch/DECISIONS.md` (internal log). This page explains each d
 - Chert's command line has no messaging surface, so iMessage behaviour could not be verified and is behind flags (D-07).
 - The audit said "no per-caller identity". That is still true until Chert confirms the call carries the caller handle; attribution falls back to the claim window (D-06).
 
-## Decisions D-01 to D-20
+## Decisions D-01 to D-22
 | ID | In plain words | Why |
 |---|---|---|
 | D-01 | Work happens on a new branch `orch/20261012-1810`; the three untracked facetime files stay untouched | You asked to leave them |
@@ -33,6 +33,7 @@ Source of record: `.orch/DECISIONS.md` (internal log). This page explains each d
 | D-18 | Geometry-checked ghost de-duplication landed; remaining ghost second-person rejects to be measured on real clips | Side view (the required setup) showed 0 ghosts |
 | D-19 | Ghost second-person false rejects remain on front-view stock clips (9% of reps; 0 of 14 on side-view); the ship gate stays INCOMPLETE until real side-view clips exist | No side-view two-person footage to tune on |
 | D-20 | Liveness redesigned: distinguishable challenges (lift-hold, double-tap, freeze), a quiet window before the cue, an unprompted-motion flag, "present but unverifiable" = fail, camera-motion invalidation | Review showed a periodic-tap replay passed about 100% |
+| D-22 | The raffle is cancelled; prizes are 1st place plus the top-3 group call with a UFC fighter | User decision 2026-10-12; all raffle config, views, admin and copy removed |
 
 ## Decisions you may be asked to make
 - Launch with the ship gate INCOMPLETE (D-19), or wait for clips? See `BLOCKERS.md` B3.
