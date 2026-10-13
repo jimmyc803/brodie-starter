@@ -14,7 +14,7 @@ EnvironmentFile=/etc/brodie/env
 Environment=PYTHONPATH=src:.
 Environment=PATH=/opt/brodie/current/.venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=HOME=/home/brodie
-ExecStart=/opt/brodie/current/.venv/bin/python -m facetime.worker dev
+ExecStart=/opt/brodie/current/.venv/bin/python -m facetime.worker start
 Restart=always
 RestartSec=3
 StandardOutput=journal

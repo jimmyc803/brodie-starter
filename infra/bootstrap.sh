@@ -9,7 +9,7 @@ apt-get update
 # Supabase runs Postgres 17; Ubuntu 24.04 ships 16, whose pg_dump refuses a newer server. Use the PGDG repo.
 apt-get install -y postgresql-common
 /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-apt-get install -y git curl ca-certificates unzip python3 python3-venv postgresql-client-17 postgresql-17 caddy xz-utils jq libportaudio2 libglib2.0-0
+apt-get install -y git curl ca-certificates unzip python3 python3-venv postgresql-client-17 postgresql-17 caddy xz-utils jq libportaudio2 libglib2.0-0 libgl1
 id brodie >/dev/null 2>&1 || useradd --create-home --shell /bin/bash brodie
 install -d -m 0755 -o brodie -g brodie /opt/brodie
 install -d -m 0700 /etc/brodie /var/lib/brodie
