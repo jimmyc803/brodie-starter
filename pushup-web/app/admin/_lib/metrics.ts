@@ -275,3 +275,149 @@ export function shapeMetrics(raw: RawMetrics, nowMs: number): MetricsView {
     },
   };
 }
+
+// ------------------------------------------------------------------ retention (ch_admin_retention)
+
+type RawDay = { eligible: boolean; complete: boolean; called: number; active: number };
+
+export type RawRetention = {
+  generated_at: string;
+  include_team: boolean;
+  today: string;
+  cohorts: { day: string; n: number; returned: number; d1: RawDay; d3: RawDay; d7: RawDay }[];
+  callers_daily: { day: string; first_time: number; returning: number }[];
+  calls_per_user: { calls: number; users: number }[];
+  streaks: { streak: number; users: number }[];
+  qualified_days: { days: number; users: number }[];
+  engaged_not_calling: { n: number; users: { user_id: string; display_name: string | null; last_text_at: string }[] };
+};
+
+/** A count out of a base, always shown with its n so tiny cohorts can't masquerade as big percentages. */
+export type Frac = { num: number; den: number; pct: number | null };
+export type RetentionCell =
+  | { state: "na" } // join day + k is still in the future
+  | { state: "partial" | "done"; called: Frac; active: Frac }; // partial: that ET day is today (still running)
+
+export type CohortRow = {
+  key: string;
+  label: string;
+  n: number;
+  returned: Frac;
+  d1: RetentionCell;
+  d3: RetentionCell;
+  d7: RetentionCell;
+};
+
+export type RetentionView = {
+  cohorts: CohortRow[];
+  /** Cohorts whose day k is complete, pooled (sum of returners / sum of those cohorts' sizes). */
+  pooled: { d1: Frac; d3: Frac; d7: Frac; returned: Frac };
+  callersDaily: DualPoint[]; // value = all callers that day, value2 = returning callers (first-time stacked on top)
+  callsPerUser: ShareRow[];
+  streaks: ShareRow[];
+  qualifiedDays: ShareRow[];
+  engaged: { n: number; users: { userId: string; name: string; lastTextAt: string }[] };
+};
+
+/** Below this many people a percentage is still shown, but flagged as anecdotal. */
+export const SMALL_N = 5;
+
+export function frac(numerator: number, den: number): Frac {
+  return { num: numerator, den, pct: ratio(numerator, den) };
+}
+
+/** "50% (1/2)", or "-" when there is nobody to measure. */
+export function formatFrac(f: Frac): string {
+  return f.den > 0 ? `${formatPct(f.pct)} (${Math.round(f.num)}/${Math.round(f.den)})` : "-";
+}
+
+function cell(raw: RawDay | undefined, size: number): RetentionCell {
+  if (!raw || !raw.eligible) return { state: "na" };
+  return {
+    state: raw.complete ? "done" : "partial",
+    called: frac(num(raw.called), size),
+    active: frac(num(raw.active), size),
+  };
+}
+
+/** Bucket a {value -> users} histogram into labelled ranges; [label, lo, hi] inclusive, hi null = open-ended. */
+export function bucketize(rows: { value: number; users: number }[], buckets: [string, number, number | null][]): ShareRow[] {
+  const total = rows.reduce((s, r) => s + num(r.users), 0);
+  return buckets.map(([label, lo, hi]) => {
+    const value = rows
+      .filter((r) => num(r.value) >= lo && (hi == null || num(r.value) <= hi))
+      .reduce((s, r) => s + num(r.users), 0);
+    return { label, value, share: total > 0 ? value / total : 0 };
+  });
+}
+
+const CALL_BUCKETS: [string, number, number | null][] = [
+  ["0 calls", 0, 0],
+  ["1 call", 1, 1],
+  ["2 calls", 2, 2],
+  ["3-5 calls", 3, 5],
+  ["6-10 calls", 6, 10],
+  ["11+ calls", 11, null],
+];
+const DAY_BUCKETS: [string, number, number | null][] = [
+  ["0 days", 0, 0],
+  ["1 day", 1, 1],
+  ...[2, 3, 4, 5, 6].map((d): [string, number, number] => [`${d} days`, d, d]),
+  ["7+ days", 7, null],
+];
+
+export function shapeRetention(raw: RawRetention): RetentionView {
+  const rawCohorts = raw.cohorts ?? [];
+  const cohorts: CohortRow[] = rawCohorts.map((c) => {
+    const size = num(c.n);
+    return {
+      key: c.day,
+      label: dayLabel(c.day),
+      n: size,
+      returned: frac(num(c.returned), size),
+      d1: cell(c.d1, size),
+      d3: cell(c.d3, size),
+      d7: cell(c.d7, size),
+    };
+  });
+  const pool = (k: "d1" | "d3" | "d7"): Frac => {
+    const done = rawCohorts.filter((c) => c[k]?.eligible && c[k]?.complete);
+    return frac(
+      done.reduce((s, c) => s + num(c[k].called), 0),
+      done.reduce((s, c) => s + num(c.n), 0),
+    );
+  };
+  const callers = raw.callers_daily ?? [];
+  const first = [...rawCohorts.map((c) => c.day), ...callers.map((c) => c.day)].sort()[0];
+  const minFrom = addDays(raw.today, -(MIN_DAYS - 1));
+  const days = dayRange(first && first < minFrom ? first : minFrom, raw.today);
+  const byDayCallers = new Map(callers.map((r) => [r.day, r]));
+  return {
+    cohorts,
+    pooled: {
+      d1: pool("d1"),
+      d3: pool("d3"),
+      d7: pool("d7"),
+      returned: frac(
+        cohorts.reduce((s, c) => s + c.returned.num, 0),
+        cohorts.reduce((s, c) => s + c.n, 0),
+      ),
+    },
+    callersDaily: days.map((d) => {
+      const r = byDayCallers.get(d);
+      const returning = num(r?.returning);
+      return { key: d, label: dayLabel(d), value: num(r?.first_time) + returning, value2: returning };
+    }),
+    callsPerUser: bucketize((raw.calls_per_user ?? []).map((r) => ({ value: r.calls, users: r.users })), CALL_BUCKETS),
+    streaks: bucketize((raw.streaks ?? []).map((r) => ({ value: r.streak, users: r.users })), DAY_BUCKETS),
+    qualifiedDays: bucketize((raw.qualified_days ?? []).map((r) => ({ value: r.days, users: r.users })), DAY_BUCKETS),
+    engaged: {
+      n: num(raw.engaged_not_calling?.n),
+      users: (raw.engaged_not_calling?.users ?? []).map((u) => ({
+        userId: u.user_id,
+        name: u.display_name ?? "(no name)",
+        lastTextAt: u.last_text_at,
+      })),
+    },
+  };
+}

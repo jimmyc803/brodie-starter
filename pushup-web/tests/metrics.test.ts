@@ -2,8 +2,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BarChart, Funnel, LineChart, ShareBars } from "../app/admin/_components/charts";
+import { RetentionSection } from "../app/admin/_components/retention";
 import {
   addDays,
+  bucketize,
+  formatFrac,
+  frac,
+  shapeRetention,
+  type RawRetention,
   cumulative,
   dayRange,
   formatPct,
@@ -202,5 +208,111 @@ describe("charts", () => {
       createElement(Funnel, { steps: funnelSteps([["Visits", 0], ["Joined", 0]]) }),
     );
     expect(funnel).toContain("width:0%");
+  });
+});
+
+function rawRetention(over: Partial<RawRetention> = {}): RawRetention {
+  return {
+    generated_at: "2026-10-15T16:00:00Z",
+    include_team: false,
+    today: "2026-10-15",
+    cohorts: [],
+    callers_daily: [],
+    calls_per_user: [],
+    streaks: [],
+    qualified_days: [],
+    engaged_not_calling: { n: 0, users: [] },
+    ...over,
+  };
+}
+
+const day = (eligible: boolean, complete: boolean, called: number, active = called) => ({ eligible, complete, called, active });
+
+describe("retention", () => {
+  it("formats rates with their n and never divides by zero", () => {
+    expect(formatFrac(frac(1, 2))).toBe("50% (1/2)");
+    expect(formatFrac(frac(0, 0))).toBe("-");
+    expect(frac(3, 0).pct).toBeNull();
+  });
+
+  it("marks future days n/a, today partial, and pools only complete days", () => {
+    const v = shapeRetention(
+      rawRetention({
+        cohorts: [
+          { day: "2026-10-12", n: 10, returned: 6, d1: day(true, true, 4, 5), d3: day(true, false, 2), d7: day(false, false, 0) },
+          { day: "2026-10-14", n: 2, returned: 0, d1: day(true, false, 1), d3: day(false, false, 0), d7: day(false, false, 0) },
+        ],
+      }),
+    );
+    const [a, b] = v.cohorts;
+    expect(a).toMatchObject({ label: "Oct 12", n: 10, returned: { num: 6, den: 10, pct: 0.6 } });
+    expect(a.d1).toEqual({ state: "done", called: frac(4, 10), active: frac(5, 10) });
+    expect(a.d3.state).toBe("partial");
+    expect(a.d7).toEqual({ state: "na" });
+    expect(b.d1.state).toBe("partial");
+    expect(v.pooled.d1).toEqual(frac(4, 10)); // the Oct 14 cohort's day 1 is today: not pooled yet
+    expect(v.pooled.d3).toEqual(frac(0, 0));
+    expect(v.pooled.returned).toEqual(frac(6, 12));
+  });
+
+  it("stacks first-time under returning callers per day and fills gaps", () => {
+    const v = shapeRetention(
+      rawRetention({
+        callers_daily: [
+          { day: "2026-10-13", first_time: 3, returning: 0 },
+          { day: "2026-10-15", first_time: 1, returning: 2 },
+        ],
+      }),
+    );
+    expect(v.callersDaily).toHaveLength(7);
+    expect(v.callersDaily.at(-1)).toMatchObject({ key: "2026-10-15", value: 3, value2: 2 });
+    expect(v.callersDaily.find((p) => p.key === "2026-10-14")).toMatchObject({ value: 0, value2: 0 });
+  });
+
+  it("buckets calls and streak distributions with shares", () => {
+    const v = shapeRetention(
+      rawRetention({
+        calls_per_user: [
+          { calls: 0, users: 2 },
+          { calls: 1, users: 1 },
+          { calls: 4, users: 1 },
+          { calls: 12, users: 1 },
+        ],
+        streaks: [
+          { streak: 0, users: 3 },
+          { streak: 9, users: 1 },
+        ],
+      }),
+    );
+    expect(v.callsPerUser.map((r) => [r.label, r.value])).toEqual([
+      ["0 calls", 2],
+      ["1 call", 1],
+      ["2 calls", 0],
+      ["3-5 calls", 1],
+      ["6-10 calls", 0],
+      ["11+ calls", 1],
+    ]);
+    expect(v.callsPerUser[0].share).toBeCloseTo(0.4);
+    expect(v.streaks.at(-1)).toMatchObject({ label: "7+ days", value: 1, share: 0.25 });
+    expect(bucketize([], [["x", 0, null]])).toEqual([{ label: "x", value: 0, share: 0 }]);
+  });
+
+  it("renders the section with small-sample flags, n/a cells and an empty state", () => {
+    const view = shapeRetention(
+      rawRetention({
+        cohorts: [{ day: "2026-10-14", n: 1, returned: 1, d1: day(true, true, 1), d3: day(false, false, 0), d7: day(false, false, 0) }],
+        engaged_not_calling: { n: 1, users: [{ user_id: "u1", display_name: "Ana", last_text_at: "2026-10-15T15:00:00Z" }] },
+      }),
+    );
+    const out = renderToStaticMarkup(createElement(RetentionSection, { view }));
+    expect(out).toContain("100% (1/1)");
+    expect(out).toContain("Small sample: only 1 person");
+    expect(out).toContain("not yet");
+    expect(out).toContain("Engaged but not calling: 1");
+    expect(out).toContain("Ana");
+    expect(out).not.toContain("NaN");
+    const empty = renderToStaticMarkup(createElement(RetentionSection, { view: shapeRetention(rawRetention()) }));
+    expect(empty).toContain("Nothing here.");
+    expect(empty).not.toContain("NaN");
   });
 });

@@ -1,7 +1,7 @@
 import "server-only";
 import { dispatcherRequest, etYesterday } from "@/lib/admin";
 import { serviceRpc, serviceSelect } from "@/lib/supabase-server";
-import type { RawMetrics } from "./metrics";
+import type { RawMetrics, RawRetention } from "./metrics";
 
 /** Page loaders for the admin console (service role; only call after requireAdmin()). */
 
@@ -125,6 +125,14 @@ export async function getMetrics(includeTeam: boolean, nowMs = Date.now()): Prom
     p_include_team: includeTeam,
     p_now: new Date(nowMs).toISOString(),
     p_days: 30,
+  });
+}
+
+/** Retention cohorts and distributions in one RPC. */
+export async function getRetention(includeTeam: boolean, nowMs = Date.now()): Promise<RawRetention> {
+  return serviceRpc<RawRetention>("ch_admin_retention", {
+    p_include_team: includeTeam,
+    p_now: new Date(nowMs).toISOString(),
   });
 }
 

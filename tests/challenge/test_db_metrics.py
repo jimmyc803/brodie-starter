@@ -16,7 +16,7 @@ ET = ZoneInfo("America/New_York")
 MIGRATION = MIGRATIONS / "20261025_challenge_metrics.sql"
 NOW = datetime(2026, 10, 15, 12, 0, tzinfo=ET)
 CODE_RE = re.compile(r"^[23456789BCDFGHJKLMNPQRSTVWXZ]{6}$")
-RPCS = ["ch_join_attribution", "ch_site_visit", "ch_admin_set_team", "ch_admin_metrics", "ch_user_by_handle",
+RPCS = ["ch_admin_retention", "ch_join_attribution","ch_site_visit", "ch_admin_set_team", "ch_admin_metrics", "ch_user_by_handle",
         "ch_user_status", "ch_new_ref_code", "ch_attribute_join", "ch_norm_ref_code", "ch_norm_source"]
 
 
@@ -308,3 +308,56 @@ def test_admin_metrics_includes_team_and_handles_empty(tx):
     with pytest.raises(psycopg.errors.InvalidParameterValue):
         with tx.transaction():
             rpc(tx, "ch_admin_metrics", p_include_team=False, p_now=None, p_days=7)
+
+
+# ---------------------------------------------------------------- retention
+
+def test_admin_retention_cohorts_callers_distributions_and_engaged(tx):
+    def at(day, hour=11):
+        return datetime(2026, 10, day, hour, 0, tzinfo=ET)
+
+    a = make_user(tx, "Alpha", joined_at=at(12, 9))
+    b = make_user(tx, "Bravo", joined_at=at(12, 10))
+    c = make_user(tx, "Charlie", joined_at=at(14, 9), handle="+15550000301")
+    t = make_user(tx, "Team_One", joined_at=at(12, 8), team=True)
+    for day in (12, 13, 15):
+        make_call(tx, a, at(day), n_valid=1)
+    make_call(tx, c, at(14), decision="reject", counted=False)
+    make_call(tx, t, at(13), n_valid=1)
+    make_call(tx, a, NOW + timedelta(hours=1), n_valid=1)  # after p_now: ignored
+    tx.execute("insert into messages (direction, handle, user_id, body, status, created_at) values"
+               " ('in', '+15550000201', %s, 'STATUS', 'received', %s),"
+               " ('in', '+15550000301', null, 'QUEUE', 'received', %s),"
+               " ('out', '+15550000301', %s, null, 'sent', %s)", (b, at(13), at(15, 10), c, at(15, 10)))
+
+    r = rpc(tx, "ch_admin_retention", p_include_team=False, p_now=NOW)
+    assert r["today"] == "2026-10-15"
+    c12, c14 = r["cohorts"]
+    assert (c12["day"], c12["n"], c12["returned"]) == ("2026-10-12", 2, 1)
+    assert c12["d1"] == {"eligible": True, "complete": True, "called": 1, "active": 2}  # Bravo texted on day 1
+    assert c12["d3"] == {"eligible": True, "complete": False, "called": 1, "active": 1}  # today: in progress
+    assert c12["d7"] == {"eligible": False, "complete": False, "called": 0, "active": 0}
+    assert (c14["n"], c14["returned"]) == (1, 0)
+    assert c14["d1"] == {"eligible": True, "complete": False, "called": 0, "active": 1}  # text via linked handle
+    assert r["callers_daily"] == [
+        {"day": "2026-10-12", "first_time": 1, "returning": 0}, {"day": "2026-10-13", "first_time": 0, "returning": 1},
+        {"day": "2026-10-14", "first_time": 1, "returning": 0}, {"day": "2026-10-15", "first_time": 0, "returning": 1}]
+    assert r["calls_per_user"] == [{"calls": 0, "users": 1}, {"calls": 1, "users": 1}, {"calls": 3, "users": 1}]
+    assert r["streaks"] == [{"streak": 0, "users": 2}, {"streak": 1, "users": 1}]  # Alpha: 12, 13, 15 -> 1 today
+    assert r["qualified_days"] == [{"days": 0, "users": 2}, {"days": 3, "users": 1}]
+    eng = r["engaged_not_calling"]
+    assert eng["n"] == 1 and eng["users"][0]["display_name"] == "Charlie" and eng["users"][0]["user_id"] == str(c)
+    assert "+1555" not in str(r)
+
+    team = rpc(tx, "ch_admin_retention", p_include_team=True, p_now=NOW)
+    assert team["cohorts"][0]["n"] == 3 and team["cohorts"][0]["d1"]["called"] == 2
+    assert team["callers_daily"][1] == {"day": "2026-10-13", "first_time": 1, "returning": 1}
+
+
+def test_admin_retention_empty_and_requires_now(tx):
+    r = rpc(tx, "ch_admin_retention", p_include_team=False, p_now=NOW)
+    assert r["cohorts"] == [] and r["callers_daily"] == [] and r["calls_per_user"] == []
+    assert r["engaged_not_calling"] == {"n": 0, "users": []}
+    with pytest.raises(psycopg.errors.InvalidParameterValue):
+        with tx.transaction():
+            rpc(tx, "ch_admin_retention", p_include_team=False, p_now=None)

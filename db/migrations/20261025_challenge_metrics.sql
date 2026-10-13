@@ -26,6 +26,8 @@
 --       audit_log action 'set_team'.
 --   ch_admin_metrics(p_include_team, p_now, p_days) -> one jsonb with KPIs, daily (ET) and hourly series, funnel and
 --       virality aggregates. Display names and user ids only, never handles.
+--   ch_admin_retention(p_include_team, p_now) -> cohort D1/D3/D7 return, first-time vs returning callers per day,
+--       calls-per-user and streak distributions, engaged-but-not-calling (see the comment above the function).
 --
 -- ch_user_by_handle and ch_user_status are redefined (bodies copied from 20261013_challenge_misc.sql) to add
 -- 'ref_code', so the welcome text and /me can show the participant's invite link.
@@ -454,8 +456,115 @@ begin
 end;
 $$;
 
+-- Retention, from our own records only (Chert reports no caller data, and a FaceTime that never connects, e.g. a busy
+-- line, leaves no row anywhere). "Called" = a connected calls row for the user (any decision); "active" = called OR sent
+-- us an inbound text that ET day (texts matched by messages.user_id, else by the sender's linked handle).
+--   cohorts[]: one per ET join day: n, returned (called on any later ET day) and, for k in 1/3/7, dK = {eligible
+--     (join day + k <= today), complete (join day + k < today; today is still in progress), called, active} where
+--     called/active count users of the cohort doing so on ET day join+k exactly.
+--   callers_daily[]: per ET day with calls: first-time callers (first call ever that day) vs returning callers.
+--   calls_per_user[]: {calls, users} for every included participant (calls = 0 included).
+--   streaks[]: {streak, users} current streak (ch_streak_days as of today); qualified_days[]: {days, users} number of
+--     distinct qualifying ET days (ch_user_stats.streak_days).
+--   engaged_not_calling: participants with an inbound text in the last 24 h and no connected call in the last 24 h:
+--     {n, users: up to 25 {user_id, display_name, last_text_at}} (display names only).
+create or replace function ch_admin_retention(p_include_team bool, p_now timestamptz) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_team  bool := coalesce(p_include_team, false);
+  v_today date;
+begin
+  if p_now is null then
+    raise exception 'ch_admin_retention: p_now required' using errcode = '22023';
+  end if;
+  v_today := ch_et_day(p_now);
+
+  return (
+    with u as (
+      select c.id, c.display_name, ch_et_day(c.joined_at) as jd
+        from clients c
+       where c.joined_at is not null and (v_team or not c.is_team)
+    ),
+    calls_u as (
+      select k.user_id, k.connected_at from calls k join u on u.id = k.user_id where k.connected_at <= p_now
+    ),
+    call_days as (select distinct user_id, ch_et_day(connected_at) as d from calls_u),
+    texts_u as (
+      select coalesce(m.user_id, h.client_id) as user_id, m.created_at
+        from messages m left join client_handles h on h.handle = m.handle
+       where m.direction = 'in' and m.created_at <= p_now
+    ),
+    text_days as (
+      select distinct t.user_id, ch_et_day(t.created_at) as d from texts_u t join u on u.id = t.user_id
+    ),
+    act_days as (select user_id, d from call_days union select user_id, d from text_days),
+    first_call as (select user_id, min(d) as d from call_days group by user_id),
+    ks(k) as (values (1), (3), (7)),
+    cohort_k as (
+      select u.jd, ks.k,
+             count(distinct cd.user_id) as called,
+             count(distinct ad.user_id) as active
+        from u cross join ks
+        left join call_days cd on cd.user_id = u.id and cd.d = u.jd + ks.k
+        left join act_days ad on ad.user_id = u.id and ad.d = u.jd + ks.k
+       group by u.jd, ks.k
+    ),
+    last_call as (select user_id, max(d) as d from call_days group by user_id),
+    cohort as (
+      select u.jd, count(*) as n, count(*) filter (where lc.d > u.jd) as returned
+        from u left join last_call lc on lc.user_id = u.id group by u.jd
+    ),
+    per_user as (
+      select u.id, count(k.user_id) as n from u left join calls_u k on k.user_id = u.id group by u.id
+    ),
+    engaged as (
+      select u.id, u.display_name, max(t.created_at) as last_text_at
+        from u join texts_u t on t.user_id = u.id
+       where t.created_at > p_now - interval '24 hours'
+         and not exists (select 1 from calls_u k where k.user_id = u.id and k.connected_at > p_now - interval '24 hours')
+       group by u.id, u.display_name
+    )
+    select jsonb_build_object(
+      'generated_at', p_now,
+      'include_team', v_team,
+      'today', v_today,
+      'cohorts', (select coalesce(jsonb_agg(
+                    jsonb_build_object('day', c.jd, 'n', c.n, 'returned', c.returned)
+                    || (select jsonb_object_agg('d' || ck.k, jsonb_build_object(
+                                 'eligible', c.jd + ck.k <= v_today, 'complete', c.jd + ck.k < v_today,
+                                 'called', ck.called, 'active', ck.active))
+                          from cohort_k ck where ck.jd = c.jd)
+                    order by c.jd), '[]'::jsonb) from cohort c),
+      'callers_daily', (select coalesce(jsonb_agg(jsonb_build_object('day', x.d, 'first_time', x.f, 'returning', x.r)
+                                                  order by x.d), '[]'::jsonb)
+                          from (select cd.d, count(*) filter (where fc.d = cd.d) as f,
+                                       count(*) filter (where fc.d < cd.d) as r
+                                  from call_days cd join first_call fc on fc.user_id = cd.user_id
+                                 group by cd.d) x),
+      'calls_per_user', (select coalesce(jsonb_agg(jsonb_build_object('calls', x.n, 'users', x.users) order by x.n),
+                                         '[]'::jsonb)
+                           from (select n, count(*) as users from per_user group by n) x),
+      'streaks', (select coalesce(jsonb_agg(jsonb_build_object('streak', x.s, 'users', x.users) order by x.s), '[]'::jsonb)
+                    from (select ch_streak_days(s.streak_days, v_today) as s, count(*) as users
+                            from ch_user_stats s join u on u.id = s.user_id group by 1) x),
+      'qualified_days', (select coalesce(jsonb_agg(jsonb_build_object('days', x.dd, 'users', x.users) order by x.dd),
+                                         '[]'::jsonb)
+                           from (select coalesce(cardinality(s.streak_days), 0) as dd, count(*) as users
+                                   from ch_user_stats s join u on u.id = s.user_id group by 1) x),
+      'engaged_not_calling', jsonb_build_object(
+        'n', (select count(*) from engaged),
+        'users', (select coalesce(jsonb_agg(jsonb_build_object('user_id', e.id, 'display_name', e.display_name,
+                                                               'last_text_at', e.last_text_at)
+                                            order by e.last_text_at desc), '[]'::jsonb)
+                    from (select * from engaged order by last_text_at desc limit 25) e))
+    )
+  );
+end;
+$$;
+
 -- ---------------------------------------------------------------- grants: service_role only
 revoke all on function
+  ch_admin_retention(bool, timestamptz),
   ch_new_ref_code(), ch_clients_ref_code(), ch_norm_ref_code(text), ch_norm_source(text),
   ch_join_attribution(text, text, text, timestamptz), ch_attribute_join(uuid, text), ch_client_handles_attribute(),
   ch_clients_attribute(), ch_site_visit(text, text, text, text, text, timestamptz), ch_user_by_handle(text),
@@ -463,6 +572,7 @@ revoke all on function
   ch_admin_metrics(bool, timestamptz, int)
   from public, anon, authenticated;
 grant execute on function
+  ch_admin_retention(bool, timestamptz),
   ch_new_ref_code(), ch_clients_ref_code(), ch_norm_ref_code(text), ch_norm_source(text),
   ch_join_attribution(text, text, text, timestamptz), ch_attribute_join(uuid, text), ch_client_handles_attribute(),
   ch_clients_attribute(), ch_site_visit(text, text, text, text, text, timestamptz), ch_user_by_handle(text),
