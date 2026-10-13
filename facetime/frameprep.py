@@ -26,6 +26,13 @@ WINS probes in a row (WINS_LANDSCAPE for landscape content) while the current on
 come back on their own whenever the current orientation loses the plank, so a wrong lock self-corrects. Nothing here
 blocks counting: the pipeline always gets a frame.
 
+A caller STANDING upright holds the lock the same way a plank does (standing_score): held sideways, a standing person
+would lie across the frame, so one upright in the current view proves the view is already upright — while turned 90 deg
+they read as a plausible plank (live 2026-10-13, call b632c373: desk push-ups in an upright portrait picture flipped
+the lock to 270, breaking both the judge and the coach-video layout). A plank turned head-up can also put the head on
+top, so a stander must have a hand hanging or resting clearly BELOW the shoulders; a turned plank's arms stick out
+sideways instead.
+
 plank_score(lm, aspect) (also the mirror's lenient camera check): on the better side, shoulder + elbow + wrist + hip
 visible, and a plank-like posture from any reasonable camera angle: the torso within 50 deg of horizontal with the
 hands below the shoulders on the floor side (side / diagonal / higher camera), or a foreshortened torso with the
@@ -159,6 +166,28 @@ def plank_score(lm, aspect, min_conf=0.5):
     return vis * (0.85 + 0.15 * float(knees))
 
 
+def standing_score(lm, aspect, min_conf=0.5):
+    """0..1: how plausible an upright STANDING person is in this view (head over shoulders over hips, a hand hanging
+    or resting clearly below the shoulders). Positive proof the view is already upright (module docstring); 0 when in
+    doubt. The hands requirement is what tells a stander from a plank turned head-up: that plank's arms stick out
+    sideways, a stander's hang down (or rest on a desk below the shoulders)."""
+    if lm is None: return 0.0
+    lm = np.asarray(lm, dtype=float)
+    if lm.ndim != 2 or lm.shape[0] < 33 or lm.shape[1] < 4: return 0.0
+    c = _conf(lm); P = lm[:, :2] * np.array([aspect, 1.0])
+    shs = [i for i in (11, 12) if c[i] >= min_conf]; hips = [i for i in (23, 24) if c[i] >= min_conf]
+    if not shs or not hips: return 0.0
+    ms = P[shs].mean(axis=0); mh = P[hips].mean(axis=0)
+    d = mh - ms; L = float(np.linalg.norm(d))
+    if L < 1e-3 or d[1] < 0.8 * L: return 0.0                       # hips well BELOW the shoulders: the torso stands
+    head = [i for i in (0, 7, 8) if c[i] >= min_conf]
+    if head and ms[1] - P[head[0]][1] < 0.1 * L: return 0.0         # ... with the head on top
+    hands = [w for e, w in ((13, 15), (14, 16)) if min(c[e], c[w]) >= 0.7 * min_conf]
+    if not any(P[w][1] - ms[1] > 0.35 * L and P[w][1] - ms[1] >= 0.75 * abs(P[w][0] - ms[0]) for w in hands):
+        return 0.0                                                  # a hand hanging / resting clearly below the shoulders
+    return float(np.mean([c[i] for i in shs + hips]))
+
+
 class FramePrep:
     """Content crop + orientation lock for one call's feed (module docstring). Used from the feed thread; apply() may
     run on another thread (it reads one immutable tuple)."""
@@ -211,6 +240,9 @@ class FramePrep:
         self.score = plank_score(lm, w / max(1, h))
         if self.score >= GOOD_SCORE:
             self.t_good = self.t_any = now; self.streak.clear(); return None
+        if standing_score(lm, w / max(1, h)) >= GOOD_SCORE:
+            # a person standing upright in this view proves the view is upright (module docstring): hold, no probing
+            self.t_good = now; self.streak.clear(); return None
         portrait = self.portrait
         if now - self.t_good < self.bad_s or now - self.t_probe < self.probe_every_s: return None
         if not portrait and now - self.t_pose < LANDSCAPE_NO_POSE_S: return None   # a pose in a landscape picture: upright
