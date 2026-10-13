@@ -310,3 +310,13 @@ def test_rotated_portrait_picture_turned_upright_reads_as_sideways():
     raw = bridge(rotate(content, 270))
     for k in range(4): up = prep(raw, 0.25 * k)
     assert up.shape[:2] == (360, 640) and phone_sideways(prep, raw) is True
+
+
+def test_gate_holds_a_switch_long_enough_for_the_caller_to_place_the_phone():
+    """A live call (2026-10-13) flapped sideways -> upright -> sideways within 6 s while the phone was being set down."""
+    g = OrientationGate()
+    t = 0.0
+    while not g.landscape: t += 0.1; g.update(True, t)
+    switched = t
+    while g.landscape and t < switched + 30: t += 0.1; g.update(False, t)
+    assert ORIENT_HOLD_S >= 8.0 and t - switched >= 8.0 - 1e-6 and g.n_switches == 2
