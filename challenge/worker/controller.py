@@ -42,6 +42,8 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import fcntl
+import hashlib
 import json
 import logging
 import math
@@ -58,7 +60,8 @@ from challenge.worker.client import DispatcherError, idem_key, utc_iso
 
 log = logging.getLogger("challenge.worker")
 
-CHECKPOINT_VERSION = 1
+CHECKPOINT_VERSION = 2
+LOCK_PROTOCOL = 1               # checkpoints written while holding the per-call lock carry "lock_protocol": 1
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 C2_METRIC_KEYS = ("min_elbow_deg_l", "min_elbow_deg_r", "top_elbow_deg", "max_hip_line_dev_deg", "min_knee_deg",
                   "knee_floor_contact", "shoulder_wrist_drop", "shoulder_elbow_gap", "min_keypoint_conf",
@@ -148,6 +151,61 @@ def write_json_atomic(path: str, data: dict) -> None:
         raise
 
 
+LOCK_SUFFIX = ".lock"                  # <ckpt>.lock: per-call ownership (flock), never deleted (no inode race)
+SENT_SUFFIX = ".sent.json"             # <ckpt>.sent.json: digests of reps payloads that got a 2xx ("acked")
+CONFLICT_SUFFIX = ".conflict.json"     # <ckpt>.conflict.json: a payload conflict kept for admin review
+PERSIST_RETRY_S = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)   # end(): retries of a checkpoint save that failed
+
+
+def payload_digest(payload: dict) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def read_ledger(path: str) -> list[dict]:
+    """The entries of <ckpt>.sent.json ([] if none). Raises OSError/ValueError on an unreadable ledger."""
+    try:
+        with open(path + SENT_SUFFIX) as f:
+            d = json.load(f)
+    except FileNotFoundError:
+        return []
+    entries = d.get("entries") if isinstance(d, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError(f"{path + SENT_SUFFIX}: no entries list")
+    return entries
+
+
+class CallLock:
+    """Ownership of one call's checkpoint: an exclusive non-blocking flock on <ckpt>.lock. The worker holds it from
+    accept/adopt until its final commit and save; the reconciler holds it across read, replay and write-back. The
+    kernel drops it when the holding process dies, so a free lock means nobody is working on the call."""
+
+    def __init__(self, f: Any):
+        self._f = f
+
+    @classmethod
+    def try_acquire(cls, ckpt_path: str) -> "CallLock | None":
+        """The lock, or None if another open file description holds it (an owner is alive). OSErrors propagate."""
+        os.makedirs(os.path.dirname(ckpt_path) or ".", exist_ok=True)
+        f = open(ckpt_path + LOCK_SUFFIX, "a")
+        try:
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.close()
+            return None
+        except BaseException:
+            f.close()
+            raise
+        return cls(f)
+
+    @property
+    def held(self) -> bool:
+        return not self._f.closed
+
+    def release(self) -> None:
+        if not self._f.closed:
+            self._f.close()                             # closing the description releases the flock
+
+
 def default_liveness_factory(rng: random.Random, thr: dict):
     from challenge.judge.liveness import LivenessChallenge
     return LivenessChallenge(rng, thr)
@@ -235,6 +293,11 @@ class CompetitionCall:
         self._end_task: asyncio.Future | None = None
         self._bg: set[asyncio.Task] = set()
         self.last_tick_wall: float | None = None   # job health: the controller is ticking
+        self.lock: CallLock | None = None          # per-call ownership, held from accept/adopt to the final save
+        self.unsaved = False                       # the last checkpoint save failed (end() retries it)
+        self.reconcile_meta: dict | None = None    # the reconciler's block of an adopted checkpoint (kept as is)
+        self.disowned = False                      # the call lock was let go: this object never writes again
+        self.conflict: dict | None = None          # a reps payload conflict found by this run (admin review)
 
     # ------------------------------------------------------------------ helpers
     def rel(self, wall: float) -> float:
@@ -307,18 +370,80 @@ class CompetitionCall:
             "late_reps": self.late_reps, "rep_count": len(self.reps), "ignored_reps": self.ignored_reps,
             "idem_keys": {k: idem_key(self.call_id, k) for k in self.sent},
             "sent": dict(self.sent), "committed": self.committed, "last_error": self.last_error,
-            "updated_at": utc_iso(self.clock()),
+            "updated_at": utc_iso(self.clock()), "lock_protocol": LOCK_PROTOCOL,
+            **({"reconcile": self.reconcile_meta} if self.reconcile_meta is not None else {}),
         })
 
     def _write(self) -> bool:
-        """Every write runs on the event loop (no awaits inside), so writes never interleave."""
+        """Every write runs on the event loop (no awaits inside), so writes never interleave; only the holder of the
+        call lock writes. A failure marks the state unsaved (alerted); end() retries it before releasing the lock.
+        Once the lock was let go nothing is written (another owner may hold the call): refused, logged, alerted."""
+        if self.disowned:
+            log.error("call %s: checkpoint write after the call lock was released refused (%d reps, %d late)",
+                      self.call_id, len(self.reps), len(self.late_reps))
+            self.alert("checkpoint_write_refused", f"call {self.call_id}: state changed after the call lock was "
+                                                   f"released; not written ({len(self.late_reps)} late reps)")
+            return False
         try:
             write_json_atomic(self.path, self.checkpoint())
+            self.unsaved = False
             return True
         except (OSError, ValueError, TypeError) as e:
+            self.unsaved = True
             log.error("call %s: checkpoint write to %s failed: %r", self.call_id, self.path, e)
             self.alert("checkpoint_write_failed", f"call {self.call_id}: {e!r}")
             return False
+
+    async def _persist(self) -> bool:
+        """Before end() returns: retry a failed checkpoint save with backoff; alert if it still fails."""
+        for delay in PERSIST_RETRY_S:
+            if not self.unsaved:
+                return True
+            await self._sleep(delay)
+            self._write()
+        if self.unsaved:
+            log.critical("call %s: checkpoint %s could not be saved; the newest state is only in memory", self.call_id,
+                         self.path)
+            self.alert("checkpoint_unsaved", f"call {self.call_id}: checkpoint {self.path} not saved after retries")
+        return not self.unsaved
+
+    def _late_after_release(self) -> None:
+        """A late rep after this run let the call lock go: never written without the lock. Retake it (non-blocking);
+        free -> add the late reps to the checkpoint as it is now (whoever wrote it last) and mark it committed:false
+        for admin review, then let go again; busy -> another owner works on the call: refused (logged, alerted)."""
+        try:
+            lk = CallLock.try_acquire(self.path)
+        except OSError as e:
+            lk, why = None, repr(e)
+        else:
+            why = "another owner holds the call lock"
+        if lk is not None:
+            try:
+                with open(self.path) as f:
+                    d = json.load(f)
+                if not isinstance(d, dict) or d.get("call_id") != self.call_id:
+                    raise ValueError("the checkpoint is not this call's")
+                late = list(d.get("late_reps") or [])
+                have = {(r.get("n"), r.get("at")) for r in late if isinstance(r, dict)}
+                late += [r for r in self.late_reps if (r["n"], r["at"]) not in have]
+                d.update(late_reps=late, committed=False, last_error=self.last_error, updated_at=utc_iso(self.clock()))
+                write_json_atomic(self.path, d)
+                log.error("call %s: %d late rep(s) added to the checkpoint after the commit; committed:false",
+                          self.call_id, len(self.late_reps))
+                return
+            except (OSError, ValueError, TypeError) as e:
+                why = repr(e)
+            finally:
+                lk.release()
+        log.error("call %s: late rep not written after the call lock was released (%s)", self.call_id, why)
+        self.alert("checkpoint_write_refused", f"call {self.call_id}: late rep after the call lock was released not "
+                                               f"written ({why}); {len(self.late_reps)} late reps in memory")
+
+    def _release_lock(self) -> None:
+        if self.lock is not None:
+            self.disowned = True
+            self.lock.release()
+            self.lock = None
 
     def _load_existing(self) -> dict | None:
         """The checkpoint of this call from an earlier run (worker restart, redispatch), or None. A file that cannot be
@@ -354,6 +479,8 @@ class CompetitionCall:
         self.sent.update({k: bool(v) for k, v in (d.get("sent") or {}).items() if k in self.sent})
         self.committed = bool(d.get("committed"))
         self.last_error = d.get("last_error")
+        rc = d.get("reconcile")
+        self.reconcile_meta = dict(rc) if isinstance(rc, dict) else None   # backoff/late/conflict state survives
         lv = d.get("liveness") or {}
         self.liveness_result = lv.get("result", d.get("liveness_result"))
         self.liveness_first_fire_t = lv.get("first_fire_s", d.get("liveness_first_fire_s"))
@@ -401,6 +528,7 @@ class CompetitionCall:
             self._start_done.set()
 
     def _fail_closed(self, reason: str, detail: str) -> bool:
+        self._release_lock()
         self.decision, self.reason = "error", reason
         log.error("call %s: %s: not counting this call (fail closed)", self.call_id, detail)
         self.alert(reason, f"call {self.call_id} on {self.line_id}: {detail}")
@@ -419,7 +547,18 @@ class CompetitionCall:
             self.judge_cfg = {**self.judge_cfg, **live_thr}     # the live competition_config wins
             self.thr = merged_thresholds(self.judge_cfg)
         self.power_hour = bool(r.get("power_hour_active"))
+        # Own the call before reading or writing its checkpoint: a busy lock means the reconciler is committing an
+        # earlier run of this call (a live worker would not be asked to start it again): fail closed for this call.
+        self.lock = CallLock.try_acquire(self.path)
+        if self.lock is None:
+            return self._fail_closed("call_locked", "another process (the reconciler) owns this call's checkpoint")
+        if os.path.exists(self.path + CONFLICT_SUFFIX):    # quarantined: the stored commit is under admin review
+            return self._fail_closed("call_conflict", f"{os.path.basename(self.path)}{CONFLICT_SUFFIX} exists: "
+                                                      "the call is under admin review, not resuming it")
         old = self._load_existing()
+        if old is not None and isinstance(old.get("reconcile"), dict) and old["reconcile"].get("conflict"):
+            return self._fail_closed("call_conflict", "the checkpoint records a payload conflict (reconcile.conflict): "
+                                                      "the call is under admin review, not resuming it")
         t_req = self.t0
         if old is not None:
             self._adopt(old)
@@ -676,7 +815,10 @@ class CompetitionCall:
             self.last_error = f"rep at {rel:.2f} s arrived after the commit payload was built"
             log.error("call %s: %s; committed:false", self.call_id, self.last_error)
             self.alert("late_rep", f"call {self.call_id}: {self.last_error}")
-            self._write()
+            if self.disowned:
+                self._late_after_release()
+            else:
+                self._write()
             return rep
         self.reps.append(rep)
         if self.lc is not None and self.liveness_result is None:
@@ -793,7 +935,29 @@ class CompetitionCall:
         if self._end_task is None or (self._end_task.done() and self._commit_deferred and self.sealed):
             self._commit_deferred = False
             self._end_task = asyncio.ensure_future(self._end(reason))
+            self._end_task.add_done_callback(self._end_done)
         return await asyncio.shield(self._end_task)
+
+    def _end_done(self, t: asyncio.Future) -> None:
+        """The end task has finished. The normal path released the lock itself after its final save; a deferred
+        commit keeps it for seal() + end(). One that was cancelled or raised (possibly mid-drain, intake still open)
+        first seals the intake (a rep still queued becomes a late rep: kept, the call stays committed:false for admin
+        review), then saves; only a saved, sealed state lets the lock go. Runs on the event loop in one step, so no
+        rep can be written in between. A failed save keeps the lock until the process exits (the kernel drops it)."""
+        if self.lock is None or not (t.cancelled() or t.exception() is not None):
+            return
+        if not self.sealed:
+            self.sealed = True
+            self.last_error = "end() stopped before the rep intake was drained: intake sealed, later reps are late"
+            log.error("call %s: %s", self.call_id, self.last_error)
+            self.alert("commit_pending", f"call {self.call_id}: {self.last_error}; checkpoint {self.path}")
+        self._write()
+        if self.unsaved:
+            log.critical("call %s: end() stopped and the checkpoint could not be saved; the call lock stays held "
+                         "until this process exits", self.call_id)
+            self.alert("checkpoint_unsaved", f"call {self.call_id}: {self.path} not saved; call lock kept")
+            return
+        self._release_lock()
 
     def seal(self) -> None:
         """The worker: no rep event can arrive any more (the perception feed thread has exited)."""
@@ -812,6 +976,50 @@ class CompetitionCall:
     def ending(self) -> bool:
         """end() is running (the dispatcher client must stay open until it finishes)."""
         return self._end_task is not None and not self._end_task.done()
+
+    def _proven(self, body: dict, r: dict) -> bool:
+        """A 2xx for reps_committed. Fresh (not already/duplicate): this payload is stored; its digest goes to the
+        ledger as acked. already/duplicate: the dispatcher kept an earlier commit, which counts only if the ledger
+        holds an acked digest equal to this payload's; anything else is a payload conflict (admin review)."""
+        dg = payload_digest(body)
+        try:
+            acked = [e for e in read_ledger(self.path) if isinstance(e, dict) and e.get("acked")]
+        except (OSError, ValueError) as e:
+            acked = None
+            log.error("call %s: payload ledger unreadable: %r", self.call_id, e)
+        if r.get("already") or r.get("duplicate"):
+            if acked is not None and any(e.get("digest") == dg for e in acked):
+                log.info("call %s: reps_committed already stored with this exact payload (acked earlier)", self.call_id)
+                return True
+            self._record_conflict("the dispatcher already had a commit this run cannot prove equal", body, r, acked)
+            return False
+        if acked and any(e.get("digest") != dg for e in acked):
+            self._record_conflict("a fresh commit after a different acked payload", body, r, acked)
+            return False
+        if acked is not None:
+            try:
+                write_json_atomic(self.path + SENT_SUFFIX, {"call_id": self.call_id, "entries": acked + [
+                    {"digest": dg, "acked": True, "rep_count": len(body.get("reps") or []), "at_t": self.clock()}]})
+            except (OSError, ValueError, TypeError) as e:   # stored all the same: sent.reps_committed covers a resend
+                log.error("call %s: acked digest not recorded in the ledger: %r", self.call_id, e)
+                self.alert("checkpoint_write_failed", f"call {self.call_id}: payload ledger: {e!r}")
+        return True
+
+    def _record_conflict(self, reason: str, body: dict, r: dict, acked: list[dict] | None) -> None:
+        """Nothing is marked sent or committed; <ckpt>.conflict.json keeps this run's checkpoint, the payload digest
+        and the ledger; one commit_conflict alert. Adoption then refuses the call until an admin resolves it."""
+        self.conflict = {"reason": reason, "digest": payload_digest(body), "rep_count": len(body.get("reps") or []),
+                         "response": r, "ledger": acked if acked is not None else "unreadable"}
+        self.last_error = f"reps_committed: payload conflict ({reason})"
+        try:
+            write_json_atomic(self.path + CONFLICT_SUFFIX, jsonable({
+                "call_id": self.call_id, "at_t": self.clock(), "conflict": self.conflict,
+                "ledger": self.conflict["ledger"], "replayed_checkpoint": self.checkpoint()}))
+        except (OSError, ValueError, TypeError) as e:
+            log.error("call %s: conflict record not written: %r", self.call_id, e)
+        log.error("call %s: reps payload conflict (%s); left committed:false for admin review", self.call_id, reason)
+        self.alert("commit_conflict", f"call {self.call_id}: {reason}; both versions kept "
+                                      f"({os.path.basename(self.path)}{CONFLICT_SUFFIX})")
 
     async def _end(self, reason: str) -> dict:
         if self.t0 is not None and not self._start_done.is_set():
@@ -844,7 +1052,9 @@ class CompetitionCall:
             self._write()
             log.error("call %s: %s; checkpoint %s kept with committed:false", self.call_id, self.last_error, self.path)
             self.alert("commit_pending", f"call {self.call_id}: {self.last_error}; checkpoint {self.path}")
-            return {"recorded": True, "committed": False, "reps": len(self.reps), "liveness_result": self.liveness_result}
+            persisted = await self._persist()             # the lock stays held: seal() + end() commit later
+            return {"recorded": True, "committed": False, "reps": len(self.reps), "liveness_result": self.liveness_result,
+                    "persisted": persisted}
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.commit_deadline_s
         rel_end = min(self.rel(self.ended_at), self.count_s)
@@ -878,14 +1088,17 @@ class CompetitionCall:
                 self.last_error = f"{kind}: {e!r}"
                 log.exception("call %s: %s failed; checkpoint %s kept with committed:false", self.call_id, kind, self.path)
             else:
-                if r.get("ok"):
+                if isinstance(r, dict) and not r.get("ok") and r.get("reason") == "already":
+                    r = dict(r, ok=True, already=True)       # ch_commit_reps' second answer
+                if not isinstance(r, dict) or not r.get("ok"):
+                    reason = r.get("reason") if isinstance(r, dict) else r
+                    self.last_error = f"{kind}: refused ({reason})"
+                    log.error("call %s: dispatcher refused %s (%s); checkpoint kept with committed:false", self.call_id, kind, reason)
+                elif kind != "reps_committed" or self._proven(body, r):
                     self.sent[kind] = True
                     if kind == "reps_committed":
                         self.commit_result = {k: r.get(k) for k in ("points", "rank") if r.get(k) is not None}
                         self._commit_evt.set()
-                else:
-                    self.last_error = f"{kind}: refused ({r.get('reason')})"
-                    log.error("call %s: dispatcher refused %s (%s); checkpoint kept with committed:false", self.call_id, kind, r.get("reason"))
             self._write()
             if not self.sent[kind]:
                 break
@@ -895,4 +1108,7 @@ class CompetitionCall:
             self.alert("commit_pending", f"call {self.call_id}: {self.last_error}; checkpoint {self.path}")
         log.info("call %s: ended (%s): %d reps, liveness %s, committed %s", self.call_id, self.end_reason, len(self.reps),
                  self.liveness_result, self.committed)
-        return {"recorded": True, "committed": self.committed, "reps": len(self.reps), "liveness_result": self.liveness_result}
+        persisted = await self._persist()
+        self._release_lock()                              # final commit and save done: the reconciler may take over
+        return {"recorded": True, "committed": self.committed, "reps": len(self.reps), "liveness_result": self.liveness_result,
+                "persisted": persisted}

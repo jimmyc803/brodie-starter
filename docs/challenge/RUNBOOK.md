@@ -193,7 +193,34 @@ AGENT_NAME/LINE_ID mapping first. A normal post-call offline window is 180s by
 default. The dispatcher tick recovers expired claims/calls; do not directly
 rewrite line_state while a worker may still be active. After worker recovery,
 the reconciler timer processes local checkpoints every minute. Preserve
-`/opt/brodie/data/tmp/sessions` during incident response. For token expiry,
+`/opt/brodie/data/tmp/sessions` during incident response.
+
+Checkpoint ownership: the worker holds a per-call lock (`<call>.challenge.json.lock`,
+flock) for the life of each call and the reconciler takes the same lock, so deploy
+by restarting brodie-worker (stop the old process, then start the new one); never
+run an old and a new worker side by side. Checkpoints from a worker before the lock
+(no `"lock_protocol": 1`) are replayed only after `RECONCILE_LEGACY_GRACE_S`
+(default 900 s) without a write and once their recorded worker pid is gone. A
+`<call>.challenge.json.conflict.json` file means the dispatcher already holds a
+reps commit nobody can prove equal to the local one: neither the reconciler nor a
+redispatched worker touches that call again; compare both versions and resolve it
+by hand (`commit_conflict` alert). Never delete `.lock` files.
+
+The reconciler's `--once` run has a hard deadline, `RECONCILE_MAX_RUN_S`
+(default 50 s, below the 60 s timer): past it the process alerts
+`reconciler_deadline` and exits with code 3, which drops every call lock it
+held. The unit adds a second backstop that systemd enforces:
+
+```ini
+# infra/systemd/brodie-reconciler.service
+[Service]
+Type=oneshot
+ExecStart=/opt/brodie/current/.venv/bin/python -m scripts.reconcile_sessions --once
+TimeoutStartSec=90
+```
+
+Repeated `reconciler_deadline` alerts mean a dispatcher send never returns;
+check the dispatcher before anything else. For token expiry,
 repeat `chert login --device` as brodie, update CHERT_TOKEN_EXPIRES_AT (ISO-8601
 with timezone) in SSM, refresh secrets, and restart Chert. Login/registration
 must be confirmed by a real call before reopening the competition.

@@ -737,7 +737,14 @@ def test_privacy_full_call_writes_no_media(tmp_path, monkeypatch):
     after = {r: _files(r, rec) for r, rec in roots}
     new = set().union(*(after[r] - before[r] for r, _ in roots))
     assert not [p for p in new if p.lower().endswith(MEDIA_EXT)]
-    assert {p for p in new if p.startswith(str(tmp_path))} == {str(sess / "call-77.challenge.json"), str(tmp_path / "health" / "line-1.json")}
+    assert {p for p in new if p.startswith(str(tmp_path))} == {str(sess / "call-77.challenge.json"),
+                                                               str(sess / "call-77.challenge.json.lock"),   # ownership flock (empty)
+                                                               str(sess / "call-77.challenge.json.sent.json"),  # acked digest
+                                                               str(tmp_path / "health" / "line-1.json")}
+    assert os.path.getsize(sess / "call-77.challenge.json.lock") == 0
+    sent = json.loads((sess / "call-77.challenge.json.sent.json").read_text())
+    assert set(sent) == {"call_id", "entries"} and [set(e) for e in sent["entries"]] == [{"digest", "acked", "rep_count", "at_t"}]
+    assert "+15550001" not in json.dumps(sent)
     assert json.loads((tmp_path / "health" / "line-1.json").read_text())["active"] is False
     ck = json.loads((sess / "call-77.challenge.json").read_text())
     assert ck["committed"] is True and ck["call_id"] == "call-77" and ck["liveness_result"] == "pass"
@@ -813,6 +820,12 @@ def test_restart_adopts_checkpoint_and_never_clobbers_reps(tmp_path):
             r1.call.on_rep(rep_ev(), t=T0 + rel)
         await r1.advance(61)                                   # the challenge started at 60
         ck1 = r1.ckpt()
+        # while the first worker lives it owns the call (per-call lock): a second controller may not adopt it
+        probe = Rig(tmp_path)
+        probe.clock.t = T0 + 65
+        assert await probe.call.start() is False and probe.call.decision == "error"
+        assert r1.ckpt() == ck1                                # untouched by the refused controller
+        r1.call.lock.release()                                 # the first worker dies: the kernel drops its lock
         # the worker restarts (redispatch) 9 s later: a new controller for the same call id
         r2 = Rig(tmp_path, liveness=factory("pass"))
         r2.clock.t = T0 + 70
@@ -865,6 +878,8 @@ def test_unreadable_or_foreign_checkpoint_is_moved_aside(tmp_path):
             with open(r.call.path, "w") as f:
                 f.write(content)
             assert await r.call.start() is True
+            assert r.call.lock is not None and r.call.lock.held               # it owns the call while it runs
+            r.call.lock.release()                                              # (this worker is gone before the next)
             out.append((r, content))
             for p in os.listdir(r.dir):
                 if ".aside-" in p:
