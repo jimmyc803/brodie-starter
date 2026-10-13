@@ -31,7 +31,17 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
         end = parse_ts(power["ends_at"]).astimezone(ET).strftime("%I:%M %p")
         return f"{start}–{end}"
 
-    if command.kind == "HELP":
+    if command.kind == "LINK":
+        # D-25: proves the texter owns this handle; binds it to the web account that issued the code.
+        ctx["me_url"] = site + "/me"
+        result = store.rpc("ch_web_link", {"p_handle": inbound.handle, "p_code": command.arg, "p_now": now})
+        if result["ok"]:
+            user_id = result["user_id"]
+            ctx["display_name"] = result["display_name"]
+            template = "link_ok"
+        else:
+            template = {"expired": "link_expired", "handle_owned": "link_owned"}.get(result["reason"], "link_bad_code")
+    elif command.kind == "HELP":
         template = "help"
     elif command.kind in ("STOP", "START"):
         if user_id:

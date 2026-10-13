@@ -83,6 +83,9 @@ class Jobs:
                 logger.warning("no handle for %s; %s not sent", user_id, template)
                 return False
             raise
+        if r.get("skipped"):  # web-only user without a LINKed handle (D-25): nothing to send to
+            logger.info("no verified handle for %s; %s not sent", user_id, template)
+            return False
         return not r.get("duplicate")
 
     def _quiet(self, now: datetime) -> bool:

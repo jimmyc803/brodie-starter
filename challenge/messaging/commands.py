@@ -8,7 +8,7 @@ from typing import Literal
 
 CommandKind = Literal[
     "JOIN", "YES", "QUEUE", "STATUS", "TOP", "LEAVE", "RULES", "POWER",
-    "HELP", "STOP", "START", "UNKNOWN",
+    "HELP", "STOP", "START", "LINK", "UNKNOWN",
 ]
 
 
@@ -22,6 +22,7 @@ _COMMANDS: dict[str, CommandKind] = {
     "JOIN": "JOIN", "YES": "YES", "QUEUE": "QUEUE", "STATUS": "STATUS",
     "TOP": "TOP", "LEAVE": "LEAVE", "RULES": "RULES", "POWER": "POWER",
     "HELP": "HELP", "STOP": "STOP", "START": "START",
+    "LINK": "LINK",  # LINK <6-digit code>: verify a web account's FaceTime handle (D-25). Exact match only, never fuzzy.
 }
 _ALIASES: dict[str, CommandKind] = {
     "Q": "QUEUE", "LINE": "QUEUE", "S": "STATUS", "ME": "STATUS",

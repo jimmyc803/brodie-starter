@@ -30,12 +30,13 @@ import {
   facetimeLink,
   formatClock,
   formatEtaRange,
+  linkSmsHref,
   mePhase,
   type RegisteredMe,
 } from "@/lib/me-view";
 import { sendCode, verifyCode } from "@/app/login/actions";
 import { POST as confirmPost } from "@/app/login/confirm/route";
-import { joinChallenge, queueAction, setTexts, signOutUser } from "@/app/me/actions";
+import { claimHandle, joinChallenge, queueAction, setTexts, signOutUser } from "@/app/me/actions";
 import { GET as statusGet } from "@/app/me/status/route";
 import { proxy } from "@/proxy";
 
@@ -53,7 +54,8 @@ const ME: RegisteredMe = {
   registered: true,
   email: "ana@example.com",
   display_name: "Ana_W",
-  handle: "+15550100001",
+  handle: null,
+  pending_claim: { handle: "+15550100001", code: "042137", expires_at: "2026-10-14T14:00:00Z", expired: false },
   points: 42,
   points_today: 12,
   valid_reps: 40,
@@ -97,7 +99,8 @@ function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     if (url === `${DISP}/web/me`) return json(200, ME);
     if (url === `${DISP}/web/queue`) return json(200, { ok: true, reason: "ok", me: ME });
     if (url === `${DISP}/web/opt`) return json(200, { ok: true, reason: "ok", me: { ...ME, opted_out: true } });
-    if (url === `${DISP}/web/join`) return json(200, { ok: false, reason: "handle_taken", me: { registered: false, email: "ana@example.com" } });
+    if (url === `${DISP}/web/join`) return json(200, { ok: false, reason: "taken", me: { registered: false, email: "ana@example.com" } });
+    if (url === `${DISP}/web/handle`) return json(200, { ok: true, reason: "ok", me: ME });
   }
   return json(404, { message: `unexpected ${url}` });
 }
@@ -218,12 +221,17 @@ describe("/me talks to the dispatcher only as the signed-in user", () => {
     const o = await setTexts(PREV, form({ opted_out: "1", user_id: "someone-else" }));
     expect(o.me).toMatchObject({ opted_out: true });
     const j = await joinChallenge(PREV, form({ display_name: " Ana_W ", handle: "555-010-0001", age_ok: "on", rules_ok: "on" }));
-    expect(j).toMatchObject({ ok: false, error: expect.stringMatching(/already linked/) });
+    expect(j).toMatchObject({ ok: false, error: expect.stringMatching(/name is taken/) });
+    await joinChallenge(PREV, form({ display_name: "Ana_W", handle: "  ", age_ok: "on", rules_ok: "on" }));
+    const h = await claimHandle(PREV, form({ handle: " 555-010-0001 ", user_id: "someone-else" }));
+    expect(h).toMatchObject({ ok: true, me: ME });
     expect(dispCalls().map((c) => c.body)).toEqual([
       undefined,
       { action: "join" },
       { opted_out: true },
       { display_name: "Ana_W", handle: "555-010-0001", age_ok: true, rules_ok: true },
+      { display_name: "Ana_W", handle: null, age_ok: true, rules_ok: true }, // handle is optional (web-only play)
+      { handle: "555-010-0001" },
     ]);
     for (const c of dispCalls()) {
       expect(c.headers.Authorization).toBe("Bearer user-at");
@@ -281,6 +289,9 @@ describe("me view helpers", () => {
     expect(facetimeLink("+1 (555) 000-1111")).toBe("facetime:+15550001111");
     expect(facetimeLink(null)).toBeNull();
     expect(facetimeLink("javascript:alert(1)")).toBeNull();
+    expect(linkSmsHref("+1 (555) 000-1111", "042137")).toBe("sms:+15550001111&body=LINK%20042137");
+    expect(linkSmsHref(null, "042137")).toBeNull();
+    expect(linkSmsHref("+15550001111", "12<b>")).toBeNull();
   });
 });
 

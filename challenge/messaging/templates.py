@@ -37,6 +37,10 @@ TEMPLATES: dict[str, str] = {
     "ending_soon": "The challenge ends {ends_at}! Time for one more strong finish. Text QUEUE and make those clean reps count!",
     "final_results": "That's a wrap! {points} points, rank #{rank}. You showed up and put in the work. Check the final board:",
     "alert": "BRODIE ALERT [{condition}] {detail}",
+    "link_ok": "Linked! This number now belongs to {display_name} on the board. Texts and caller ID are on. Text QUEUE to get in line.",
+    "link_bad_code": "That code didn't match. Copy the 6-digit code from your page on the site and text LINK 123456 from the number you FaceTime with.",
+    "link_expired": "That code expired. Get a fresh one on your page on the site, then text LINK and the new code.",
+    "link_owned": "This number is already linked to another Brodie account. Keep using that account (text STATUS to see it), or link a different number on the site.",
     "not_registered": "Let's get you on the board! Text JOIN your_name to sign up. Use 3–20 letters, numbers, or underscores.",
 }
 
@@ -48,6 +52,7 @@ PROACTIVE_TEMPLATES = frozenset({
 LINK_FIELDS = {
     "welcome": "site_url", "join_confirm_prompt": "rules_url", "top": "site_url",
     "rules": "rules_url", "post_call": "result_url", "daily_recap": "site_url",
+    "link_bad_code": "me_url", "link_expired": "me_url", "link_owned": "me_url",
     "final_results": "site_url",
 }
 _STOP_HINT = " Text STOP to opt out."

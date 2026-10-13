@@ -8,24 +8,26 @@ so a token can never be verified with the wrong kind of key (no alg confusion, n
 Identity: the competitor is resolved ONLY from the verified `sub` via ch_user_by_auth; no endpoint accepts a user_id,
 and request bodies forbid unknown fields. Every response describes the caller's own record only.
 
-Rate limits: per client IP before auth (cheap flood guard) and per verified user after it.
+Rate limits: the shared per-IP limiter (ratelimit.rate_limit("web")) before auth, and a per-verified-user budget
+(WEB_RATE_PER_USER_MIN, default 120/min) after it.
+
+Handles (D-25): the FaceTime handle from the form is only a pending claim; it is bound when the owner texts
+"LINK <code>" from it (messaging handler -> ch_web_link). Until then the user gets no texts and no caller-id match.
 """
 from __future__ import annotations
 
 import logging
 import os
-import time
 import uuid
-from collections import defaultdict, deque
 from datetime import datetime
-from threading import Lock
 from typing import Any, Callable, Literal
 
 import jwt
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from challenge.messaging.commands import validate_display_name
+from challenge.dispatcher.ratelimit import RateLimiter, rate_limit
 from challenge.messaging.providers import normalize_handle
 from challenge.scoring import eta_range
 from challenge.store import Store, StoreError
@@ -48,7 +50,8 @@ class JwtVerifier:
 
     hs_secret: legacy shared secret (SUPABASE_JWT_SECRET) for HS256 tokens.
     jwks: kid -> public key resolver for asymmetric tokens (default: PyJWKClient on {SUPABASE_URL}/auth/v1/.well-known/jwks.json).
-    issuer: expected `iss` ({SUPABASE_URL}/auth/v1); None skips the check.
+    issuer: expected `iss` (SUPABASE_JWT_ISSUER, else {SUPABASE_URL}/auth/v1). REQUIRED in every mode (D-26): without it
+        the verifier is unconfigured (503), and a token with a missing or different `iss` is rejected.
     """
 
     def __init__(self, hs_secret: str | None = None, jwks: Callable[[str | None], Any] | None = None,
@@ -57,7 +60,7 @@ class JwtVerifier:
 
     @property
     def configured(self) -> bool:
-        return bool(self.hs_secret or self.jwks)
+        return bool((self.hs_secret or self.jwks) and self.issuer)
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "JwtVerifier":
@@ -78,11 +81,12 @@ class JwtVerifier:
                     raise AuthError(str(e)) from e
 
             resolver = _resolve
-        return cls(hs_secret=env.get("SUPABASE_JWT_SECRET"), jwks=resolver, issuer=f"{url}/auth/v1" if url else None)
+        issuer = (env.get("SUPABASE_JWT_ISSUER") or "").strip() or (f"{url}/auth/v1" if url else None)
+        return cls(hs_secret=env.get("SUPABASE_JWT_SECRET"), jwks=resolver, issuer=issuer)
 
     def verify(self, token: str) -> dict[str, Any]:
         if not self.configured:
-            raise AuthUnavailable("no JWT verification key configured")
+            raise AuthUnavailable("no JWT verification key or issuer configured")
         try:
             header = jwt.get_unverified_header(token)
         except jwt.PyJWTError as e:
@@ -96,7 +100,7 @@ class JwtVerifier:
             raise AuthError(f"unsupported alg {alg!r}")
         try:
             claims = jwt.decode(token, key, algorithms=[alg], audience=self.audience, issuer=self.issuer,
-                                options={"require": ["exp", "sub", "aud"], "verify_iss": self.issuer is not None})
+                                options={"require": ["exp", "sub", "aud", "iss"], "verify_iss": True})
         except jwt.PyJWTError as e:
             raise AuthError(type(e).__name__) from e
         if claims.get("role") != "authenticated" or claims.get("is_anonymous") is True:
@@ -108,40 +112,23 @@ class JwtVerifier:
         return claims
 
 
-# TODO(task 25): swap for challenge/dispatcher/ratelimit.py once it lands (not in this branch yet).
-class _Limiter:
-    """Thread-safe sliding 60 s window per key; empty keys are dropped so memory stays bounded."""
-
-    def __init__(self, per_min: int, now: Callable[[], float] = time.monotonic):
-        self.per_min, self.now, self.hits, self.lock = per_min, now, defaultdict(deque), Lock()
-
-    def check(self, key: str) -> bool:
-        with self.lock:
-            t, q = self.now(), self.hits[key]
-            while q and t - q[0] >= 60:
-                q.popleft()
-            if len(q) >= self.per_min:
-                return False
-            q.append(t)
-            if len(self.hits) > 10_000:
-                for k in [k for k, v in self.hits.items() if not v or t - v[-1] >= 60]:
-                    del self.hits[k]
-            return True
-
-
 class _Body(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
 class JoinIn(_Body):
     display_name: str = Field(max_length=40)
-    handle: str = Field(max_length=254)
+    handle: str | None = Field(default=None, max_length=254)  # optional: claim window works without it
     age_ok: bool
     rules_ok: bool
 
 
 class QueueIn(_Body):
     action: Literal["join", "leave"]
+
+
+class HandleIn(_Body):
+    handle: str = Field(max_length=254)
 
 
 class OptIn(_Body):
@@ -160,7 +147,8 @@ def _me_payload(r: dict[str, Any], email: str | None, caller_id_source: str) -> 
         "registered": True,
         "email": email,
         "display_name": r.get("display_name"),
-        "handle": r.get("handle"),
+        "handle": r.get("handle"),  # verified (LINKed) handle only
+        "pending_claim": r.get("pending_claim"),
         "points": r.get("points", 0),
         "points_today": r.get("points_today", 0),
         "valid_reps": r.get("valid_reps", 0),
@@ -186,12 +174,12 @@ def _me_payload(r: dict[str, Any], email: str | None, caller_id_source: str) -> 
 
 def create_router(get_store: Callable[[], Store], clock: Callable[[], datetime], *, enabled: bool,
                   verifier: JwtVerifier, caller_id_source: str,
-                  ip_per_min: int | None = None, user_per_min: int | None = None) -> APIRouter:
-    router = APIRouter(prefix="/web")
-    ip_limiter = _Limiter(ip_per_min or int(os.environ.get("WEB_RATE_PER_IP_MIN", "6000")))
-    user_limiter = _Limiter(user_per_min or int(os.environ.get("WEB_RATE_PER_USER_MIN", "120")))
+                  user_per_min: int | None = None) -> APIRouter:
+    router = APIRouter(prefix="/web", dependencies=[Depends(rate_limit("web"))])
+    user_limiter = RateLimiter(user_per_min or int(os.environ.get("WEB_RATE_PER_USER_MIN", "120")))
     if enabled and not verifier.configured:
-        logger.warning("web join enabled but no SUPABASE_JWT_SECRET / SUPABASE_URL: /web/* will return 503")
+        logger.warning("web join enabled but JWT key or issuer unset (SUPABASE_JWT_SECRET / SUPABASE_URL /"
+                       " SUPABASE_JWT_ISSUER): /web/* will return 503")
 
     def rpc(fn: str, args: dict) -> Any:
         try:
@@ -200,11 +188,9 @@ def create_router(get_store: Callable[[], Store], clock: Callable[[], datetime],
             logger.error("store error: %s", e)
             raise HTTPException(503, "store unavailable") from e
 
-    def caller(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    def caller(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         if not enabled:
             raise HTTPException(404, "web join disabled")
-        if not ip_limiter.check(request.client.host if request.client else "?"):
-            raise HTTPException(429, "rate limited")
         scheme, _, token = (authorization or "").partition(" ")
         if scheme.lower() != "bearer" or not token.strip():
             raise HTTPException(401, "missing bearer token", headers={"WWW-Authenticate": "Bearer"})
@@ -249,9 +235,11 @@ def create_router(get_store: Callable[[], Store], clock: Callable[[], datetime],
         name = body.display_name.strip()
         if not validate_display_name(name)[0]:
             return {"ok": False, "reason": "bad_name", "me": me_for(who)}
-        handle = normalize_handle(body.handle)
-        if handle is None:
-            return {"ok": False, "reason": "bad_handle", "me": me_for(who)}
+        handle = None
+        if body.handle and body.handle.strip():
+            handle = normalize_handle(body.handle)
+            if handle is None:
+                return {"ok": False, "reason": "bad_handle", "me": me_for(who)}
         r = rpc("ch_web_join", {"p_auth_user_id": who["auth_id"], "p_display_name": name, "p_handle": handle,
                                 "p_now": clock()})
         if r.get("ok"):
@@ -269,6 +257,16 @@ def create_router(get_store: Callable[[], Store], clock: Callable[[], datetime],
             out = {"ok": bool(r.get("ok")), "reason": "left" if r.get("was_queued") else "not_queued"}
         out["me"] = me_for(who)
         return out
+
+    @router.post("/handle")
+    def claim_handle(body: HandleIn, who: dict = Depends(caller)) -> dict:
+        """(Re)issue the LINK code for a FaceTime handle; replaces the user's previous pending claim."""
+        uid = registered(who)
+        handle = normalize_handle(body.handle)
+        if handle is None:
+            return {"ok": False, "reason": "bad_handle", "me": me_for(who)}
+        r = rpc("ch_web_claim_handle", {"p_user_id": uid, "p_handle": handle, "p_now": clock()})
+        return {"ok": bool(r.get("ok")), "reason": r.get("reason"), "me": me_for(who)}
 
     @router.post("/opt")
     def opt(body: OptIn, who: dict = Depends(caller)) -> dict:

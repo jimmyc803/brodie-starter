@@ -47,12 +47,11 @@ export function JoinForm({ email }: { email: string | null }) {
         </div>
         <div className="space-y-2">
           <label htmlFor="join-handle" className="eyebrow block">
-            iPhone FaceTime number or Apple ID email
+            iPhone FaceTime number or Apple ID email <span className="normal-case tracking-normal text-ink-3">(optional)</span>
           </label>
           <input
             id="join-handle"
             name="handle"
-            required
             maxLength={254}
             autoComplete="tel"
             autoCapitalize="none"
@@ -60,7 +59,10 @@ export function JoinForm({ email }: { email: string | null }) {
             placeholder="(555) 123-4567"
             className={fieldCls}
           />
-          <p className="text-sm text-ink-3">Private. Only used to recognise your call; never shown.</p>
+          <p className="text-sm text-ink-3">
+            Private, never shown. You&apos;ll verify it by texting a code to Brodie; until then (or if you skip it) we
+            recognise your call by your turn in line.
+          </p>
         </div>
         <fieldset className="space-y-3">
           <legend className="sr-only">Eligibility</legend>

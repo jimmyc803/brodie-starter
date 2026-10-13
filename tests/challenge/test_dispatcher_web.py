@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import itertools
 import json
+import re
 import uuid
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -87,6 +88,10 @@ def env(db, conn):
                      flags=Flags(MESSAGING_PROVIDER="web_only", CALLER_ID_SOURCE="chert_meta"),
                      token="tok", web_verifier=verifier)
     return TestClient(app), conn, st, now
+
+
+def link(st, handle, code, now=T0):
+    return st.rpc("ch_web_link", {"p_handle": handle, "p_code": code, "p_now": now})
 
 
 def join(c, tok, name, handle, **over):
@@ -177,11 +182,15 @@ def test_join_queue_status_happy_path(env):
     r = join(c, tok, "Ana_W", "(555) 010-0001")
     body = r.json()
     assert body["ok"] and body["reason"] == "ok" and body["me"]["registered"] is True
-    assert body["me"]["handle"] == "+15550100001" and body["me"]["display_name"] == "Ana_W"
-    row = conn.execute("select c.auth_user_id::text, h.linked_via, c.age_confirmed_at is not null, c.rules_accepted_at"
-                       " is not null from clients c join client_handles h on h.client_id = c.id"
-                       " where c.display_name = 'Ana_W'").fetchone()
-    assert row == (sub, "web", True, True)
+    assert body["me"]["display_name"] == "Ana_W"
+    # D-25: the typed handle is only a pending claim with a LINK code; nothing is bound yet.
+    assert body["me"]["handle"] is None
+    pending = body["me"]["pending_claim"]
+    assert pending["handle"] == "+15550100001" and re.fullmatch(r"\d{6}", pending["code"]) and not pending["expired"]
+    row = conn.execute("select c.auth_user_id::text, c.age_confirmed_at is not null, c.rules_accepted_at is not null,"
+                       " (select count(*) from client_handles h where h.client_id = c.id)"
+                       " from clients c where c.display_name = 'Ana_W'").fetchone()
+    assert row == (sub, True, True, 0)
     assert join(c, tok, "Other_Name", "+15550100009").json()["reason"] == "already_registered"
 
     me = c.get("/web/me", headers=bearer(tok)).json()
@@ -217,7 +226,10 @@ def test_join_queue_status_happy_path(env):
 def test_claim_call_and_points_today(env):
     c, conn, st, now = env
     tok = new_user(c, "Cy_R")
-    handle = c.get("/web/me", headers=bearer(tok)).json()["handle"]
+    pending = c.get("/web/me", headers=bearer(tok)).json()["pending_claim"]
+    handle = pending["handle"]
+    assert link(st, handle, pending["code"])["ok"]
+    assert c.get("/web/me", headers=bearer(tok)).json()["handle"] == handle
     assert c.post("/web/queue", headers=bearer(tok), json={"action": "join"}).json()["ok"]
     st.rpc("ch_tick", {"p_now": T0})
     me = c.get("/web/me", headers=bearer(tok)).json()
@@ -232,7 +244,8 @@ def test_claim_call_and_points_today(env):
     ev = {"kind": "reps_committed", "call_id": "wc1", "idem_key": "wc1-c", "at": at, "payload": {
         "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(), "liveness_result": "pass",
         "judge_version": "j1", "reps": [{**rep, "n": 1}, {**rep, "n": 2}]}}
-    assert c.post("/calls/event", headers=H, json=ev).json()["ok"]
+    r = c.post("/calls/event", headers=H, json=ev).json()
+    assert r["ok"] and r["postcall"] != "pending"
     end = {"kind": "call_ended", "call_id": "wc1", "idem_key": "wc1-e", "at": at, "payload": {
         "ended_at": (T0 + timedelta(seconds=195)).isoformat(), "count_end_at": (T0 + timedelta(seconds=180)).isoformat(),
         "rep_count": 2}}
@@ -266,7 +279,7 @@ def test_never_exposes_or_touches_another_user(env):
     me_a = c.get("/web/me", headers=bearer(a)).json()
     me_b = c.get("/web/me", headers=bearer(b)).json()
     assert me_a["display_name"] == "Ev_A" and me_b["display_name"] == "Fi_B"
-    assert "user_id" not in me_a and me_a["handle"] != me_b["handle"]
+    assert "user_id" not in me_a and me_a["pending_claim"]["handle"] != me_b["pending_claim"]["handle"]
     # No endpoint takes a user id; smuggled fields are rejected, not honoured.
     uid_b = conn.execute("select id::text from clients where display_name = 'Fi_B'").fetchone()[0]
     r = c.post("/web/queue", headers=bearer(a), json={"action": "join", "user_id": uid_b})
@@ -280,21 +293,17 @@ def test_never_exposes_or_touches_another_user(env):
     assert c.post("/web/opt", headers=bearer(stranger), json={"opted_out": True}).status_code == 409
 
 
-def test_handle_and_name_conflicts_never_merge_accounts(env):
+def test_name_conflict_and_email_handle(env):
     c, conn, *_ = env
-    coach = conn.execute("select (value #>> '{}')::uuid from competition_config where key='challenge_coach_id'").fetchone()[0]
-    uid = conn.execute("insert into clients (coach_id, name, display_name, joined_at) values (%s,'Gus','Gus_I',%s)"
-                       " returning id", (coach, T0)).fetchone()[0]
-    conn.execute("insert into client_handles (handle, client_id, kind, linked_via) values ('+15550199999',%s,'phone','join')",
-                 (uid,))
+    new_user(c, "Gus_I")
     tok = hs(claims())
-    assert join(c, tok, "Hal_J", "555-019-9999").json()["reason"] == "handle_taken"
     assert join(c, tok, "gus_i", "+15550188888").json()["reason"] == "taken"
     assert c.get("/web/me", headers=bearer(tok)).json()["registered"] is False
-    assert conn.execute("select count(*) from clients where auth_user_id is not null").fetchone()[0] == 0
-    # Apple ID email handles are accepted and lowercased.
+    # Apple ID email handles are accepted (lowercased) as claims; the handle is optional entirely.
     r = join(c, tok, "Hal_J", "Hal.J@iCloud.com").json()
-    assert r["ok"] and r["me"]["handle"] == "hal.j@icloud.com"
+    assert r["ok"] and r["me"]["pending_claim"]["handle"] == "hal.j@icloud.com"
+    r = join(c, hs(claims()), "No_Handle", None).json()
+    assert r["ok"] and r["me"]["pending_claim"] is None and r["me"]["handle"] is None
 
 
 def test_registration_closed(env):
@@ -319,7 +328,7 @@ def test_rate_limited_per_user(db, monkeypatch):
     assert c.get("/web/me", headers=bearer(hs(claims(), secret="y" * 48))).status_code == 401
 
 
-def test_concurrent_joins_create_one_account_per_login_and_handle(env):
+def test_concurrent_joins_create_one_account_per_login(env):
     from concurrent.futures import ThreadPoolExecutor
 
     _, conn, st, _ = env
@@ -333,7 +342,144 @@ def test_concurrent_joins_create_one_account_per_login_and_handle(env):
         same_login = list(ex.map(go, [(sub, f"Jo_{i}", f"+1555030000{i}") for i in range(6)]))
         same_handle = list(ex.map(go, [(str(uuid.uuid4()), f"Ka_{i}", "+15550400000") for i in range(6)]))
     assert sorted(r["reason"] for r in same_login) == ["already_registered"] * 5 + ["ok"]
-    assert sorted(r["reason"] for r in same_handle) == ["handle_taken"] * 5 + ["ok"]
+    assert [r["reason"] for r in same_handle] == ["ok"] * 6  # pending claims never block each other (D-25)
+    assert conn.execute("select count(*) from client_handles").fetchone()[0] == 0
     assert conn.execute("select count(*) from clients where auth_user_id = %s", (sub,)).fetchone()[0] == 1
-    assert conn.execute("select count(*) from client_handles where client_id ="
+    assert conn.execute("select count(*) from web_handle_claims where consumed_at is null and user_id ="
                         " (select id from clients where auth_user_id = %s)", (sub,)).fetchone()[0] == 1
+
+
+# ---------------------------------------------------------------- D-25: handle claims + LINK verification
+
+def text(st, handle, body, now=T0):
+    """An inbound iMessage through the real command handler; returns the queued reply (template, ctx)."""
+    from challenge.config import Config
+    from challenge.messaging.handler import handle_inbound
+    from challenge.messaging.providers import Inbound
+
+    ob = FakeOutbox()
+    handle_inbound(st, Config(st), ob, Inbound(f"m-{next(_seq)}", handle, body, now), now)
+    assert len(ob.sent) == 1
+    return ob.sent[0]["template"], ob.sent[0]["ctx"], ob.sent[0]["handle"]
+
+
+def pending(c, tok):
+    return c.get("/web/me", headers=bearer(tok)).json()["pending_claim"]
+
+
+def test_squatter_cannot_block_owner_and_owner_links_by_text(env):
+    c, conn, st, _ = env
+    victim_phone = "+15550123456"
+    squatter = hs(claims())
+    assert join(c, squatter, "Squat_X", victim_phone).json()["ok"]
+    owner = hs(claims())
+    r = join(c, owner, "Real_Owner", "555-012-3456").json()
+    assert r["ok"] and r["reason"] == "ok"  # not blocked by the squatter's pending claim
+    code = pending(c, owner)["code"]
+
+    # Owner texts LINK from their phone: bound to the owner, every other claim on that number is cleared.
+    template, ctx, to = text(st, victim_phone, f"link {code}")
+    assert (template, ctx["display_name"], to) == ("link_ok", "Real_Owner", victim_phone)
+    owner_id = conn.execute("select id from clients where display_name = 'Real_Owner'").fetchone()[0]
+    assert conn.execute("select client_id, linked_via from client_handles where handle = %s",
+                        (victim_phone,)).fetchone() == (owner_id, "web")
+    assert pending(c, squatter) is None and c.get("/web/me", headers=bearer(squatter)).json()["handle"] is None
+    assert c.get("/web/me", headers=bearer(owner)).json()["handle"] == victim_phone
+    # Re-sending the same code is harmless; the number now resolves to the owner for STATUS etc.
+    assert st.rpc("ch_user_by_handle", {"p_handle": victim_phone})["display_name"] == "Real_Owner"
+
+
+def test_link_wrong_code_expired_and_text_registered_owner(env):
+    c, conn, st, now = env
+    tok = hs(claims())
+    assert join(c, tok, "Lin_K", "+15550111111").json()["ok"]
+    code = pending(c, tok)["code"]
+    wrong = f"{(int(code) + 1) % 1_000_000:06d}"
+    assert text(st, "+15550111111", f"LINK {wrong}")[0] == "link_bad_code"
+    assert text(st, "+15550111111", "LINK")[0] == "link_bad_code"
+    # Right code but texted from a different number: no match (codes are per handle).
+    assert text(st, "+15550122222", f"LINK {code}")[0] == "link_bad_code"
+    # Expired after 24 h; a fresh code can be issued from /me.
+    assert text(st, "+15550111111", f"LINK {code}", now=T0 + timedelta(hours=24, seconds=1))[0] == "link_expired"
+    now["t"] = T0 + timedelta(hours=25)
+    assert pending(c, tok)["expired"] is True
+    r = c.post("/web/handle", headers=bearer(tok), json={"handle": "+15550111111"}).json()
+    fresh = r["me"]["pending_claim"]
+    assert r["ok"] and not fresh["expired"]
+    assert text(st, "+15550111111", f"LINK {fresh['code']}", now=now["t"])[0] == "link_ok"
+    assert conn.execute("select count(*) from client_handles").fetchone()[0] == 1
+
+    # A number that already belongs to a text-registered account is refused; that account is untouched.
+    coach = conn.execute("select (value #>> '{}')::uuid from competition_config where key='challenge_coach_id'").fetchone()[0]
+    uid = conn.execute("insert into clients (coach_id, name, display_name, joined_at) values (%s,'Txt','Txt_U',%s)"
+                       " returning id", (coach, T0)).fetchone()[0]
+    conn.execute("insert into client_handles (handle, client_id, kind, linked_via) values ('+15550133333',%s,'phone','join')",
+                 (uid,))
+    other = hs(claims())
+    assert join(c, other, "Web_V", "+15550133333").json()["ok"]
+    template, ctx, _ = text(st, "+15550133333", f"LINK {pending(c, other)['code']}", now=now["t"])
+    assert template == "link_owned" and ctx["me_url"].endswith("/me")
+    assert conn.execute("select client_id from client_handles where handle = '+15550133333'").fetchone()[0] == uid
+
+
+def test_link_is_exact_command_never_fuzzy():
+    from challenge.messaging.commands import parse
+
+    assert parse("LINK 123456") == parse("link: 123456") and parse("LINK 123456").kind == "LINK"
+    assert parse("LINE").kind == "QUEUE"  # the QUEUE alias still wins
+    assert parse("LIMK 123456").kind != "LINK" and parse("LINKS 123456").kind != "LINK"
+
+
+def test_unverified_user_gets_no_texts_and_no_caller_id_match(env):
+    c, conn, st, now = env  # env app runs CALLER_ID_SOURCE=chert_meta
+    tok = hs(claims())
+    assert join(c, tok, "Un_V", "+15550144444").json()["ok"]
+    uid = conn.execute("select id::text from clients where display_name = 'Un_V'").fetchone()[0]
+
+    # chert_meta walk-in from the claimed-but-unverified number never resolves to the web user.
+    r = c.post("/calls/start", headers=H, json={"call_id": "uv1", "line_id": "line-1", "handle": "+15550144444"}).json()
+    assert r["decision"] == "reject" and r["reason"] == "not_registered"
+    assert st.rpc("ch_user_by_handle", {"p_handle": "+15550144444"})["user_id"] is None
+    assert conn.execute("select state from line_state where line_id = 'line-1'").fetchone()[0] == "idle"
+
+    # Claim window still identifies them (fallback mode), and nothing is ever texted to them.
+    app = create_app(st, None, clock=lambda: now["t"], flags=Flags(MESSAGING_PROVIDER="web_only"), token="tok",
+                     web_verifier=JwtVerifier(hs_secret=SECRET, issuer=ISS))
+    cw = TestClient(app)
+    assert cw.post("/web/queue", headers=bearer(tok), json={"action": "join"}).json()["ok"]
+    st.rpc("ch_tick", {"p_now": T0})  # pops them: would normally queue a 'youre_up' text
+    r = cw.post("/calls/start", headers=H, json={"call_id": "uv2", "line_id": "line-1"}).json()
+    assert r["decision"] == "accept" and r["user_id"] == uid
+    at = (T0 + timedelta(seconds=10)).isoformat()
+    ev = {"kind": "reps_committed", "call_id": "uv2", "idem_key": "uv2-c", "at": at, "payload": {
+        "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(), "liveness_result": "pass",
+        "judge_version": "j1", "reps": [{"n": 1, "t": 1.0, "at": at, "valid": True, "reject_reasons": [], "faults": [],
+                                          "in_challenge": False}]}}
+    r = cw.post("/calls/event", headers=H, json=ev).json()
+    assert r["ok"] and r["postcall"] != "pending"  # post-call completes; it just has nobody to text
+    assert conn.execute("select postcall_done_at is not null from calls where id = 'uv2'").fetchone()[0]
+    assert conn.execute("select count(*) from messages where user_id = %s", (uid,)).fetchone()[0] == 0
+    assert st.rpc("ch_outbox_enqueue", {"p_handle": None, "p_user_id": uid, "p_template": "welcome", "p_body": None,
+                                        "p_media_url": None, "p_dedupe_key": "x-uv", "p_not_before": None,
+                                        "p_now": T0, "p_ctx": {}})["skipped"] == "no_handle"
+    assert cw.get("/web/me", headers=bearer(tok)).json()["points_today"] == 1
+
+
+# ---------------------------------------------------------------- D-26: issuer always required
+
+def test_issuer_required_in_every_mode():
+    assert not JwtVerifier(hs_secret=SECRET).configured  # secret alone is not enough
+    with pytest.raises(Exception) as e:
+        JwtVerifier(hs_secret=SECRET).verify(hs(claims()))
+    assert type(e.value).__name__ == "AuthUnavailable"
+    v = JwtVerifier(hs_secret=SECRET, issuer=ISS)
+    for bad in (claims(iss=None), claims(iss="https://other.supabase.co/auth/v1"), claims(iss="")):
+        with pytest.raises(AuthError):
+            v.verify(hs(bad))
+    with pytest.raises(AuthError):
+        JwtVerifier(jwks=_jwks, issuer=ISS).verify(es(claims(iss=None)))
+    assert v.verify(hs(claims()))["iss"] == ISS
+    env = JwtVerifier.from_env({"SUPABASE_JWT_SECRET": SECRET, "SUPABASE_JWT_ISSUER": ISS})
+    assert env.configured and env.issuer == ISS
+    assert JwtVerifier.from_env({"SUPABASE_JWT_SECRET": SECRET, "SUPABASE_URL": "https://proj.supabase.test/"}).issuer == ISS
+    assert not JwtVerifier.from_env({"SUPABASE_JWT_SECRET": SECRET}).configured

@@ -12,13 +12,14 @@ import {
   facetimeLink,
   formatClock,
   formatEtaRange,
+  linkSmsHref,
   mePhase,
   ordinalRank,
   type Me,
   type MeActionState,
   type RegisteredMe,
 } from "@/lib/me-view";
-import { queueAction, setTexts } from "./actions";
+import { claimHandle, queueAction, setTexts } from "./actions";
 
 const POLL_MS = 3_000;
 
@@ -153,6 +154,8 @@ export function MeDashboard({ initial }: { initial: RegisteredMe }) {
       </header>
 
       <StatusHero me={me} phase={phase} secondsLeft={secondsLeft} facetime={ft} />
+
+      {me.handle ? null : <VerifyCard me={me} onResult={fromAction} />}
 
       <dl className="grid grid-cols-2 gap-3">
         <Stat label="Today's points" value={String(me.points_today)} accent />
@@ -334,5 +337,97 @@ function Stat({ label, value, hint, accent, icon }: { label: string; value: stri
       </dd>
       {hint ? <dd className="mt-1 text-xs text-ink-3">{hint}</dd> : null}
     </div>
+  );
+}
+
+/**
+ * D-25: the FaceTime handle only counts once its owner proves it by texting LINK <code> from it. Until then the user
+ * gets no texts and is recognised on calls by the claim window only.
+ */
+function VerifyCard({ me, onResult }: { me: RegisteredMe; onResult: (s: MeActionState) => void }) {
+  const [state, action, pending] = useMeAction(claimHandle, onResult);
+  const [copied, setCopied] = useState(false);
+  const claim = me.pending_claim && !me.pending_claim.expired ? me.pending_claim : null;
+  const sms = claim ? linkSmsHref(me.brodie_number, claim.code) : null;
+
+  const copy = async () => {
+    if (!claim) return;
+    try {
+      await navigator.clipboard.writeText(`LINK ${claim.code}`);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <section aria-labelledby="verify-heading" className="card border-gold/40 p-5">
+      <p id="verify-heading" className="eyebrow text-gold">
+        Verify your number
+      </p>
+      {claim ? (
+        <>
+          <p className="mt-2 text-lg">
+            Text <strong className="font-mono text-ink">LINK {claim.code}</strong> to{" "}
+            {me.brodie_number ? <strong className="whitespace-nowrap text-ink">{me.brodie_number}</strong> : "Brodie"} from{" "}
+            <strong className="whitespace-nowrap text-ink">{claim.handle}</strong>.
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2">
+            {sms ? (
+              <a
+                href={sms}
+                className="inline-flex min-h-12 items-center justify-center rounded-full bg-accent px-4 font-display text-lg font-extrabold uppercase tracking-wide text-on-accent"
+              >
+                Open Messages
+              </a>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void copy()}
+              className={`inline-flex min-h-12 items-center justify-center rounded-full border border-hairline-strong px-4 font-semibold text-ink ${sms ? "" : "col-span-2"}`}
+            >
+              <span aria-live="polite">{copied ? "Copied" : `Copy LINK ${claim.code}`}</span>
+            </button>
+          </div>
+          <p className="mt-3 text-sm text-ink-3">
+            Code works for 24 hours. Until it&apos;s verified you get no texts, and we recognise your call by your turn
+            in line. You can skip this and play web-only.
+          </p>
+        </>
+      ) : (
+        <p className="mt-2 text-ink-2">
+          {me.pending_claim?.expired ? "Your code expired. " : ""}Add the number or Apple ID email you FaceTime from to
+          get texts and caller ID. Optional: without it you play web-only.
+        </p>
+      )}
+      <form action={action} className="mt-4 flex gap-2">
+        <label htmlFor="verify-handle" className="sr-only">
+          FaceTime number or Apple ID email
+        </label>
+        <input
+          id="verify-handle"
+          name="handle"
+          required
+          maxLength={254}
+          autoComplete="tel"
+          autoCapitalize="none"
+          spellCheck={false}
+          defaultValue={me.pending_claim?.handle ?? ""}
+          placeholder="(555) 123-4567"
+          className="min-h-12 min-w-0 flex-1 rounded-2xl border border-hairline-strong bg-canvas px-4 text-ink placeholder:text-ink-3 focus:border-accent focus:outline-none"
+        />
+        <button
+          type="submit"
+          disabled={pending}
+          className="min-h-12 shrink-0 rounded-full border border-hairline-strong px-4 text-sm font-semibold text-ink hover:border-accent disabled:opacity-60"
+        >
+          {pending ? "…" : claim ? "New code" : "Get code"}
+        </button>
+      </form>
+      <p role="status" aria-live="polite" className={`mt-2 min-h-5 text-sm ${state.ok ? "text-ink-2" : "text-bad"}`}>
+        {state.status ? (state.ok ? state.message : state.error) : null}
+      </p>
+    </section>
   );
 }

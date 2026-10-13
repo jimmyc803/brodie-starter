@@ -9,7 +9,7 @@ import { joinReasonMessage, queueReasonMessage, type MeActionState } from "@/lib
 // verifies it and maps it to their competitor record; no user id is accepted from the form.
 
 async function run(
-  path: "/web/join" | "/web/queue" | "/web/opt",
+  path: "/web/join" | "/web/queue" | "/web/opt" | "/web/handle",
   body: Record<string, unknown>,
   ok: (reason: string | null) => string,
   fail: (reason: string | null) => string,
@@ -35,7 +35,7 @@ export async function joinChallenge(_prev: MeActionState, fd: FormData): Promise
     "/web/join",
     {
       display_name: str("display_name").trim().slice(0, 40),
-      handle: str("handle").trim(),
+      handle: str("handle").trim() || null, // optional: without it the claim window identifies the caller
       age_ok: fd.get("age_ok") === "on",
       rules_ok: fd.get("rules_ok") === "on",
     },
@@ -68,6 +68,17 @@ export async function setTexts(_prev: MeActionState, fd: FormData): Promise<MeAc
     { opted_out: optedOut },
     () => (optedOut ? "Stopped. No more texts, and you left the line." : "Texts back on."),
     () => "Couldn't update your text settings.",
+  );
+}
+
+/** (Re)issue the LINK code for a FaceTime handle (new number, or the 24 h code expired). */
+export async function claimHandle(_prev: MeActionState, fd: FormData): Promise<MeActionState> {
+  const handle = typeof fd.get("handle") === "string" ? String(fd.get("handle")).trim().slice(0, 254) : "";
+  return run(
+    "/web/handle",
+    { handle },
+    (reason) => (reason === "already_linked" ? "That number is already verified." : "New code ready. Text it to Brodie."),
+    joinReasonMessage,
   );
 }
 

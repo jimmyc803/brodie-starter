@@ -57,7 +57,7 @@ function bearer(token: string): Record<string, string> {
 /** POST a /web/* mutation as the signed-in user. */
 export async function webPost(
   accessToken: string,
-  path: "/web/join" | "/web/queue" | "/web/opt",
+  path: "/web/join" | "/web/queue" | "/web/opt" | "/web/handle",
   body: Record<string, unknown>,
   fetchImpl: FetchLike = fetch,
 ): Promise<WebResult> {

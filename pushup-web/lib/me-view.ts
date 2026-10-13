@@ -8,7 +8,9 @@ export type Me =
       registered: true;
       email: string | null;
       display_name: string;
+      /** Verified (LINKed) FaceTime handle; null until the owner texts LINK <code> (D-25). */
       handle: string | null;
+      pending_claim: { handle: string; code: string; expires_at: string; expired: boolean } | null;
       points: number;
       points_today: number;
       valid_reps: number;
@@ -81,6 +83,13 @@ export function facetimeLink(brodieNumber: string | null): string | null {
   return /^\+?\d{7,15}$/.test(n) ? `facetime:${n}` : null;
 }
 
+/** sms: link that opens Messages to Brodie with "LINK <code>" typed (iOS `&body=` form), or null. */
+export function linkSmsHref(brodieNumber: string | null, code: string): string | null {
+  if (!brodieNumber || !/^\d{6}$/.test(code)) return null;
+  const n = brodieNumber.replace(/[^\d+]/g, "");
+  return /^\+?\d{7,15}$/.test(n) ? `sms:${n}&body=${encodeURIComponent(`LINK ${code}`)}` : null;
+}
+
 export function ordinalRank(rank: number | null): string {
   return rank ? `#${rank}` : "—";
 }
@@ -89,7 +98,6 @@ const JOIN_REASONS: Record<string, string> = {
   bad_name: "Names are 3–20 letters, numbers or underscores (and keep it clean).",
   taken: "That name is taken. Try another.",
   bad_handle: "Enter the phone number or Apple ID email you FaceTime from.",
-  handle_taken: "That FaceTime number or email is already linked to another player.",
   closed: "Registration is closed.",
   confirm_required: "Confirm you're 18+ and accept the rules.",
 };
