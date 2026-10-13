@@ -85,6 +85,7 @@ JOB_BEAT_S = 30.0                     # job heartbeat (scope job) while a compet
 MIRROR_BITRATE = 2_800_000            # the push-up mirror's 720x1280 track: a static framing + 2.8 Mbps keeps the caller's picture crisp
 JOB_STALL_S = 10.0                    # a counting job with no processed frame / controller tick this long is unhealthy
 JOB_STALE_S = 90.0                    # an active job whose health file is older than this is wedged
+IDLE_CARD_FPS = float(os.environ.get('IDLE_CARD_FPS', '4') or 4)   # coach-video rate while no caller video (warm room)
 COMMIT_WAIT_S = 15.0                  # aclose waits this long for the competition commit (the checkpoint is on disk already)
 _chert_keys_logged = False
 
@@ -588,7 +589,11 @@ class CoachJob:
                     size = (VW, VH)
                     frame = await asyncio.to_thread(self._avatar_frame, av, speaking, size)
                 source.capture_frame(frame)
-                next_t += period; await asyncio.sleep(max(0.0, next_t - loop.time()))
+                if renderer is not None and self.mirror_in is None:            # no caller video (warm room / idle card): a few fps is
+                    next_t = loop.time() + max(period, 1.0 / IDLE_CARD_FPS)    # plenty and frees the CPU the next call's pose needs
+                else:
+                    next_t += period
+                await asyncio.sleep(max(0.0, next_t - loop.time()))
         except asyncio.CancelledError:
             pass
         except Exception as e:
