@@ -313,21 +313,22 @@ def test_replay_long_pauses_vs_freeze_go(period):
     assert replay_rate("push_long_pause", period) <= 0.05
 
 
-@pytest.mark.xfail(strict=True, reason="D-30 accepted residual: period 10/12 long pauses beat FREEZE+go 6.0%/8.5% "
-                                       "(go delay 2-8 s); mitigated by admin re-judge of top finishers")
+# Accepted residuals (D-30, D-32): measured 200-seed rates are pinned with a ceiling so a regression fails.
+# push_long_pause P10/P12: 6.0%/8.5% (FREEZE+go, go delay 2-8 s); bank_lifts P20/25/35: 9.5/7.5/8.0% and
+# push_lifts P16/20/25: 8.0/9.5/6.0% (lifts spaced just beyond liveness_hand_cooldown_s). Mitigated by admin
+# re-judge of top finishers; follow-up task 34 (random-time "and down" release) targets <= 5%.
+RESIDUAL_CEILING = 0.12
+
+
 @pytest.mark.parametrize("period", [10, 12])
 def test_replay_long_pauses_residual(period):
-    assert replay_rate("push_long_pause", period) <= 0.05
+    assert replay_rate("push_long_pause", period) <= RESIDUAL_CEILING
 
 
-@pytest.mark.xfail(strict=True, reason="hand-cooldown residual: lifts spaced just beyond liveness_hand_cooldown_s at rest "
-                                       "(bank_lifts P20/25/35: 9.5/7.5/8.0%; 1.5-2.0% with the old sticky rule); "
-                                       "push_lifts P16/20/25 (8.0/9.5/6.0%) were 7.0/9.5/6.0% before - a first lift "
-                                       "just after a cue drawn from the test's 6 s span")
 @pytest.mark.parametrize("family,period", [("bank_lifts", 20), ("bank_lifts", 25), ("bank_lifts", 35),
                                            ("push_lifts", 16), ("push_lifts", 20), ("push_lifts", 25)])
 def test_replay_lifts_beyond_the_hand_cooldown(family, period):
-    assert replay_rate(family, period) <= 0.05
+    assert replay_rate(family, period) <= RESIDUAL_CEILING
 
 
 def test_periodic_taps_flag_suspicious_but_do_not_fail_alone():
