@@ -6,7 +6,10 @@ export AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
 SSM_PREFIX=${SSM_PREFIX:-/brodie/challenge/}
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y git curl ca-certificates unzip python3 python3-venv postgresql-client postgresql caddy xz-utils jq libportaudio2 libglib2.0-0
+# Supabase runs Postgres 17; Ubuntu 24.04 ships 16, whose pg_dump refuses a newer server. Use the PGDG repo.
+apt-get install -y postgresql-common
+/usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+apt-get install -y git curl ca-certificates unzip python3 python3-venv postgresql-client-17 postgresql-17 caddy xz-utils jq libportaudio2 libglib2.0-0
 id brodie >/dev/null 2>&1 || useradd --create-home --shell /bin/bash brodie
 install -d -m 0755 -o brodie -g brodie /opt/brodie
 install -d -m 0700 /etc/brodie /var/lib/brodie
