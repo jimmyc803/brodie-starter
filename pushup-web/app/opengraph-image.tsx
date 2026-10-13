@@ -18,28 +18,33 @@ export default async function OpengraphImage() {
           display: "flex",
           flexDirection: "column",
           justifyContent: "space-between",
-          padding: 72,
-          background: "radial-gradient(900px 500px at 90% 0%, rgba(212,255,58,0.22), transparent 60%), #08080a",
-          color: "#f6f6f3",
+          padding: 64,
+          background: "#f2ecdf",
+          color: "#16120e",
           fontFamily: "sans-serif",
+          border: "14px solid #16120e",
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
-          <div style={{ width: 64, height: 64, borderRadius: 16, background: "#d4ff3a", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <svg width="44" height="44" viewBox="0 0 32 32">
-              <path d="M7 21.5h18M10 21.5l3-9.5h6l3 9.5M13 12l3-4 3 4" stroke="#0a0b05" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+          <div style={{ width: 64, height: 64, borderRadius: 32, background: "#ff3d97", border: "4px solid #16120e", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg width="40" height="40" viewBox="0 0 32 32">
+              <path d="M7 21.5h18M10 21.5l3-9.5h6l3 9.5M13 12l3-4 3 4" stroke="#16120e" strokeWidth="2.8" strokeLinecap="round" strokeLinejoin="round" fill="none" />
             </svg>
           </div>
-          <div style={{ fontSize: 34, fontWeight: 800, letterSpacing: 2, textTransform: "uppercase" }}>Brodie Push-Up Challenge</div>
+          <div style={{ display: "flex", fontSize: 30, fontWeight: 800, letterSpacing: 4, textTransform: "uppercase", background: "#16120e", color: "#f2ecdf", padding: "6px 14px" }}>
+            Brodie Push-Up Challenge
+          </div>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", fontSize: 140, fontWeight: 900, lineHeight: 0.9, textTransform: "uppercase", letterSpacing: -4 }}>
+        <div style={{ display: "flex", flexDirection: "column", fontSize: 150, fontWeight: 900, lineHeight: 0.86, textTransform: "uppercase", letterSpacing: -5 }}>
           <span>Strict reps.</span>
-          <span style={{ color: "#d4ff3a" }}>Live board.</span>
+          <span style={{ color: "#ff3d97", textShadow: "8px 6px 0 #2346d8" }}>Live board.</span>
         </div>
-        <div style={{ display: "flex", gap: 40, fontSize: 30, color: "#b9b9b3" }}>
+        <div style={{ display: "flex", gap: 28, fontSize: 30, fontWeight: 700, textTransform: "uppercase" }}>
           <span>One week</span>
+          <span>·</span>
           <span>Judged live on FaceTime</span>
-          <span style={{ color: "#d4ff3a" }}>{`${firstPrize} to 1st`}</span>
+          <span>·</span>
+          <span style={{ background: "#ffd83a", padding: "0 10px" }}>{`${firstPrize} to 1st`}</span>
         </div>
       </div>
     ),

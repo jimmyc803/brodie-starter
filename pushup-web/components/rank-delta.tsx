@@ -45,7 +45,7 @@ export function RankDelta({ publicId }: { publicId: string }) {
   return (
     <span
       key={entry.version}
-      className={`inline-flex animate-delta items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[0.6875rem] font-extrabold tabular-nums ${up ? "bg-accent-dim text-accent [--delta-from:0.5rem]" : "bg-bad/15 text-bad [--delta-from:-0.5rem]"}`}
+      className={`inline-flex animate-delta items-center gap-0.5 border border-ink px-1 py-px font-mono text-[0.65rem] font-bold tabular-nums ${up ? "bg-blue text-canvas [--delta-from:0.5rem]" : "bg-bad text-canvas [--delta-from:-0.5rem]"}`}
     >
       {up ? <ArrowUpIcon className="size-3" /> : <ArrowDownIcon className="size-3" />}
       {Math.abs(entry.delta)}

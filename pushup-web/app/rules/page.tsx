@@ -28,7 +28,7 @@ function Bullets({ items }: { items: React.ReactNode[] }) {
     <ul className="space-y-3">
       {items.map((item, i) => (
         <li key={i} className="flex gap-3 text-ink-2">
-          <span aria-hidden className="mt-2 size-1.5 shrink-0 rounded-full bg-accent" />
+          <span aria-hidden className="mt-1 font-display text-pink">✶</span>
           <span className="leading-relaxed">{item}</span>
         </li>
       ))}
@@ -66,7 +66,7 @@ export default async function RulesPage() {
             <li key={id}>
               <a
                 href={`#${id}`}
-                className="inline-flex min-h-11 items-center rounded-full border border-hairline-strong bg-surface px-4 text-sm font-semibold whitespace-nowrap text-ink-2 transition-colors hover:border-accent hover:text-ink"
+                className="inline-flex min-h-11 items-center border-2 border-ink bg-surface px-3 font-mono text-xs font-bold tracking-wider whitespace-nowrap text-ink uppercase transition-colors hover:bg-yellow"
               >
                 {label}
               </a>
@@ -106,14 +106,14 @@ export default async function RulesPage() {
             "Full lockout at the top before the next rep.",
             "No rushing: each rep takes at least ~0.8 seconds.",
           ].map((t) => (
-            <li key={t} className="flex gap-3 rounded-2xl border border-hairline bg-surface px-4 py-3">
-              <CheckIcon className="mt-0.5 size-4 shrink-0 text-accent" />
+            <li key={t} className="card-flat flex gap-3 px-4 py-3">
+              <CheckIcon className="mt-0.5 size-4 shrink-0 text-blue" />
               <span className="text-sm leading-relaxed text-ink-2 sm:text-base">{t}</span>
             </li>
           ))}
         </ul>
         <RepIllustrations />
-        <p className="rounded-2xl border border-hairline bg-surface-2 px-4 py-3 text-sm leading-relaxed text-ink-2">
+        <p className="border-2 border-dashed border-ink bg-yellow/60 px-4 py-3 text-sm leading-relaxed text-ink-2">
           <strong className="text-ink">Liveness check.</strong> Once per call you get a quick challenge (for example,
           tap your left shoulder). Reps during it do not count and are not penalized. Fail it twice and that
           call&apos;s reps are voided.
@@ -137,20 +137,20 @@ export default async function RulesPage() {
       <Block id="power-hour" index="04" title="Power hour">
         <p className="leading-relaxed text-ink-2">
           One power hour each day at a random time between <strong className="text-ink">12:00 and 22:00 ET</strong>.
-          Valid reps inside it score <strong className="text-accent">2×</strong>, counted rep by rep. It&apos;s
+          Valid reps inside it score <strong className="highlight text-ink">2×</strong>, counted rep by rep. It&apos;s
           announced in the morning recap, 15 minutes before, and at the start.
         </p>
       </Block>
 
       <Block id="prizes" index="05" title="Prizes">
         <ul className="grid gap-2 sm:grid-cols-2">
-          <li className="card p-5">
-            <p className="eyebrow">1st place</p>
-            <p className="mt-2 font-display text-5xl font-extrabold text-accent">{comp?.firstPrize ?? "$100"}</p>
+          <li className="card bg-pink p-5">
+            <p className="eyebrow text-ink">1st place</p>
+            <p className="mt-2 font-display text-7xl leading-none">{comp?.firstPrize ?? "$100"}</p>
           </li>
           <li className="card p-5">
             <p className="eyebrow">Top 3</p>
-            <p className="mt-2 font-display text-2xl font-extrabold uppercase leading-tight">Group call with {ufcFighterCopy(comp?.ufcFighter)}</p>
+            <p className="mt-2 font-display text-3xl uppercase leading-tight">Group call with {ufcFighterCopy(comp?.ufcFighter)}</p>
           </li>
         </ul>
       </Block>

@@ -11,46 +11,50 @@ export function profileHref(displayName: string): string {
 export function StreakChip({ days }: { days: number }) {
   if (days <= 0) return null;
   return (
-    <span className="inline-flex items-center gap-0.5 rounded-full bg-[rgb(255_140_60/0.14)] px-1.5 py-0.5 text-[0.6875rem] font-bold text-[#ffb27a]">
-      <FlameIcon className="size-3" />
+    <span className="inline-flex items-center gap-0.5 border border-ink bg-canvas px-1 py-px font-mono text-[0.65rem] font-bold text-ink">
+      <FlameIcon className="size-3 text-live" />
       {days}d<span className="sr-only"> streak</span>
     </span>
   );
 }
 
 export function LeaderRow({ row }: { row: LeaderboardRow }) {
+  const top10 = row.rank <= 10;
   return (
-    <li className="[content-visibility:auto] [contain-intrinsic-size:auto_4.25rem]">
+    <li className="[content-visibility:auto] [contain-intrinsic-size:auto_4.5rem]">
       <Link
         href={profileHref(row.displayName)}
-        className="group grid min-h-[4.25rem] grid-cols-[2.5rem_2.75rem_1fr_auto] items-center gap-3 px-3 py-2 transition-colors hover:bg-surface-2 sm:grid-cols-[3rem_3rem_1fr_auto] sm:px-5"
+        className="group grid min-h-[4.5rem] grid-cols-[2.75rem_2.75rem_1fr_auto] items-center gap-3 px-3 py-2 transition-colors hover:bg-yellow sm:grid-cols-[3.5rem_3rem_1fr_auto] sm:px-5"
       >
         <span className="flex flex-col items-end">
-          <span className={`font-display text-2xl font-bold tabular-nums leading-none ${row.rank <= 10 ? "text-ink" : "text-ink-3"}`}>
+          <span className={`font-display text-3xl leading-none tabular-nums sm:text-4xl ${top10 ? "text-ink" : "type-outline [-webkit-text-stroke-width:1.5px]"}`}>
             {row.rank}
           </span>
           <RankDelta publicId={row.publicId} />
         </span>
-        <span className="grid size-11 place-items-center overflow-hidden rounded-xl bg-surface-2 ring-1 ring-hairline sm:size-12">
+        <span className="grid size-11 place-items-center overflow-hidden rounded-full border-2 border-ink bg-surface-2 sm:size-12">
           <Avatar level={row.avatarLevel} size={44} pose="idle" />
         </span>
         <span className="min-w-0">
-          <span className="block truncate font-semibold group-hover:text-accent">{row.displayName}</span>
-          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-3">
+          <span className="flex items-baseline gap-2">
+            <span className="truncate font-display text-xl uppercase sm:text-2xl">{row.displayName}</span>
+            <span aria-hidden className="dot-leader hidden h-2 min-w-6 flex-1 sm:block" />
+          </span>
+          <span className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-[0.7rem] text-ink-2 uppercase">
             <span className="tabular-nums">{row.validReps.toLocaleString("en-US")} reps</span>
             <StreakChip days={row.streak} />
             {row.badges.map((b) => (
-              <span key={b} className="hidden rounded-full border border-hairline px-1.5 py-0.5 text-[0.6875rem] font-semibold text-ink-2 sm:inline">
+              <span key={b} className="hidden border border-ink px-1 py-px text-[0.65rem] font-bold text-ink sm:inline">
                 {b}
               </span>
             ))}
           </span>
         </span>
         <span className="text-right">
-          <span className="block font-display text-[1.75rem] font-extrabold tabular-nums leading-none">
+          <span className="block font-display text-[2rem] leading-none tabular-nums sm:text-[2.5rem]">
             {row.points.toLocaleString("en-US")}
           </span>
-          <span className="text-[0.625rem] font-bold uppercase tracking-[0.2em] text-ink-3">pts</span>
+          <span className="font-mono text-[0.625rem] font-bold tracking-[0.2em] text-ink-2 uppercase">pts</span>
         </span>
       </Link>
     </li>

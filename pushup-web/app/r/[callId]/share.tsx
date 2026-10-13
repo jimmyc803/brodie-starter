@@ -20,7 +20,7 @@ export function ShareResult({ title }: { title: string }) {
   }
   return (
     <div>
-      <button type="button" onClick={share} className="rounded-lg bg-accent px-5 py-3 font-bold text-on-accent">Share result</button>
+      <button type="button" onClick={share} className="press inline-flex min-h-12 items-center border-2 border-ink bg-pink px-6 font-display text-xl text-ink uppercase">Share result</button>
       <p role="status" className="mt-2 text-sm text-ink-2">{status}</p>
     </div>
   );

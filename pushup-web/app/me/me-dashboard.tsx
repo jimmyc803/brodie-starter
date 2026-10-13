@@ -215,7 +215,7 @@ function QueueButton({ phase, inLine, pending }: { phase: ReturnType<typeof mePh
       <button
         type="submit"
         disabled={pending}
-        className="inline-flex min-h-14 w-full items-center justify-center rounded-full border border-hairline-strong bg-surface-2 px-6 font-display text-xl font-extrabold uppercase tracking-wide text-ink transition-transform active:scale-[0.98] disabled:opacity-60"
+        className="inline-flex min-h-14 w-full items-center justify-center rounded-[var(--radius-card)] border-2 border-ink bg-surface-2 px-6 font-display text-xl uppercase tracking-wide text-ink transition-transform active:scale-[0.98] disabled:opacity-60"
       >
         {pending ? "Leaving…" : "Leave the line"}
       </button>
@@ -225,7 +225,7 @@ function QueueButton({ phase, inLine, pending }: { phase: ReturnType<typeof mePh
     <button
       type="submit"
       disabled={pending || blocked}
-      className="inline-flex min-h-14 w-full items-center justify-center rounded-full bg-accent px-6 font-display text-xl font-extrabold uppercase tracking-wide text-on-accent shadow-[0_10px_40px_-10px_rgb(212_255_58/0.55)] transition-transform active:scale-[0.98] disabled:bg-surface-3 disabled:text-ink-3 disabled:shadow-none"
+      className="inline-flex min-h-14 w-full items-center justify-center press rounded-[var(--radius-card)] border-2 border-ink bg-pink px-6 font-display text-xl uppercase tracking-wide text-ink transition-transform active:scale-[0.98] disabled:bg-surface-3 disabled:text-ink-3 disabled:shadow-none"
     >
       {pending ? "Joining…" : blocked ? "Line closed for you" : "Get in line"}
     </button>
@@ -247,9 +247,9 @@ function StatusHero({
     return (
       <section
         aria-live="assertive"
-        className="relative overflow-hidden rounded-[var(--radius-card)] bg-accent p-5 text-on-accent stripes-live animate-stripes sm:p-6"
+        className="relative overflow-hidden card bg-pink p-5 text-ink stripes-live animate-stripes sm:p-6"
       >
-        <p className="eyebrow text-on-accent/80">You&apos;re up</p>
+        <p className="eyebrow text-ink">You&apos;re up</p>
         <p className="mt-1 font-display text-hero font-extrabold uppercase italic leading-none">FaceTime now</p>
         <p className="mt-3 font-mono text-6xl font-bold tabular-nums" aria-label={`${secondsLeft} seconds left`}>
           {formatClock(secondsLeft)}
@@ -258,7 +258,7 @@ function StatusHero({
         {facetime ? (
           <a
             href={facetime}
-            className="mt-4 inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-on-accent px-6 font-display text-xl font-extrabold uppercase tracking-wide text-accent"
+            className="mt-4 inline-flex min-h-14 w-full items-center justify-center gap-2 press rounded-[var(--radius-card)] border-2 border-ink bg-ink px-6 font-display text-xl uppercase tracking-wide text-canvas"
           >
             <PhoneIcon className="size-5" /> FaceTime Brodie
           </a>
@@ -286,7 +286,7 @@ function StatusHero({
       return card(
         "In line",
         <>
-          <span className="text-accent">#{me.queue.position ?? "…"}</span>
+          <span className="overprint">#{me.queue.position ?? "…"}</span>
           <span className="ml-3 text-3xl text-ink-2 not-italic">in line</span>
         </>,
         <>
@@ -377,7 +377,7 @@ function VerifyCard({ me, onResult }: { me: RegisteredMe; onResult: (s: MeAction
             {sms ? (
               <a
                 href={sms}
-                className="inline-flex min-h-12 items-center justify-center rounded-full bg-accent px-4 font-display text-lg font-extrabold uppercase tracking-wide text-on-accent"
+                className="inline-flex min-h-12 items-center justify-center press rounded-[var(--radius-card)] border-2 border-ink bg-pink px-4 font-display text-lg uppercase tracking-wide text-ink"
               >
                 Open Messages
               </a>
@@ -415,7 +415,7 @@ function VerifyCard({ me, onResult }: { me: RegisteredMe; onResult: (s: MeAction
           spellCheck={false}
           defaultValue={me.pending_claim?.handle ?? ""}
           placeholder="(555) 123-4567"
-          className="min-h-12 min-w-0 flex-1 rounded-2xl border border-hairline-strong bg-canvas px-4 text-ink placeholder:text-ink-3 focus:border-accent focus:outline-none"
+          className="min-h-12 min-w-0 flex-1 rounded-[var(--radius-card)] border-2 border-ink bg-surface px-4 text-ink placeholder:text-ink-3 focus:bg-canvas focus:outline-none"
         />
         <button
           type="submit"

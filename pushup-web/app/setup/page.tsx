@@ -47,7 +47,7 @@ export default async function SetupPage() {
             <li key={title} className="card flex gap-4 p-4 sm:p-5">
               <span
                 aria-hidden
-                className="grid size-10 shrink-0 place-items-center rounded-xl bg-accent font-display text-xl font-extrabold text-on-accent"
+                className="font-display text-5xl leading-[0.8] type-outline"
               >
                 {i + 1}
               </span>
@@ -72,7 +72,7 @@ export default async function SetupPage() {
         </div>
         <ul className="grid grid-cols-2 gap-2">
           {DONTS.map((d) => (
-            <li key={d} className="flex items-start gap-2 rounded-2xl border border-bad/30 bg-bad/5 p-3 sm:p-4">
+            <li key={d} className="flex items-start gap-2 rounded-[var(--radius-card)] border border-bad/30 bg-bad/5 p-3 sm:p-4">
               <XIcon className="mt-0.5 size-4 shrink-0 text-bad" />
               <span className="text-sm font-semibold leading-snug">{d}</span>
             </li>

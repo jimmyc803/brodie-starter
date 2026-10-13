@@ -3,9 +3,9 @@ import { CheckIcon, XIcon } from "@/components/ui/icons";
 type Pt = readonly [number, number];
 type Pose = { head: Pt; shoulder: Pt; elbow: Pt; hand: Pt; hip: Pt; knee: Pt; ankle: Pt };
 
-const INK = "#f6f6f3";
-const GOOD = "#d4ff3a";
-const BAD = "#ff6b5e";
+const INK = "#16120e";
+const GOOD = "#2346d8";
+const BAD = "#ff3d97";
 const GROUND = 86;
 
 const path = (...pts: Pt[]) => "M" + pts.map(([x, y]) => `${x} ${y}`).join(" L");
@@ -16,7 +16,7 @@ function Figure({ pose, fault, guide }: { pose: Pose; fault?: "hip" | "knee" | "
   const color = (part: "hip" | "knee" | "arm") => (fault === part ? BAD : INK);
   return (
     <>
-      <line x1="6" y1={GROUND} x2="194" y2={GROUND} stroke="rgb(255 255 255 / 0.18)" strokeWidth="2" />
+      <line x1="6" y1={GROUND} x2="194" y2={GROUND} stroke="rgb(22 18 14 / 0.3)" strokeWidth="2" />
       {guide != null ? (
         <line x1="20" y1={guide} x2="95" y2={guide} stroke={GOOD} strokeWidth="1.5" strokeDasharray="4 4" opacity="0.8" />
       ) : null}
@@ -77,11 +77,11 @@ export function RepIllustrations() {
   return (
     <ul className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-3">
       {REPS.map((r) => (
-        <li key={r.title} className={`card overflow-hidden ${r.ok ? "border-accent/40" : ""}`}>
+        <li key={r.title} className="card overflow-hidden">
           <figure>
-            <div className="relative bg-surface-2/60 px-2 pt-6 pb-1">
+            <div className={`relative border-b-2 border-ink px-2 pt-6 pb-1 ${r.ok ? "bg-surface" : "bg-surface-2"}`}>
               <span
-                className={`absolute top-2 left-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-extrabold uppercase tracking-wider ${r.ok ? "bg-accent text-on-accent" : "bg-bad/15 text-bad"}`}
+                className={`absolute top-2 left-2 inline-flex items-center gap-1 border-2 border-ink px-1.5 py-0.5 font-mono text-[0.6875rem] font-bold uppercase tracking-wider ${r.ok ? "bg-blue text-canvas" : "bg-pink text-ink"}`}
               >
                 {r.ok ? <CheckIcon className="size-3" /> : <XIcon className="size-3" />}
                 {r.ok ? "Counts" : "No rep"}

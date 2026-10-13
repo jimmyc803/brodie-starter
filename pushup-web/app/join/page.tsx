@@ -24,10 +24,10 @@ function MessagesMock() {
   const bubble = "max-w-[85%] rounded-3xl px-4 py-2.5 text-[0.9375rem] leading-snug";
   return (
     <div aria-hidden className="mx-auto w-full max-w-sm">
-      <div className="rounded-[2.5rem] border border-hairline-strong bg-surface p-3 shadow-[0_40px_120px_-40px_rgb(212_255_58/0.35)]">
+      <div className="rotate-2 rounded-[2.5rem] border-2 border-ink bg-ink p-2.5 shadow-[10px_10px_0_0_var(--color-pink)]">
         <div className="rounded-[2rem] bg-canvas px-4 pt-4 pb-5">
           <div className="flex flex-col items-center gap-1 border-b border-hairline pb-3">
-            <span className="grid size-10 place-items-center rounded-full bg-accent font-display text-lg font-extrabold text-on-accent">
+            <span className="grid size-10 place-items-center rounded-full border-2 border-ink bg-pink font-display text-xl text-ink">
               B
             </span>
             <span className="text-xs font-semibold text-ink-2">Brodie</span>
@@ -96,11 +96,11 @@ export default async function JoinPage() {
             <li key={title} className="card relative overflow-hidden p-5">
               <span
                 aria-hidden
-                className="pointer-events-none absolute -top-3 -right-1 font-display text-8xl font-extrabold italic text-ink/5"
+                className="pointer-events-none absolute -top-3 -right-1 font-display text-9xl text-pink/25"
               >
                 {i + 1}
               </span>
-              <span className="font-mono text-sm font-bold text-accent">Step {i + 1}</span>
+              <span className="bg-ink px-1.5 py-0.5 font-mono text-xs font-bold text-canvas uppercase">Step {i + 1}</span>
               <span className="mt-2 block font-display text-2xl font-extrabold uppercase leading-tight">{title}</span>
               <span className="mt-1 block text-sm leading-relaxed text-ink-2">{body}</span>
             </li>

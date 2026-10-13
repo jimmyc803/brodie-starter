@@ -126,29 +126,29 @@ export type CardModel = ReturnType<typeof makeCardModel>;
 
 export function ResultCard({ model }: { model: CardModel }) {
   return (
-    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 64, background: "#0a0a0b", color: "#f3efe5", fontFamily: "sans-serif" }}>
-      <div style={{ display: "flex", fontSize: 28, color: "#D4FF3A", letterSpacing: 4 }}>BRODIE PUSH-UP CHALLENGE</div>
+    <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", padding: 64, background: "#f2ecdf", color: "#16120e", border: "16px solid #16120e", fontFamily: "sans-serif" }}>
+      <div style={{ display: "flex", alignSelf: "flex-start", fontSize: 28, fontWeight: 700, background: "#16120e", color: "#f2ecdf", padding: "8px 16px", letterSpacing: 4 }}>BRODIE PUSH-UP CHALLENGE</div>
       <div style={{ display: "flex", fontSize: 60, fontWeight: 700, marginTop: 20 }}>{model.displayName}</div>
       <div style={{ display: "flex", justifyContent: "space-around", alignItems: "center", marginTop: 12 }}>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
           <Avatar level={model.levelBefore} size={260} />
           <div style={{ display: "flex", fontSize: 26 }}>Level {model.levelBefore}</div>
         </div>
-        <div style={{ display: "flex", fontSize: 72, color: "#D4FF3A" }}>→</div>
+        <div style={{ display: "flex", fontSize: 72, color: "#e0006f" }}>→</div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
           <Avatar level={model.levelAfter} size={260} />
           <div style={{ display: "flex", fontSize: 26 }}>Level {model.levelAfter}</div>
         </div>
       </div>
-      <div style={{ display: "flex", fontSize: 100, fontWeight: 700, color: "#D4FF3A", marginTop: 24 }}>{model.pointsLabel}</div>
+      <div style={{ display: "flex", fontSize: 110, fontWeight: 700, color: "#ff3d97", textShadow: "6px 5px 0 #2346d8", marginTop: 24 }}>{model.pointsLabel}</div>
       {model.void && <div style={{ display: "flex", fontSize: 28 }}>VOID CALL · No points awarded</div>}
       <div style={{ display: "flex", fontSize: 34, marginTop: 12 }}>{model.validReps} valid · {model.rejectedReps} rejected</div>
-      <div style={{ display: "flex", flexWrap: "wrap", marginTop: 16, fontSize: 23, color: "#bcbcc6", gap: 12 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", marginTop: 16, fontSize: 23, color: "#4b4439", gap: 12 }}>
         {model.reasons.length === 0 ? "No rejected-rep reasons" : model.reasons.map(({ label, count }) => (
           <span key={label}>{label}: {count}</span>
         ))}
       </div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36, borderTop: "2px solid #343444", paddingTop: 24 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 36, borderTop: "4px dashed #16120e", paddingTop: 24 }}>
         <div style={{ display: "flex", flexDirection: "column" }}>
           <span style={{ fontSize: 56 }}>{model.totalPoints} total</span>
           <span style={{ fontSize: 24 }}>{model.pointsBefore} before this call</span>
@@ -157,7 +157,7 @@ export function ResultCard({ model }: { model: CardModel }) {
       </div>
       <div style={{ display: "flex", fontSize: 30, marginTop: 24 }}>Current streak: {model.streak === null ? "unavailable" : `${model.streak} days`}</div>
       <div style={{ display: "flex", fontSize: 27, marginTop: 20 }}>Next power hour: {model.nextPowerHour}</div>
-      <div style={{ display: "flex", fontSize: 25, color: "#D4FF3A", marginTop: "auto" }}>{model.siteUrl}</div>
+      <div style={{ display: "flex", fontSize: 25, color: "#e0006f", marginTop: "auto" }}>{model.siteUrl}</div>
     </div>
   );
 }

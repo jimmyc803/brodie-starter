@@ -50,14 +50,14 @@ export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; childr
 
   return (
     <section aria-labelledby="board-title" className="space-y-4">
-      <div className="sticky top-[3.6rem] z-20 -mx-4 bg-canvas/80 px-4 py-2 backdrop-blur-xl sm:static sm:mx-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
+      <div className="sticky top-[3.9rem] z-20 -mx-4 bg-canvas/95 px-4 py-2 backdrop-blur-sm sm:static sm:mx-0 sm:bg-transparent sm:px-0 sm:py-0 sm:backdrop-blur-none">
         <div className="flex items-center gap-3">
-          <h2 id="board-title" className="hidden font-display text-3xl font-extrabold uppercase sm:block">
-            Leaderboard
+          <h2 id="board-title" className="hidden font-display text-5xl uppercase sm:block">
+            The <span className="overprint">standings</span>
           </h2>
           <label className="relative flex-1 sm:ml-auto sm:max-w-sm">
             <span className="sr-only">Find me by display name</span>
-            <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-ink-3" />
+            <SearchIcon className="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-ink" />
             <input
               type="search"
               value={q}
@@ -65,10 +65,10 @@ export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; childr
                 setQ(e.target.value);
                 setFound(null);
               }}
-              placeholder="Find me: search your name"
+              placeholder="Find me: your name"
               autoComplete="off"
               enterKeyHint="search"
-              className="h-12 w-full rounded-full border border-hairline-strong bg-surface pr-12 pl-11 text-base text-ink placeholder:text-ink-3 focus:border-accent focus:outline-none [&::-webkit-search-cancel-button]:hidden"
+              className="h-12 w-full rounded-[var(--radius-card)] border-2 border-ink bg-surface pr-12 pl-11 font-mono text-sm text-ink shadow-[4px_4px_0_0_var(--color-ink)] placeholder:text-ink-3 placeholder:uppercase focus:bg-canvas focus:outline-none [&::-webkit-search-cancel-button]:hidden"
             />
             {q ? (
               <button
@@ -92,7 +92,7 @@ export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; childr
         children
       ) : shown.length === 0 ? (
         <div className="card p-8 text-center" role="status">
-          <p className="font-display text-2xl font-extrabold uppercase">No one named &ldquo;{needle}&rdquo;</p>
+          <p className="font-display text-3xl uppercase">No one named &ldquo;{needle}&rdquo;</p>
           <p className="mt-1 text-sm text-ink-2">Check the spelling, or text JOIN to get on the board.</p>
         </div>
       ) : (
@@ -100,7 +100,7 @@ export function Leaderboard({ rows, children }: { rows: LeaderboardRow[]; childr
           <p className="sr-only" role="status">
             {shown.length} {shown.length === 1 ? "match" : "matches"}
           </p>
-          <ol className="card divide-y divide-hairline overflow-hidden">
+          <ol className="card divide-y divide-dashed divide-hairline-strong overflow-hidden">
             {shown.map((r) => (
               <LeaderRow key={r.publicId} row={r} />
             ))}

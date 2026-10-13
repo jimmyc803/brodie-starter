@@ -28,7 +28,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         We email you a 6-digit code. No password. Your email is never shown; only the name you pick is public.
       </p>
       {error ? (
-        <p role="alert" className="mt-5 rounded-2xl border border-bad/40 bg-bad/10 px-4 py-3 text-sm font-semibold text-bad">
+        <p role="alert" className="mt-5 rounded-[var(--radius-card)] border border-bad/40 bg-bad/10 px-4 py-3 text-sm font-semibold text-bad">
           {error}
         </p>
       ) : null}

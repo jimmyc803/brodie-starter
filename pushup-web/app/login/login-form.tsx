@@ -5,9 +5,9 @@ import { ME_IDLE } from "@/lib/me-view";
 import { sendCode, verifyCode } from "./actions";
 
 export const fieldCls =
-  "min-h-13 w-full rounded-2xl border border-hairline-strong bg-canvas px-4 text-lg text-ink placeholder:text-ink-3 focus:border-accent focus:outline-none";
+  "min-h-13 w-full rounded-[var(--radius-card)] border-2 border-ink bg-surface px-4 text-lg text-ink placeholder:text-ink-3 focus:bg-canvas focus:outline-none";
 export const primaryCls =
-  "inline-flex min-h-13 w-full items-center justify-center rounded-full bg-accent px-6 font-display text-xl font-extrabold uppercase tracking-wide text-on-accent transition-transform active:scale-[0.98] disabled:opacity-60";
+  "inline-flex min-h-13 w-full items-center justify-center press rounded-[var(--radius-card)] border-2 border-ink bg-pink px-6 font-display text-xl uppercase tracking-wide text-ink transition-transform active:scale-[0.98] disabled:opacity-60";
 
 export function LoginForm() {
   const [sent, sendAction, sending] = useActionState(sendCode, ME_IDLE);

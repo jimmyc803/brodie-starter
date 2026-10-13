@@ -21,7 +21,7 @@ function show(v: unknown): string {
 function ConfirmBox({ label }: { label: string }) {
   return (
     <label className="flex items-center gap-2 text-xs font-semibold text-ink-2">
-      <input type="checkbox" name="confirm" value="yes" required className="accent-[#d4ff3a]" />
+      <input type="checkbox" name="confirm" value="yes" required className="accent-accent" />
       {label}
     </label>
   );

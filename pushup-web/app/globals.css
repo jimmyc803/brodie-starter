@@ -1,43 +1,48 @@
 @import "tailwindcss";
 
 /*
- * Brodie design system.
- * Surfaces: near-black, layered (canvas < surface < surface-2 < surface-3).
- * One loud accent (volt). Status colors only for semantic state.
- * Type: display = condensed athletic grotesk, body = clean sans, mono = scoreboard digits.
+ * Brodie design system: risograph fight poster.
+ * Warm newsprint paper, dense black ink, two spot colors (fluoro pink + riso blue) that
+ * overprint with a slight misregistration. Hard edges, hard shadows, no glass, no glow.
+ * Type: display = Anton (poster condensed), body = Archivo, mono = Space Mono (ticket stubs).
  */
 @theme {
-  /* color */
-  --color-canvas: #08080a;
-  --color-surface: #111114;
-  --color-surface-2: #18181c;
-  --color-surface-3: #222228;
-  --color-ink: #f6f6f3;
-  --color-ink-2: #b9b9b3;
-  --color-ink-3: #8e8e88;
-  --color-hairline: rgb(255 255 255 / 0.09);
-  --color-hairline-strong: rgb(255 255 255 / 0.16);
-  --color-accent: #d4ff3a;
-  --color-accent-dim: rgb(212 255 58 / 0.14);
-  --color-on-accent: #0a0b05;
-  --color-good: #d4ff3a;
-  --color-bad: #ff6b5e;
-  --color-live: #ff4d3d;
-  --color-gold: #ffd75e;
-  --color-silver: #d6dbe4;
-  --color-bronze: #e3a172;
+  /* color: paper + ink */
+  --color-canvas: #f2ecdf;
+  --color-surface: #f8f4ea;
+  --color-surface-2: #e9e1cf;
+  --color-surface-3: #ddd2bb;
+  --color-ink: #16120e;
+  --color-ink-2: #4b4439;
+  --color-ink-3: #6f675a;
+  --color-hairline: rgb(22 18 14 / 0.16);
+  --color-hairline-strong: rgb(22 18 14 / 0.38);
+
+  /* spot inks. `accent` is the text-safe magenta; `pink` is the fluoro fill. */
+  --color-accent: #d1006b;
+  --color-accent-dim: rgb(255 61 151 / 0.16);
+  --color-on-accent: #fff8ef;
+  --color-pink: #ff3d97;
+  --color-blue: #2346d8;
+  --color-yellow: #ffd83a;
+  --color-good: #11804a;
+  --color-bad: #c62a1a;
+  --color-live: #ff3b1f;
+  --color-gold: #c98a00;
+  --color-silver: #7d8590;
+  --color-bronze: #a85a24;
 
   /* type */
-  --font-display: var(--font-barlow), "Arial Narrow", system-ui, sans-serif;
-  --font-sans: var(--font-inter), system-ui, -apple-system, "Helvetica Neue", sans-serif;
-  --font-mono: var(--font-jbmono), ui-monospace, "SF Mono", Menlo, monospace;
-  --text-mega: clamp(3.5rem, 15.5vw, 8rem);
-  --text-mega--line-height: 0.86;
-  --text-hero: clamp(2.75rem, 9vw, 5rem);
-  --text-hero--line-height: 0.9;
+  --font-display: var(--font-anton), Impact, "Arial Narrow", sans-serif;
+  --font-sans: var(--font-archivo), system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-mono: var(--font-spacemono), ui-monospace, "SF Mono", Menlo, monospace;
+  --text-mega: clamp(5.5rem, 26vw, 13.5rem);
+  --text-mega--line-height: 0.84;
+  --text-hero: clamp(3rem, 10vw, 6rem);
+  --text-hero--line-height: 0.88;
 
-  /* radii */
-  --radius-card: 1.25rem;
+  /* radii: print has corners */
+  --radius-card: 0.25rem;
   --radius-chip: 999px;
 
   /* motion */
@@ -48,6 +53,9 @@
   --animate-delta: delta 0.6s var(--ease-snap) both;
   --animate-shimmer: shimmer 1.4s linear infinite;
   --animate-throb: throb 1.2s ease-in-out infinite;
+  --animate-marquee: marquee 38s linear infinite;
+  --animate-stamp: stamp 0.55s var(--ease-snap) both;
+  --animate-spin-slow: spin 24s linear infinite;
 
   @keyframes pulse-dot {
     0% { box-shadow: 0 0 0 0 currentColor; }
@@ -73,74 +81,151 @@
     0%, 100% { transform: scale(1); }
     50% { transform: scale(1.06); }
   }
+  @keyframes marquee {
+    to { transform: translateX(-50%); }
+  }
+  @keyframes stamp {
+    0% { opacity: 0; transform: rotate(var(--stamp-rot, -8deg)) scale(1.6); }
+    70% { opacity: 1; transform: rotate(var(--stamp-rot, -8deg)) scale(0.96); }
+    100% { opacity: 1; transform: rotate(var(--stamp-rot, -8deg)) scale(1); }
+  }
 }
 
 @layer base {
   html {
-    color-scheme: dark;
+    color-scheme: light;
     -webkit-tap-highlight-color: transparent;
-    scroll-padding-top: 5rem;
+    scroll-padding-top: 6rem;
   }
   body {
     background-color: var(--color-canvas);
     color: var(--color-ink);
     font-family: var(--font-sans);
-    font-feature-settings: "ss01", "cv11";
+    /* Anton ships one weight and no italic: never fake-bold or fake-slant the poster type. */
+    font-synthesis: none;
     text-rendering: optimizeLegibility;
   }
   ::selection {
-    background: var(--color-accent);
-    color: var(--color-on-accent);
+    background: var(--color-pink);
+    color: var(--color-ink);
   }
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 3px solid var(--color-blue);
     outline-offset: 3px;
-    border-radius: 0.5rem;
+  }
+  .font-display {
+    letter-spacing: 0.005em;
   }
 }
 
 @layer components {
-  /* Ambient backdrop: soft volt glow + film grain. Pure CSS, no network. */
+  /* Paper stock: faint fibers + a pink and a blue ink bleed at the edges. */
   .stage {
     background:
-      radial-gradient(60rem 30rem at 85% -10%, rgb(212 255 58 / 0.10), transparent 60%),
-      radial-gradient(40rem 26rem at -10% 10%, rgb(120 140 255 / 0.06), transparent 60%),
+      radial-gradient(46rem 30rem at 108% -6%, rgb(255 61 151 / 0.16), transparent 62%),
+      radial-gradient(40rem 28rem at -12% 38%, rgb(35 70 216 / 0.09), transparent 60%),
       var(--color-canvas);
   }
+  /* Riso grain: multiplied noise over everything, like toner on uncoated stock. */
   .grain::before {
     content: "";
     position: fixed;
     inset: 0;
     pointer-events: none;
     z-index: 60;
-    opacity: 0.06;
-    mix-blend-mode: overlay;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.22;
+    mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0.09 0 0 0 0 0.07 0 0 0 0 0.05 0 0 0 0.55 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   }
+
+  /* A printed panel: paper card, ink rule, hard offset shadow. */
   .card {
     border-radius: var(--radius-card);
-    border: 1px solid var(--color-hairline);
-    background: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 40%), var(--color-surface);
+    border: 2px solid var(--color-ink);
+    background: var(--color-surface);
+    box-shadow: 5px 5px 0 0 var(--color-ink);
+  }
+  .card-flat {
+    border-radius: var(--radius-card);
+    border: 2px solid var(--color-ink);
+    background: var(--color-surface);
   }
   .eyebrow {
+    font-family: var(--font-mono);
     font-size: 0.6875rem;
     font-weight: 700;
-    letter-spacing: 0.18em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: var(--color-ink-2);
   }
+
+  /* Misregistered two-color overprint for display type. */
+  .overprint {
+    color: var(--color-pink);
+    text-shadow: 0.045em 0.035em 0 var(--color-blue);
+  }
+  .overprint-ink {
+    color: var(--color-ink);
+    text-shadow: 0.04em 0.03em 0 var(--color-pink);
+  }
+  .overprint-blue {
+    color: var(--color-blue);
+    text-shadow: -0.04em 0.03em 0 var(--color-pink);
+  }
+  /* Outlined poster letters. */
+  .type-outline {
+    color: transparent;
+    -webkit-text-stroke: 2px var(--color-ink);
+  }
+
+  /* Halftone dot screens. Set --dot to change the ink. */
+  .halftone {
+    background-image: radial-gradient(var(--dot, var(--color-ink)) 28%, transparent 30%);
+    background-size: 9px 9px;
+  }
+  .halftone-fade {
+    background-image: radial-gradient(var(--dot, var(--color-ink)) 30%, transparent 32%);
+    background-size: 10px 10px;
+    mask-image: radial-gradient(closest-side, #000 20%, transparent 100%);
+  }
+
+  /* Marker highlight behind inline text. */
+  .highlight {
+    background: linear-gradient(transparent 52%, var(--color-yellow) 52%, var(--color-yellow) 92%, transparent 92%);
+    padding-inline: 0.08em;
+  }
+
+  /* Ticket stub: perforated left/right notches. */
+  .ticket {
+    --notch: 0.7rem;
+    -webkit-mask:
+      radial-gradient(var(--notch) at 0 50%, #0000 98%, #000) left / 51% 100% no-repeat,
+      radial-gradient(var(--notch) at 100% 50%, #0000 98%, #000) right / 51% 100% no-repeat;
+    mask:
+      radial-gradient(var(--notch) at 0 50%, #0000 98%, #000) left / 51% 100% no-repeat,
+      radial-gradient(var(--notch) at 100% 50%, #0000 98%, #000) right / 51% 100% no-repeat;
+  }
+  .perf {
+    background-image: linear-gradient(90deg, var(--color-ink) 50%, transparent 50%);
+    background-size: 10px 2px;
+    background-repeat: repeat-x;
+    height: 2px;
+  }
+  .dot-leader {
+    background-image: radial-gradient(var(--color-ink-3) 1.2px, transparent 1.6px);
+    background-size: 7px 4px;
+    background-repeat: repeat-x;
+    background-position: 0 100%;
+  }
+
   .stripes-live {
-    background-image: repeating-linear-gradient(
-      -45deg,
-      rgb(0 0 0 / 0.09) 0 0.625rem,
-      transparent 0.625rem 1.25rem
-    );
+    background-image: repeating-linear-gradient(-45deg, rgb(22 18 14 / 0.12) 0 0.625rem, transparent 0.625rem 1.25rem);
     background-size: 2.5rem 100%;
   }
   .skeleton {
     background: linear-gradient(90deg, var(--color-surface-2) 0%, var(--color-surface-3) 50%, var(--color-surface-2) 100%);
     background-size: 200% 100%;
-    border-radius: 0.75rem;
+    border-radius: 0.25rem;
   }
   .prose-brodie p,
   .prose-brodie li {
@@ -149,6 +234,20 @@
   }
   .prose-brodie strong {
     color: var(--color-ink);
+  }
+
+  /* Hard-shadow press button. */
+  .press {
+    box-shadow: 4px 4px 0 0 var(--color-ink);
+    transition: transform 0.12s var(--ease-snap), box-shadow 0.12s var(--ease-snap);
+  }
+  .press:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 6px 6px 0 0 var(--color-ink);
+  }
+  .press:active {
+    transform: translate(3px, 3px);
+    box-shadow: 1px 1px 0 0 var(--color-ink);
   }
 }
 
