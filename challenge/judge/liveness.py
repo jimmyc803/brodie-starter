@@ -10,9 +10,15 @@ exclusive, so one recorded motion cannot answer more than one of them:
   challenge_lift_hold   a hand leaves the floor and stays up (height > liveness_lift_h) for >= liveness_hold_s.
   challenge_double_tap  two separate lift-and-return cycles (floor -> up -> floor, either hand, not overlapping) whose
                         onsets are <= liveness_double_tap_gap_s apart, the second return inside the timeout.
-  challenge_freeze      the body holds still for liveness_freeze_s: shoulder and hip 0.5 s block means stay within
-                        liveness_freeze_still torso lengths, no hand off the floor, every frame valid; the window
-                        starts >= liveness_min_react_s after the cue and ends by the deadline.
+  challenge_freeze      (D-29) "Freeze!" then "And go!". Stop: the body holds still for liveness_freeze_s (shoulder
+                        and hip 0.5 s block means within liveness_freeze_still torso lengths, no hand off the floor,
+                        every frame valid), the window starting >= liveness_min_react_s after the cue and ending
+                        within liveness_timeout_s of it (else 'timeout'). Go: challenge_go is cued a fresh random
+                        liveness_go_delay_s after the stop is confirmed (drawn from the rng per attempt, never from
+                        the clock); the shoulder must stay within liveness_resume_min torso lengths of its mean over
+                        the last 1 s of the stop until liveness_go_min_react_s after go (moving earlier -> 'early',
+                        the attempt ends at once), then move beyond it (3-frame mean, 2 consecutive frames) within
+                        liveness_go_react_s of go (else 'no_resume').
 The legacy tap/lift-right cue keys stay in cues.CUES but are not drawn: left/right cannot be told apart reliably in
 a side view (mirror / occlusion), which made one tap answer every cue (review P1).
 
@@ -27,20 +33,22 @@ Selection (at each check time; a type is eligible only if a replay cannot have l
   retry: the retry check moves). Eligibility never flips at a predictable moment (no expiring look-back), so a replay
   cannot use the postponement to time its motion. A first cue postponed past the end of the call -> 'skipped' (the
   call ended before the - postponed - fire_t); a retry postponed past the end -> 'fail' (the person was seen).
-Known residual (tests: xfail): a replay of push-ups with a >= 2.5 s pause every ~5-8 s answers FREEZE when a pause
-happens to start 0.5-1.5 s after the cue (measured 18-53 % with 10 Hz synth). Closing it needs a timing-coupled second
-cue (e.g. "...and go" / "...and down" at a random time), outside ruling D-20.
-
+Known residual (tests: strict xfail): a replay of push-ups with long pauses (period-3 s pause, 3 s of push-ups,
+period 8-10 s) still answers FREEZE+go 6-15 % of the time when a pause both starts right after "Freeze!" and ends
+just after the random go cue (period 6: 0 %; period 12: 2.5 %). A wider liveness_go_delay_s ([2, 8]) measured <= 7 %.
 Driving (judge frame clock, seconds; worker wiring is task 30):
     lc = LivenessChallenge(random.Random(seed), thr); fire_t = lc.schedule(call_t0)
     every counted frame: lc.on_frame(f); if lc.due(t): say(lc.start(t)) elif lc.active: st, cue = lc.poll(t); say(cue)
     lc.windows()[-1] -> (cue, deadline) of a new attempt for JudgeRuntime.set_challenge_window;
     lc.finish(t_end) at call end; lc.summary() -> result, unprompted_lifts, suspicious, postponed, attempts.
-poll(t) -> (status, cue_key|None): 'pending' while an attempt (or the gap before the retry) is open; 'retry' with the
+poll(t) -> (status, cue_key|None): 'pending' while an attempt (or the gap before the retry) is open; 'go' with challenge_go when a
+FREEZE attempt reaches its go time (also on a void attempt, so an honest person is never left frozen); 'retry' with the
 retry's cue key when the retry starts, a random liveness_retry_delay_s after the first attempt's deadline (time for an
 honest late responder to lower the hand; random so a replay cannot time it) or later if postponed; 'pass'
 (challenge_passed); 'fail' (challenge_failed); 'skipped' (None). Terminal statuses carry their cue once, later polls return (result, None).
-An attempt times out only when t > deadline (start + timeout); frames after the deadline never count.
+An attempt times out only when t > deadline (start + timeout; FREEZE: confirm_by = start + timeout for the stop, then
+go time + liveness_go_react_s); frames after the deadline never count. Attempt outcomes: pass | timeout | quiet |
+camera | early | no_resume | ended.
 
 Attempt validity (an invalid attempt cannot pass; at its deadline it becomes the retry, or 'fail' if it was the retry):
   quiet (D-20 B)   a hand was off the floor (tracked wrist height > liveness_floor_leave in 2 consecutive frames, or a
@@ -89,12 +97,14 @@ from challenge.judge.metrics import FrameObs
 
 LIFT_HOLD, DOUBLE_TAP, FREEZE = "challenge_lift_hold", "challenge_double_tap", "challenge_freeze"
 CHALLENGES = (LIFT_HOLD, DOUBLE_TAP, FREEZE)
+GO_CUE = "challenge_go"
 KP = {"left": dict(sh=11, wr=15, hp=23, an=27), "right": dict(sh=12, wr=16, hp=24, an=28)}
 EVIDENCE_FRAMES = 2
 PLANK_MAX_TILT_DEG = 35.0
 EMA_ALPHA = 0.1
 FREEZE_BLOCKS = 5
 HISTORY_S = 8.0
+REF_S = 1.0
 _EPS = 1e-9
 _RESULT_CUE = {"pass": "challenge_passed", "fail": "challenge_failed", "skipped": None}
 
@@ -133,7 +143,14 @@ class _Attempt:
     seen: bool = False
     passed_at: float | None = None
     end: float | None = None
-    outcome: str | None = None        # pass | timeout | quiet | camera | ended
+    outcome: str | None = None        # pass | timeout | quiet | camera | early | no_resume | ended
+    confirm_by: float = 0.0           # FREEZE: stillness must be confirmed by then (start + timeout)
+    go_delay: float = 0.0             # FREEZE: go cue this long after the stillness is confirmed (drawn at open)
+    confirm_t: float | None = None
+    go_t: float | None = None         # planned, then actual (when poll returned 'go') go-cue time
+    go_said: bool = False
+    ref: np.ndarray | None = None     # frozen shoulder position (camera-compensated)
+    resume_run: int = 0
     anchor0: np.ndarray | None = None
     cam_run: int = 0
     floor_obs: dict = field(default_factory=lambda: {"left": False, "right": False})
@@ -195,6 +212,14 @@ class LivenessChallenge:
         self._lifts: list[float] = []         # unprompted lift onsets (outside attempt windows)
         self._all_lifts: list[float] = []     # every observed lift onset
         self.postponed = 0                    # checks at which no challenge type was eligible
+        self.go0, self.go1 = (float(x) for x in t["liveness_go_delay_s"])
+        if not 0 < self.go0 <= self.go1:
+            raise ValueError(f"bad liveness_go_delay_s: {t['liveness_go_delay_s']!r}")
+        self.go_react = float(t["liveness_go_react_s"])
+        self.go_min_react = float(t["liveness_go_min_react_s"])
+        self.resume_min = float(t["liveness_resume_min"])
+        if not 0 <= self.go_min_react < self.go_react:
+            raise ValueError("need 0 <= liveness_go_min_react_s < liveness_go_react_s")
         self.p0, self.p1 = (float(x) for x in t["liveness_postpone_s"])
         if not 0 < self.p0 <= self.p1:
             raise ValueError(f"bad liveness_postpone_s: {t['liveness_postpone_s']!r}")
@@ -240,7 +265,7 @@ class LivenessChallenge:
     def summary(self) -> dict:
         return dict(result=self.result, unprompted_lifts=self.unprompted_lifts, suspicious=self.suspicious,
                     fire_t=self.fire_t, postponed=self.postponed,
-                    attempts=[dict(cue=a.cue, start=a.start, end=a.end, outcome=a.outcome, seen=a.seen)
+                    attempts=[dict(cue=a.cue, start=a.start, end=a.end, outcome=a.outcome, seen=a.seen, go_t=a.go_t)
                               for a in self.attempts])
 
     def windows(self) -> list[tuple[float, float]]:
@@ -271,7 +296,10 @@ class LivenessChallenge:
 
     def _open(self, t: float, types: list[str]) -> str:
         cue = self.rng.choice(types)
-        a = _Attempt(cue=cue, start=t, deadline=t + self.timeout)
+        a = _Attempt(cue=cue, start=t, deadline=t + self.timeout, confirm_by=t + self.timeout)
+        if cue == FREEZE:
+            a.go_delay = self.rng.uniform(self.go0, self.go1)
+            a.deadline = t + self.timeout + self.go1 + self.go_react      # latest possible end, until the go cue
         if any(h.state == "up" or (h.last_off_t is not None and h.last_off_t >= t - self.quiet_s)
                for h in self._hands.values()):
             a.invalid = "quiet"
@@ -313,11 +341,24 @@ class LivenessChallenge:
         if a.passed_at is not None:
             a.outcome, a.end = "pass", a.passed_at
             return self._resolve("pass", t, True)
+        if a.cue == FREEZE and a.invalid in (None, "quiet"):
+            if a.confirm_t is None and t > a.confirm_by:
+                return self._attempt_over(a, a.confirm_by, "timeout", t)
+            if a.go_t is not None and not a.go_said and t >= a.go_t:
+                a.go_said, a.go_t = True, t                   # the go cue is played now
+                a.deadline = t + self.go_react
+                return "go", GO_CUE
+        if a.invalid == "early":
+            return self._attempt_over(a, t, "early", t)
         if t <= a.deadline:
             return "pending", None
-        a.end, a.outcome = a.deadline, a.invalid or "timeout"
+        miss = "no_resume" if a.go_said else "timeout"
+        return self._attempt_over(a, a.deadline, a.invalid or miss, t)
+
+    def _attempt_over(self, a: _Attempt, end: float, outcome: str, t: float) -> tuple[str, str | None]:
+        a.end, a.outcome, a.deadline = end, outcome, min(a.deadline, max(end, a.start))
         if len(self.attempts) == 1:
-            self._retry_at = a.deadline + self.rng.uniform(self.r0, self.r1)
+            self._retry_at = end + self.rng.uniform(self.r0, self.r1)
             return "pending", None
         return self._resolve(self._no_pass_result(), t, True)
 
@@ -383,7 +424,9 @@ class LivenessChallenge:
                                 None if hp is None or off is None else hp - off, sh_h, hands_down))
         while self._hist and self._hist[0].t < t - HISTORY_S:
             self._hist.popleft()
-        if a is None or a.invalid or a.passed_at is not None:
+        # a void ('quiet') attempt still plays out exactly like a valid one (FREEZE: confirm, go cue), so the person
+        # cannot tell it is void and is not left frozen; it just cannot pass
+        if a is None or a.passed_at is not None or a.invalid not in (None, "quiet"):
             return
         if not valid:
             a.cam_run = 0
@@ -398,7 +441,7 @@ class LivenessChallenge:
                 return
         else:
             a.cam_run = 0
-        if self._satisfied(a, t):
+        if self._satisfied(a, t) and a.invalid is None:
             a.passed_at = t
 
     def _open_attempt(self, t: float) -> _Attempt | None:
@@ -476,11 +519,35 @@ class LivenessChallenge:
             cyc = sorted(a.cycles)
             return any(c2[0] >= c1[1] and c2[0] - c1[0] <= self.tap_gap + 1e-9
                        for i, c1 in enumerate(cyc) for c2 in cyc[i + 1:])
-        return self._still_window(a, t)
+        return self._freeze_step(a, t)
+
+    def _freeze_step(self, a: _Attempt, t: float) -> bool:
+        """FREEZE (D-29): still window confirmed by confirm_by -> still until the go cue (+ go_min_react) -> the
+        shoulder moves away from its frozen position within liveness_go_react_s of the go cue."""
+        if a.confirm_t is None:
+            if t <= a.confirm_by and self._still_window(a, t):
+                a.confirm_t, a.go_t = t, t + a.go_delay
+                # frozen reference: the last REF_S of the confirmed window (its start may still hold the stop's tail)
+                pts = [e.sh for e in self._hist if e.t >= t - REF_S - 1e-9 and e.sh is not None]
+                a.ref = np.mean(pts, axis=0)
+            return False
+        last = [e for e in list(self._hist)[-3:] if e.valid and e.sh is not None]
+        if len(last) < 3 or any(b.t - x.t > self.max_gap for x, b in zip(last, last[1:])):
+            a.resume_run = 0
+            return False
+        d = float(np.linalg.norm(np.mean([e.sh for e in last], axis=0) - a.ref)) / self._torso.v
+        if not a.go_said or t < a.go_t + self.go_min_react:
+            if d > self.resume_min:
+                a.invalid = "early"                            # moved before (or too soon after) the go cue
+            return False
+        if t > a.go_t + self.go_react:
+            return False
+        a.resume_run = a.resume_run + 1 if d > self.resume_min else 0
+        return a.resume_run >= EVIDENCE_FRAMES
 
     def _still_window(self, a: _Attempt, t: float) -> bool:
         w0 = t - self.freeze_s
-        if w0 < a.start + self.min_react - 1e-9:
+        if w0 < a.start + self.min_react - 1e-9 or t > a.confirm_by + 1e-9:
             return False
         win = [e for e in self._hist if e.t >= w0 - 1e-9]
         if not win or win[0].t > w0 + self.max_gap:

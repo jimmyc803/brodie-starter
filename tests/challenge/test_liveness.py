@@ -23,23 +23,32 @@ N_SEEDS = 200
 NOW = {"liveness_window_s": [0, 0]}          # schedule(t) fires exactly at t
 
 
+class _ForcedRandom(random.Random):
+    """TEST HOOK: choice() over challenge types returns the next forced type (so a detector can be tested with a given
+    motion); every other draw is the seeded generator's."""
+
+    def __init__(self, seed, forced):
+        super().__init__(seed)
+        self.forced = list(forced)
+
+    def choice(self, seq):
+        if self.forced and set(seq) <= set(CHALLENGES):
+            return self.forced.pop(0)
+        return super().choice(seq)
+
+
 def drive(clip, fire_t, seed=0, thr=None, force=None, stop_on_result=False, finish=True):
-    """Worker loop: on_frame, due -> start, else poll. force = cue keys imposed on attempts 1/2 (TEST HOOK: overrides
-    the drawn type so a detector can be tested with a given motion)."""
-    lc = LivenessChallenge(random.Random(seed), {**NOW, **(thr or {})})
+    """Worker loop: on_frame, due -> start, else poll. force = challenge types imposed on attempts 1/2 (_ForcedRandom)."""
+    lc = LivenessChallenge(_ForcedRandom(seed, force or ()), {**NOW, **(thr or {})})
     lc.schedule(fire_t)
     log = []
     for f in clip.frames:
         lc.on_frame(f)
         if lc.due(f.t):
             cue = lc.start(f.t)
-            if force:
-                lc.attempts[0].cue = cue = force[0]
             log.append((round(f.t, 3), "start", cue))
         elif lc.active:
             st, cue = lc.poll(f.t)
-            if st == "retry" and force and len(force) > 1:
-                lc.attempts[1].cue = cue = force[1]
             if st != "pending":
                 log.append((round(f.t, 3), st, cue))
             if stop_on_result and lc.result is not None:
@@ -53,15 +62,16 @@ def statuses(log):
     return [s for _, s, _ in log]
 
 
-def response(cue, t0, rr):
-    """(hand_motions, pauses) of an honest answer to `cue` played at t0."""
-    react, hand = rr.uniform(0.6, 1.3), rr.choice(["left", "right"])
+def response(cue, t0, rr, go_t=None):
+    """(hand_motions, pauses) of an honest answer to `cue` played at t0. FREEZE: stop after the reaction time and,
+    once the go cue time is known, resume push-ups 0.3-0.8 s after it (until then: hold)."""
+    react, hand, go_react = rr.uniform(0.6, 1.3), rr.choice(["left", "right"]), rr.uniform(0.3, 0.8)
     if cue == LIFT_HOLD:
         return [("lift", hand, t0 + react, 2.6)], [(t0 + react - 0.2, 3.5)]
     if cue == DOUBLE_TAP:
         return ([("lift", hand, t0 + react, 0.9), ("lift", hand, t0 + react + 1.2, 0.9)],
                 [(t0 + react - 0.2, 3.4)])
-    return [], [(t0 + react, 4.0)]
+    return [], [(t0 + react, 15.0 if go_t is None else go_t + go_react - (t0 + react))]
 
 
 def honest(seed, noise, prelift=False):
@@ -70,23 +80,31 @@ def honest(seed, noise, prelift=False):
     r = random.Random(seed)
     side, body = r.choice(["left", "right"]), r.choice(sorted(BODIES))
     fire, rep_s, depth = r.uniform(4, 9), r.uniform(1.4, 2.4), r.uniform(60, 85)
-    kw = dict(n_reps=int((fire + 22) / rep_s), rep_s=rep_s, depth=depth, lead_in_s=1.0, side=side, body=body,
+    kw = dict(n_reps=int((fire + 40) / rep_s), rep_s=rep_s, depth=depth, lead_in_s=1.0, side=side, body=body,
               noise=noise, seed=seed)
-    known: list = []
-    for _ in range(3):
+    known: list = []        # (cue, start, go_t) per attempt, as found by the previous run
+    fixed = 0               # attempts of `known` that the previous run produced with correct (non-placeholder) input
+    for _ in range(8):
         motions, pauses = ([("lift", "left", 1.5, 1.5)] if prelift else []), []
-        for i, (cue, st) in enumerate(known):
-            m, p = response(cue, st, random.Random(seed * 7919 + i))
+        for i, (cue, st, go_t) in enumerate(known):
+            m, p = response(cue, st, random.Random(seed * 7919 + i), go_t)
             motions += m
             pauses += p
+        pauses.sort()
+        pauses = [(a, min(d, nxt[0] - a - 0.1) if nxt else d) for (a, d), nxt in zip(pauses, pauses[1:] + [None])]
         lc, _ = drive(synth_pushups(hand_motions=motions, pauses=pauses, **kw), fire, seed)
-        got = [(a.cue, a.start) for a in lc.attempts]
-        n = min(len(got), len(known))
-        assert got[:n] == known[:n], "simulation is not causal"
-        if len(got) <= len(known):
+        got = [(a.cue, a.start, a.go_t if a.go_said else None) for a in lc.attempts]
+        # responses only act after their cue, so attempts produced from correct input must not change
+        assert [g[:2] for g in got[:fixed]] == [k[:2] for k in known[:fixed]], "simulation is not causal"
+        if got == known:
             return lc
+        # next run, attempt i is reproduced iff it and every earlier attempt match this run's input (then all
+        # responses before it are final); the first new attempt after a fully matching prefix is fixed too
+        # (a mismatching attempt may itself have been steered by a stale response, so it is not fixed either)
+        same = next((j for j in range(min(len(got), len(known))) if known[j] != got[j]), min(len(got), len(known)))
+        fixed = same + (1 if same == len(known) < len(got) else 0)
         known = got
-    return lc
+    raise AssertionError("honest simulation did not converge")
 
 
 def replay(seed, family, period=0.0):
@@ -120,10 +138,11 @@ def replay(seed, family, period=0.0):
             t += period
         if family == "push_camera":
             kw.update(push)
-    elif family in ("push_pause", "lift_push_pause"):
+    elif family in ("push_pause", "lift_push_pause", "push_long_pause"):
         t, pz = r.uniform(0, period), []
+        L = period - 3.0 if family == "push_long_pause" else 3.0      # long pauses: 3 s of push-ups between
         while t < T:
-            pz.append((t, 3.0))
+            pz.append((t, L))
             t += period
         kw.update(push, pauses=pz)
         if family == "lift_push_pause":
@@ -169,12 +188,13 @@ def pushups(secs=16.0, **kw):
 def test_defaults_and_cue_keys():
     for k in ("liveness_lift_h", "liveness_floor_leave", "liveness_quiet_s", "liveness_min_react_s", "liveness_hold_s",
               "liveness_double_tap_gap_s", "liveness_freeze_s", "liveness_freeze_still", "liveness_cam_shift",
-              "liveness_max_gap_s", "liveness_periodic_cv", "liveness_postpone_s"):
+              "liveness_max_gap_s", "liveness_periodic_cv", "liveness_postpone_s", "liveness_go_delay_s",
+              "liveness_go_react_s", "liveness_go_min_react_s", "liveness_resume_min"):
         assert k in DEFAULT_THRESHOLDS
     assert DEFAULT_THRESHOLDS["liveness_window_s"] == [45, 150] and DEFAULT_THRESHOLDS["liveness_timeout_s"] == 4
     assert DEFAULT_THRESHOLDS["liveness_quiet_s"] == 2.0 and DEFAULT_THRESHOLDS["liveness_max_gap_s"] == 0.3
     assert set(CHALLENGES) == {"challenge_lift_hold", "challenge_double_tap", "challenge_freeze"}
-    for k in (*CHALLENGES, "challenge_passed", "challenge_failed"):
+    for k in (*CHALLENGES, "challenge_go", "challenge_passed", "challenge_failed"):
         assert k in CUES and CUES[k] in vocabulary()
 
 
@@ -233,11 +253,17 @@ def test_replay_pass_rate_at_most_5pct(family, period):
     assert replay_rate(family, period) <= 0.05
 
 
-@pytest.mark.xfail(strict=True, reason="known residual: push-ups with a >=2.5 s pause every few seconds answer FREEZE "
-                                       "when a pause starts 0.5-1.5 s after the cue (needs a timing-coupled 2nd cue)")
 @pytest.mark.parametrize("family", ["push_pause", "lift_push_pause"])
 def test_replay_pause_pattern_vs_freeze(family):
+    """Push-ups with a 3 s pause every 6 s (D-29: closed by the random-time go cue)."""
     assert replay_rate(family, 6) <= 0.05
+
+
+@pytest.mark.xfail(strict=True, reason="D-29 residual: long adaptive pauses beat FREEZE+go 6-15% with go delay 2.0-4.5 s")
+@pytest.mark.parametrize("period", [8, 9, 10])
+def test_replay_long_pauses_vs_freeze_go(period):
+    """Adaptive variant: pauses long enough to outlast confirm + go delay (period-3 s pause, 3 s of push-ups)."""
+    assert replay_rate("push_long_pause", period) <= 0.05
 
 
 def test_periodic_taps_flag_suspicious_but_do_not_fail_alone():
@@ -265,16 +291,25 @@ def test_lift_hold_and_double_tap_detected(side, far_vis):
     assert statuses(log) == ["start", "pass"], log
 
 
-def test_freeze_detected_only_after_a_stop():
-    lc, log = drive(pushups(pauses=[(5.0, 4.0)]), 4.2, force=[FREEZE])
-    assert statuses(log) == ["start", "pass"], log
+def test_freeze_needs_stop_then_resume_after_go():
+    lc, _ = drive(pushups(secs=24.0, pauses=[(5.0, 12.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    a = lc.attempts[0]
+    assert a.confirm_t is not None and a.go_said and a.outcome == "no_resume"     # never resumed
+    go = a.go_t
+    assert 2.0 <= go - a.confirm_t <= 4.5 + 0.11
+    lc, log = drive(pushups(secs=24.0, pauses=[(5.0, go + 0.5 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    assert statuses(log) == ["start", "go", "pass"] and log[1][2] == "challenge_go", log
+    lc, _ = drive(pushups(secs=24.0, pauses=[(5.0, go - 0.6 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    assert lc.attempts[0].outcome == "early"                                      # moved before the go cue
+    lc, _ = drive(pushups(secs=24.0, pauses=[(5.0, go + 2.6 - 5.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    assert lc.attempts[0].outcome == "no_resume"                                  # resumed too late
     _, log = drive(pushups(), 4.2, force=[FREEZE], stop_on_result=True)
-    assert "pass" not in statuses(log)
+    assert "pass" not in statuses(log)                                            # never stopped
 
 
 def test_motions_do_not_cross_answer():
     for motions, cue in (([LIFT], DOUBLE_TAP), (DTAP, LIFT_HOLD), ([LIFT], FREEZE), (DTAP, FREEZE)):
-        clip = plank(motions) if cue != FREEZE else pushups(pauses=[(4.6, 4.0)], hand_motions=motions)
+        clip = plank(motions) if cue != FREEZE else pushups(pauses=[(4.6, 3.6)], hand_motions=motions)
         _, log = drive(clip, 3.5, force=[cue], stop_on_result=True)
         assert "pass" not in statuses(log)[:2], (motions, cue, log)
 
