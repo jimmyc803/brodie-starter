@@ -241,12 +241,12 @@ def test_claim_call_and_points_today(env):
     assert c.get("/web/me", headers=bearer(tok)).json()["in_call"] is True
     at = (T0 + timedelta(seconds=10)).isoformat()
     rep = {"t": 1.0, "at": at, "valid": True, "reject_reasons": [], "faults": [], "in_challenge": False}
-    ev = {"kind": "reps_committed", "call_id": "wc1", "idem_key": "wc1-c", "at": at, "payload": {
+    ev = {"kind": "reps_committed", "call_id": "wc1", "idem_key": "wc1:reps_committed", "at": at, "payload": {
         "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(), "liveness_result": "pass",
         "judge_version": "j1", "reps": [{**rep, "n": 1}, {**rep, "n": 2}]}}
     r = c.post("/calls/event", headers=H, json=ev).json()
     assert r["ok"] and r["postcall"] != "pending"
-    end = {"kind": "call_ended", "call_id": "wc1", "idem_key": "wc1-e", "at": at, "payload": {
+    end = {"kind": "call_ended", "call_id": "wc1", "idem_key": "wc1:call_ended", "at": at, "payload": {
         "ended_at": (T0 + timedelta(seconds=195)).isoformat(), "count_end_at": (T0 + timedelta(seconds=180)).isoformat(),
         "rep_count": 2}}
     assert c.post("/calls/event", headers=H, json=end).json()["ok"]
@@ -451,7 +451,7 @@ def test_unverified_user_gets_no_texts_and_no_caller_id_match(env):
     r = cw.post("/calls/start", headers=H, json={"call_id": "uv2", "line_id": "line-1"}).json()
     assert r["decision"] == "accept" and r["user_id"] == uid
     at = (T0 + timedelta(seconds=10)).isoformat()
-    ev = {"kind": "reps_committed", "call_id": "uv2", "idem_key": "uv2-c", "at": at, "payload": {
+    ev = {"kind": "reps_committed", "call_id": "uv2", "idem_key": "uv2:reps_committed", "at": at, "payload": {
         "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(), "liveness_result": "pass",
         "judge_version": "j1", "reps": [{"n": 1, "t": 1.0, "at": at, "valid": True, "reject_reasons": [], "faults": [],
                                           "in_challenge": False}]}}

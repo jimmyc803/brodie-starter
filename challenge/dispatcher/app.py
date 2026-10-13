@@ -214,6 +214,8 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
     @app.post("/calls/event", dependencies=[Depends(auth)])
     def calls_event(ev: EventIn) -> dict:
         logger.info("event %s call=%s idem=%s", ev.kind, ev.call_id, ev.idem_key)
+        if ev.idem_key != f"{ev.call_id}:{ev.kind}":  # ch_event_run matches on idem_key alone: bind it to this call and kind
+            raise HTTPException(400, "idem_key must be <call_id>:<kind>")
         # Effect + ch_event_log row in one DB transaction; a duplicate idem_key returns the stored result.
         out = rpc("ch_event_run", {"p_idem_key": ev.idem_key, "p_call_id": ev.call_id, "p_kind": ev.kind,
                                    "p_payload": ev.payload, "p_now": clock()})
@@ -226,6 +228,8 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
             resp["counted_toward_cap"] = r.get("counted_toward_cap")
         if ev.kind == "reps_committed":
             resp["already"] = bool(r.get("already"))
+            if r.get("points") is not None:  # ch_commit_reps' authoritative points (C7.v); rank has no RPC: not forwarded
+                resp["points"] = r["points"]
             try:  # idempotent; also retried on duplicates so an earlier failure heals
                 resp["postcall"] = postcall.process(ev.call_id, store=get_store(), clock=clock,
                                                     card_delivery=flags.CARD_DELIVERY)

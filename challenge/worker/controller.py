@@ -15,7 +15,7 @@ worker never counts a rep the dispatcher would put after connected_at + call_cou
 Timeline (call clock, numbers from the /calls/start `config` or the competition_config defaults): welcome at 0
 (power_hour 4 s later when the dispatcher says power_hour_active); thirty_left at count_s - 30; time_up at count_s,
 counting stops (later reps are ignored, not recorded); check_texts 1.5 s later (REVEAL_MODE audio_only; REVEAL_MODE=video
-also publishes a card/fallback video track via the worker's `reveal` hook, C7.v; any failure stays audio_only); HANGUP_MODE
+also commits reps at count end and renders the card/fallback into the coach-video loop via the worker's `reveal` hook, C7.v; any failure stays audio_only); HANGUP_MODE
 unverified plays hang_up HANG_UP_LEAD_S before count_s + reveal_s; at count_s + reveal_s end() commits and the
 worker leaves the room (leave_room and unverified both leave; chert_api asks Chert to end the call first; delete_room:
 the worker deletes the LiveKit room once the commit is in, which makes Chert end the FaceTime call, and leaves the room
@@ -289,6 +289,8 @@ class CompetitionCall:
         self.ended_at: float | None = None
         self.end_reason: str | None = None
         self._payload_built = False
+        self._early_task: asyncio.Future | None = None   # video reveal: drain + reps_committed at count end
+        self._commit_t: float | None = None              # ended_at of an early reps_committed attempt (a retry reuses it)
         self.sealed = False                        # rep intake closed: no rep event can arrive any more (payload only then)
         self._commit_deferred = False              # end() found the intake unsealed: seal() + end() commits later
         self.committed = False
@@ -383,6 +385,7 @@ class CompetitionCall:
             "liveness": {"result": self.liveness_result, "first_fire_s": self.liveness_first_fire_t,
                          "fires_s": self.liveness_fires, "windows_s": self.windows(), "rescheduled": self._rescheduled},
             "final": self.ended_at is not None, "sealed": self.sealed, "worker_pid": os.getpid(),
+            "commit_t": self._commit_t,                   # early reps_committed ended_at: a replay sends the same payload
             "reps": self.final_reps() if self.ended_at is not None else self.reps,
             "late_reps": self.late_reps, "rep_count": len(self.reps), "ignored_reps": self.ignored_reps,
             "idem_keys": {k: idem_key(self.call_id, k) for k in self.sent},
@@ -510,6 +513,10 @@ class CompetitionCall:
         self.liveness_fires = [float(x) for x in lv.get("fires_s") or []]
         self._old_windows = [(float(a), float(b)) for a, b in lv.get("windows_s") or []]
         self._rescheduled = bool(lv.get("rescheduled"))
+        if d.get("commit_t") is not None:
+            self._commit_t = float(d["commit_t"])
+        if d.get("sealed") is True:                         # intake stays closed after a restart (an early commit seals
+            self.sealed = True                              # without ending): a later in-window rep is a late rep
         if d.get("final") and d.get("ended_t") is not None:
             self.ended_at, self.end_reason = float(d["ended_t"]), d.get("end_reason")
             self.counting_stopped = self._payload_built = self.sealed = True   # the earlier process is gone
@@ -940,6 +947,7 @@ class CompetitionCall:
                 self._settle_liveness(self.count_s)
             log.info("call %s: count over (%d reps so far, liveness %s)", self.call_id, len(self.reps), self.liveness_result)
             self._start_reveal()
+        self._maybe_early_commit()
         due = [(t, k) for t, k in self._due if t <= rel]
         if due:
             t_last, key = due[-1]
@@ -970,6 +978,22 @@ class CompetitionCall:
             except Exception as e:
                 log.warning("call %s: reveal video failed (%r); audio_only", self.call_id, e)
         self._reveal_task = asyncio.ensure_future(_go())
+
+    def _maybe_early_commit(self) -> None:
+        """REVEAL_MODE=video: once counting stopped and the liveness result is known, drain the feed and commit reps
+        in the background (not cancelled by cancel_reveal: the commit must survive) so the reveal shows authoritative
+        numbers. Never ends the call, never delays leave/hangup; end() waits for it and skips what it acknowledged."""
+        if (self.reveal_mode != "video" or self._reveal_fn is None or self.reveal_s <= 0 or not self.counting_stopped
+                or self._early_task is not None or self.liveness_result is None or self.ended_at is not None
+                or self.sent["reps_committed"]):
+            return
+        self._early_task = self._spawn(self._early_commit())
+
+    async def _early_commit(self) -> None:
+        try:
+            await asyncio.shield(self._end("count_end", early=True))
+        except Exception as e:
+            log.warning("call %s: early commit failed (%r); end() retries", self.call_id, e)
 
     def cancel_reveal(self) -> None:
         """Cancel the reveal task (end, leave, room disconnect, worker shutdown); never awaits."""
@@ -1085,7 +1109,12 @@ class CompetitionCall:
         self.alert("commit_conflict", f"call {self.call_id}: {reason}; both versions kept "
                                       f"({os.path.basename(self.path)}{CONFLICT_SUFFIX})")
 
-    async def _end(self, reason: str) -> dict:
+    async def _end(self, reason: str, early: bool = False) -> dict:
+        """early (REVEAL_MODE=video, C7.v): at count end only drain + reps_committed so the reveal frame can show the
+        authoritative points; it neither ends the call (no ended_at, no call_ended, lock and checkpoint stay open) nor
+        persists; the real end() later skips the already acknowledged reps_committed."""
+        if not early and self._early_task is not None and not self._early_task.done():
+            await asyncio.wait({self._early_task})            # one commit in flight at a time
         if self.t0 is not None and not self._start_done.is_set():
             try:
                 await asyncio.wait_for(self._start_done.wait(), START_DEADLINE_S + max(REJECT_LEAVE_S, FAIL_CUE_S + FAIL_ENDED_S) + 1)
@@ -1093,7 +1122,10 @@ class CompetitionCall:
                 log.error("call %s: end(%s) while /calls/start is still pending; nothing recorded", self.call_id, reason)
         if self.decision != "accept":
             return {"recorded": False, "committed": False, "decision": self.decision}
-        if self.ended_at is None:
+        if early:
+            if self.liveness_result is None or self.ended_at is not None:
+                return {"recorded": True, "committed": False}      # challenge still running / call already ending
+        elif self.ended_at is None:
             self.ended_at, self.end_reason = self.clock(), reason
             self.counting_stopped = True
             self._write()
@@ -1109,7 +1141,10 @@ class CompetitionCall:
                 except Exception as e:
                     log.exception("call %s: drain before commit failed: %r", self.call_id, e)
             self.sealed = self.sealed or ok
-        self._settle_liveness(min(self.rel(self.ended_at), self.count_s + self.reveal_s))
+        if not early:
+            self._settle_liveness(min(self.rel(self.ended_at), self.count_s + self.reveal_s))
+        if not self.sealed and early:
+            return {"recorded": True, "committed": False}          # feed busy: the real end() defers as usual
         if not self.sealed:
             self._commit_deferred = True
             self.last_error = "rep intake not sealed (perception feed busy): commit deferred until seal()"
@@ -1121,16 +1156,21 @@ class CompetitionCall:
                     "persisted": persisted}
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.commit_deadline_s
-        rel_end = min(self.rel(self.ended_at), self.count_s)
+        if early:
+            self._commit_t = self.t0 + self.count_s               # the commit's ended_at, kept for any retry by end()
+        end_t = self._commit_t if self._commit_t is not None else self.ended_at
+        rel_end = min(self.rel(self.ended_at if self.ended_at is not None else end_t), self.count_s)
         for kind in ("reps_committed", "call_ended"):
             if self.sent[kind]:
                 continue
+            if early and kind == "call_ended":
+                break
             if kind == "call_ended" and not self.sent["reps_committed"]:
                 log.error("call %s: reps_committed not acknowledged; call_ended left to the reconciler", self.call_id)
                 break
             if kind == "reps_committed":
                 reps = self.final_reps()
-                body = {"started_at": utc_iso(self.t0), "ended_at": utc_iso(self.ended_at),
+                body = {"started_at": utc_iso(self.t0), "ended_at": utc_iso(end_t),
                         "liveness_result": self.liveness_result, "judge_version": JUDGE_VERSION, "reps": reps}
                 self._payload_built = True
             else:
@@ -1141,7 +1181,7 @@ class CompetitionCall:
             try:
                 if left <= 0:
                     raise asyncio.TimeoutError()
-                r = await asyncio.wait_for(self.dispatcher.event(kind, self.call_id, body, at=utc_iso(self.ended_at)), left)
+                r = await asyncio.wait_for(self.dispatcher.event(kind, self.call_id, body, at=utc_iso(end_t if kind == "reps_committed" else self.ended_at)), left)
             except asyncio.TimeoutError:
                 self.last_error = f"{kind}: commit deadline ({self.commit_deadline_s:g} s) passed"
                 log.error("call %s: %s; checkpoint %s kept with committed:false", self.call_id, self.last_error, self.path)
@@ -1166,6 +1206,9 @@ class CompetitionCall:
             self._write()
             if not self.sent[kind]:
                 break
+        if early:
+            self._write()
+            return {"recorded": True, "committed": False, "reps_committed": self.sent["reps_committed"]}
         self.committed = all(self.sent.values()) and not self.late_reps
         self._write()
         if not self.committed:

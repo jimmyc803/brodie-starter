@@ -1526,3 +1526,68 @@ def test_adopted_call_keeps_the_liveness_setting_it_ran_with(tmp_path, ckpt, liv
                         checkpoint_dir=str(tmp_path), hangup_mode="leave_room")
     c._adopt({"call_id": "call-1", "line_id": "line-1", "t0": time.time() - 100, "reps": [], **ckpt})
     assert c.liveness_enabled() is want
+
+
+# ------------------------------------------------------------------ rv-39: early commit (REVEAL_MODE=video)
+def _early_worker(tmp_path, disp, clock):
+    async def hook(seconds, wait):
+        await wait()
+    c = CompetitionCall("call-1", "line-1", None, disp, clock=clock, checkpoint_dir=str(tmp_path), hangup_mode="leave_room",
+                        reveal_mode="video", reveal=hook, alert=lambda *a: None,
+                        liveness_factory=lambda rng, thr: StubLiveness(rng, thr))
+    return c
+
+
+async def _early_commit(tmp_path, disp, t0):
+    clock = Clock(t0)
+    c = _early_worker(tmp_path, disp, clock)
+    assert await c.start()
+    clock.t = t0 + 30
+    c.on_rep(valid_rep(), t0 + 30)
+    clock.t = t0 + 181
+    c.liveness_result = "pass"
+    c.tick()
+    for _ in range(100):
+        await asyncio.sleep(0)
+    assert c.sent["reps_committed"] and c.ended_at is None
+    return c, clock
+
+
+def test_early_commit_checkpoint_keeps_the_intake_sealed_across_a_restart(tmp_path):
+    t0 = time.time() - 100
+    disp = FakeClient()
+
+    async def go():
+        c, clock = await _early_commit(tmp_path, disp, t0)
+        d = load(checkpoint_path("call-1", str(tmp_path)))
+        assert d["sealed"] is True and d["final"] is False and d["commit_t"] == t0 + c.count_s
+        c._release_lock()                                  # the first process is gone
+        c2 = _early_worker(tmp_path, disp, Clock(t0 + 185))
+        assert await c2.start() and c2.adopted and c2.sealed and c2.sent["reps_committed"]
+        c2.on_rep(valid_rep(), t0 + 100)                   # a delayed in-window rep after the restart
+        assert len(c2.late_reps) == 1 and c2.committed is False
+        await c2.end("complete")
+        return c2
+    c2 = run(go())
+    assert c2.committed is False and len(c2.late_reps) == 1 and c2.sent == {"reps_committed": True, "call_ended": True}
+    assert [e["kind"] for e in disp.events].count("reps_committed") == 1
+
+
+def test_early_commit_crash_between_ack_and_saved_sent_replays_the_same_payload(tmp_path):
+    t0 = time.time() - 1000
+    disp = FakeClient()
+
+    async def go():
+        c, _ = await _early_commit(tmp_path, disp, t0)
+        c._release_lock()
+    run(go())
+    path = checkpoint_path("call-1", str(tmp_path))
+    set_fields(path, sent={"reps_committed": False, "call_ended": False})      # the ack was never saved
+    client, alerts = FakeClient({"reps_committed": [{"ok": True, "duplicate": False, "already": True}]}), []
+    out = run(rec(tmp_path, client, Clock(time.time()), alerts=alerts).run_once())
+    assert out["replayed"][0]["committed"] is True and "commit_conflict" not in [a for a, _ in alerts]
+    first = next(e for e in disp.events if e["kind"] == "reps_committed")
+    assert client.events[0]["payload"] == first["payload"]                      # byte-identical: same ended_at
+    assert client.kinds() == ["reps_committed", "call_ended"]
+    assert not os.path.exists(path + rs.CONFLICT_SUFFIX)
+    assert load(path)["sent"] == {"reps_committed": True, "call_ended": True}

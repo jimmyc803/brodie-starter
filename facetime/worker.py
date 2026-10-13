@@ -433,6 +433,7 @@ class CoachJob:
         self.hb_task = None
         self.avatar_task = None
         self.mirror_in = None; self.mirror_live = False           # newest (rgb, landmarks, seq, t_mono) for the push-up mirror (feed thread writes)
+        self.reveal_frames = None                                 # challenge.worker.reveal_video.RevealFrames (REVEAL_MODE=video)
         self.mirror_state = None                                  # facetime.pushup_mirror.MirrorState (loop thread)
         self.prep = None                                          # facetime.frameprep.FramePrep: content crop + orientation lock (feed thread)
         self.hangup_mode = (os.environ.get('HANGUP_MODE') or 'unverified').strip()
@@ -600,6 +601,7 @@ class CoachJob:
                 fps = max(1.0, float(getattr(self.a, 'mirror_fps', 15.0) or 15.0))
             else:
                 VW, VH = av.W, av.H; kind = 'avatar'; bitrate = 600_000
+            self.video_size = (VW, VH)
             source = rtc.VideoSource(VW, VH)
             track = rtc.LocalVideoTrack.create_video_track('coach-video', source)
             await self.room.local_participant.publish_track(track, rtc.TrackPublishOptions(
@@ -610,6 +612,15 @@ class CoachJob:
             stats = dict(n=0, ms=0.0, t=time.monotonic())
             while not self.stop.is_set():
                 speaking = self.player is not None and self.player.playing is not None
+                rf = getattr(self, 'reveal_frames', None)
+                rv_land = (rf is not None and renderer is not None and getattr(rf, 'landscape_size', None) is not None
+                           and bool(getattr(self, 'mirror_landscape', False)))       # sideways phone: landscape card
+                rv_img = rf.current_frame(rv_land) if rf is not None else None
+                if rv_img is not None:                                         # reveal (C7.v): the whole card, never the mirror
+                    frame = await asyncio.to_thread(self._reveal_frame, rv_img, rf.landscape_size if rv_land else (VW, VH))
+                    source.capture_frame(frame)
+                    next_t = loop.time() + 1.0 / IDLE_CARD_FPS
+                    await asyncio.sleep(max(0.0, next_t - loop.time())); continue
                 if renderer is not None:
                     now = time.monotonic(); st = self._mirror_tick_state(now)
                     snap = self.mirror_in
@@ -639,6 +650,12 @@ class CoachJob:
             print(f'[worker] avatar stopped: {e!r}', flush=True)
         finally:
             self.mirror_live = False; self.mirror_in = None
+
+    @staticmethod
+    def _reveal_frame(img, size):
+        """The reveal image as an I420 frame of `size` (letterboxed whole by the provider; resized only if it differs)."""
+        if img.size != tuple(size): img = img.resize(tuple(size))
+        return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, img.convert('RGB').tobytes()).convert(rtc.VideoBufferType.I420)
 
     @staticmethod
     def _avatar_frame(av, speaking, size):
@@ -839,9 +856,13 @@ class CoachJob:
         self.hb_task = asyncio.create_task(self._job_heartbeat(), name='job-heartbeat')
 
     async def reveal_video(self, seconds, wait_committed):
-        """REVEAL_MODE=video (C7.v): card/fallback frame as a video track for the reveal; never raises."""
-        from challenge.worker.reveal_video import publish_reveal
-        return await publish_reveal(self.room, self.call_id, seconds, wait_committed)
+        """REVEAL_MODE=video (C7.v): the card/fallback frame goes to the coach-video loop (reveal_frames); never raises."""
+        from challenge.worker.reveal_video import RevealFrames
+        if self.reveal_frames is None:                                     # portrait + the mirror's sideways-phone layout
+            try: from facetime.pushup_mirror import LW, LH; land = (LW, LH)
+            except Exception: land = None
+            self.reveal_frames = RevealFrames(size=getattr(self, 'video_size', (720, 1280)), landscape_size=land)
+        return await self.reveal_frames.run(self.call_id, seconds, wait_committed)
 
     async def _run_competition(self):
         try:

@@ -128,31 +128,95 @@ def test_card_url_uses_call_id_only(monkeypatch):
     assert rv.card_url("c") is None
 
 
-def test_publishes_card_frames_for_the_whole_reveal(no_disk):
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom()
+def _watch(frames, wait, fetch, seconds=0.6, size=(720, 1280)):
+    """Run the provider; sample current_frame() the way the coach-video loop does. Returns (samples, result)."""
+    async def go():
+        t = asyncio.ensure_future(frames.run("c1", seconds, wait, fetch=fetch))
+        out = []
+        while not t.done():
+            out.append(frames.current_frame())
+            await asyncio.sleep(0.02)
+        out.append(frames.current_frame())
+        return out, t.result()
+    return run(go())
+
+
+def test_card_frames_through_the_loop_hook_and_no_track(no_disk):
+    frames = rv.RevealFrames(size=(720, 1280))
+    assert frames.current_frame() is None                 # no reveal active: the loop keeps the mirror
 
     async def fetch(call_id, timeout=2.0):
         assert call_id == "c1"
         return rv._decode_card(png())
-    ok = run(rv.publish_reveal(room, "c1", 15, done(None), rtc=fr, fetch=fetch, clock=clk, sleep=clk.sleep))
-    assert ok
-    src = fr.sources[0]
-    assert src.size == (720, 900) and len(src.frames) >= 2 * 13
-    assert src.frames[0].size == (720, 900) and src.frames[0].kind == "I420"
-    assert src.frames[-1].data == rv._decode_card(png()).convert("RGBA").tobytes()     # the card replaced the neutral frame
-    assert clk.t - 100.0 <= 15
-    assert [e[0] for e in room.events] == ["publish", "unpublish"] and room.events[1][1] == "PUB1"
-    assert room.events[0][2].simulcast is False
+    out, ok = _watch(frames, done(None), fetch)
+    assert ok is True
+    shown = [f for f in out if f is not None]
+    assert shown and shown[0].size == (720, 1280)
+    assert shown[-1].tobytes() != shown[0].tobytes()       # the card replaced the neutral frame
+    assert out[-1] is None and frames.current_frame() is None
+    # no LiveKit track API is touched at all
+    assert not hasattr(rv, "publish_reveal") and "rtc" not in vars(rv)
 
 
 def test_fallback_when_card_unavailable(no_disk):
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom()
+    frames = rv.RevealFrames(size=(720, 1280))
 
     async def fetch(call_id, timeout=2.0):
         return None
-    assert run(rv.publish_reveal(room, "c1", 15, done({"points": 7, "rank": 2}), rtc=fr, fetch=fetch, clock=clk, sleep=clk.sleep))
-    assert fr.sources[0].frames and room.events[-1][0] == "unpublish"
-    assert fr.sources[0].frames[-1].data == rv.render_fallback(7, 2).convert("RGBA").tobytes()
+    out, ok = _watch(frames, done({"points": 7, "rank": 2}), fetch)
+    shown = [f for f in out if f is not None]
+    assert ok and shown[-1].tobytes() == rv.render_fallback(7, 2, (720, 1280)).tobytes()
+
+
+def test_card_is_letterboxed_whole_never_cropped(no_disk):
+    img = rv._frame((720, 1280), (), rv._decode_card(png(color=(255, 0, 0))))
+    assert img.size == (720, 1280)
+    px = img.load()
+    red = (255, 0, 0)
+    assert px[360, 640] == red and px[2, 195] == red and px[717, 1085] == red      # all four card edges present (no crop)
+    assert px[2, 100] != red and px[2, 1120] != red and px[360, 20] != red         # canvas above/below
+
+
+def test_landscape_card_is_letterboxed_whole_beside_the_pills(no_disk):
+    img = rv._frame((1280, 720), (), rv._decode_card(png(color=(255, 0, 0))))
+    assert img.size == (1280, 720)
+    px = img.load()
+    red = (255, 0, 0)
+    xs = [x for x in range(1280) if px[x, 360] == red]
+    ys = [y for y in range(720) if px[350, y] == red]
+    w, h = xs[-1] - xs[0] + 1, ys[-1] - ys[0] + 1
+    assert abs(w / h - 1080 / 1350) < 0.01                                     # whole card, aspect kept (no crop/stretch)
+    assert h >= 600 and xs[-1] < int(1280 * 0.55)                              # big, in the left column
+    right = [px[x, y] for x in range(720, 1280, 8) for y in range(0, 720, 8)]
+    assert red not in right and len(set(right)) > 1                            # pills on the right, clear of the card
+
+
+def test_landscape_frames_follow_the_phone(no_disk):
+    frames = rv.RevealFrames(size=(720, 1280), landscape_size=(1280, 720))
+
+    async def fetch(call_id, timeout=2.0):
+        return None
+
+    async def go():
+        t = asyncio.ensure_future(frames.run("c1", 0.4, done({"points": 7, "rank": 2}), fetch=fetch))
+        await asyncio.sleep(0.2)
+        both = frames.current_frame(), frames.current_frame(landscape=True)
+        await t
+        return both
+    portrait, land = run(go())
+    assert portrait.size == (720, 1280) and land.size == (1280, 720)
+    assert land.tobytes() == rv.render_fallback(7, 2, (1280, 720)).tobytes()
+    assert frames.current_frame(landscape=True) is None                       # dropped with the portrait frame
+
+    plain = rv.RevealFrames(size=(720, 1280))                                  # no landscape layout: portrait either way
+
+    async def go_plain():
+        t = asyncio.ensure_future(plain.run("c2", 0.3, None))
+        await asyncio.sleep(0.15)
+        f = plain.current_frame(landscape=True)
+        await t
+        return f
+    assert run(go_plain()).size == (720, 1280)
 
 
 def test_fallback_frame_has_text_and_no_handle():
@@ -200,30 +264,32 @@ def test_fetch_card_bounded_and_failures_are_none(monkeypatch):
             assert got.size == (720, 900)
 
 
-def test_publish_error_is_warn_and_false(caplog, no_disk):
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom(fail_publish=True)
+def test_render_error_is_warn_and_no_frame(caplog, monkeypatch):
+    frames = rv.RevealFrames(size=(720, 1280))
 
-    async def fetch(call_id, timeout=2.0):
-        return None
+    def boom(size):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(rv, "render_tallying", boom)
     with caplog.at_level(logging.WARNING, logger="challenge.reveal_video"):
-        ok = run(rv.publish_reveal(room, "c1", 15, done(None), rtc=fr, fetch=fetch, clock=clk, sleep=clk.sleep))
-    assert ok is False and not any(e[0] == "publish" for e in room.events)
+        ok = run(frames.run("c1", 0.2, done(None)))
+    assert ok is False and frames.current_frame() is None
     assert any(r.levelno == logging.WARNING for r in caplog.records)
 
 
-def test_capture_error_still_unpublishes(caplog):
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom()
-    orig = fr.VideoSource
+def test_cancel_drops_the_frame_and_current_frame_never_blocks():
+    frames = rv.RevealFrames(size=(720, 1280))
 
-    class Bad(orig):
-        def capture_frame(self, f):
-            raise RuntimeError("boom")
-    fr.VideoSource = Bad
-
-    async def fetch(call_id, timeout=2.0):
-        return None
-    assert run(rv.publish_reveal(room, "c1", 15, done(None), rtc=fr, fetch=fetch, clock=clk, sleep=clk.sleep)) is True
-    assert room.events[-1][0] == "unpublish"
+    async def go():
+        async def wait():
+            await asyncio.sleep(3600)
+        t = asyncio.ensure_future(frames.run("c1", 30, wait))
+        await asyncio.sleep(0.1)
+        assert frames.current_frame() is not None          # cached neutral frame, synchronous
+        t.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await t
+        assert frames.current_frame() is None
+    run(go())
 
 
 # ------------------------------------------------------------------ controller hook
@@ -314,9 +380,8 @@ def test_decode_runs_off_the_event_loop(monkeypatch):
 
 
 def test_neutral_frame_until_commit_and_fetch_only_after():
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom()
+    frames = rv.RevealFrames(size=(720, 1280))
     order = []
-    gate = asyncio.Event() if False else None
 
     async def go():
         ev = asyncio.Event()
@@ -329,23 +394,23 @@ def test_neutral_frame_until_commit_and_fetch_only_after():
         async def fetch(call_id, timeout=2.0):
             order.append("fetch")
             return None
-
-        async def slow_sleep(dt):
-            clk.t += dt
-            if clk.t > 104:
-                ev.set()
-            await asyncio.sleep(0)
-        assert await rv.publish_reveal(room, "c1", 15, wait, rtc=fr, fetch=fetch, clock=clk, sleep=slow_sleep)
-    run(go())
+        t = asyncio.ensure_future(frames.run("c1", 1.0, wait, fetch=fetch))
+        await asyncio.sleep(0.1)
+        first = frames.current_frame()
+        assert order == []
+        ev.set()
+        await asyncio.sleep(0.2)
+        last = frames.current_frame()
+        await t
+        return first, last
+    first, last = run(go())
     assert order == ["committed", "fetch"]
-    frames = [f.data for f in fr.sources[0].frames]
-    neutral = rv.render_tallying().convert("RGBA").tobytes()
-    assert frames[0] == neutral and frames[-1] == rv.render_fallback(4, 1).convert("RGBA").tobytes()
-    assert 1 < frames.count(neutral) < len(frames)
+    assert first.tobytes() == rv.render_tallying((720, 1280)).tobytes()
+    assert last.tobytes() == rv.render_fallback(4, 1, (720, 1280)).tobytes()
 
 
 def test_never_committed_shows_neutral_only():
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom()
+    frames = rv.RevealFrames(size=(720, 1280))
     fetched = []
 
     async def wait():
@@ -353,78 +418,6 @@ def test_never_committed_shows_neutral_only():
 
     async def fetch(call_id, timeout=2.0):
         fetched.append(1)
-    run(rv.publish_reveal(room, "c1", 15, wait, rtc=fr, fetch=fetch, clock=clk, sleep=clk.sleep))
-    neutral = rv.render_tallying().convert("RGBA").tobytes()
-    assert fetched == [] and {f.data for f in fr.sources[0].frames} == {neutral}
-
-
-def test_controller_wait_resolves_only_after_ack_and_carries_points():
-    got = {}
-
-    async def hook(seconds, wait):
-        got["res"] = await wait()
-
-    async def go():
-        c = _call("video", hook)
-        c._due = []
-        c.tick(1000.0)
-        await asyncio.sleep(0.05)
-        assert "res" not in got
-        c.commit_result = {"points": 6, "rank": 2}
-        c._commit_evt.set()
-        await asyncio.sleep(0.05)
-    run(go())
-    assert got["res"] == {"points": 6, "rank": 2}
-
-
-def test_controller_cancels_reveal_on_end_and_leave():
-    async def hook(seconds, wait):
-        await asyncio.sleep(3600)
-
-    async def go(how):
-        left = []
-        c = _call("video", hook)
-        c._leave_fn = left.append
-        c._due = []
-        c.tick(1000.0)
-        await asyncio.sleep(0)
-        t = c._reveal_task
-        assert t is not None and not t.done()
-        if how == "leave":
-            c._leave("x")
-        else:
-            await c.end("x")
-        await asyncio.sleep(0)
-        assert t.cancelled() or t.done()
-        assert c._reveal_task is None
-    run(go("leave"))
-    run(go("end"))
-
-
-def test_stalled_publish_is_bounded_and_cleaned_up():
-    fr, room = FakeRtc(), FakeRoom(hang_publish=True)
-
-    async def go():
-        loop = asyncio.get_running_loop()
-        t = loop.time()
-        ok = await rv.publish_reveal(room, "c1", 1.6, done(None), rtc=fr)
-        return ok, loop.time() - t
-    ok, dt = run(go())
-    assert ok is False and dt < 1.6
-    assert fr.sources[0].closed is True
-
-
-def test_cancel_during_reveal_unpublishes_and_closes_source():
-    clk, fr, room = Clk(), FakeRtc(), FakeRoom()
-
-    async def go():
-        t = asyncio.ensure_future(rv.publish_reveal(room, "c1", 15, done(None), rtc=fr,
-                                                    fetch=lambda *a, **k: done(None)()))
-        await asyncio.sleep(0.2)
-        t.cancel()
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
-    run(go())
-    assert room.events[-1][0] == "unpublish" and fr.sources[0].closed is True
+    out, ok = _watch(frames, wait, fetch, seconds=0.4)
+    neutral = rv.render_tallying((720, 1280)).tobytes()
+    assert fetched == [] and {f.tobytes() for f in out if f is not None} == {neutral}

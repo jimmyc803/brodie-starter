@@ -1464,3 +1464,79 @@ def test_chert_api_refused_without_env(monkeypatch):
     monkeypatch.setenv("CHERT_FACETIME_TOKEN", "t")
     monkeypatch.setenv("CHERT_PROJECT_ID", "p")
     assert ctl.check_modes("chert_api", "audio_only") == []
+
+
+# ------------------------------------------------------------------ task 39: commit before the reveal frames
+class PointsDispatcher(Dispatcher):
+    def __call__(self, req):
+        resp = super().__call__(req)
+        body = json.loads(req.content or b"{}")
+        if req.url.path == "/calls/event" and body["kind"] == "reps_committed" and resp.status_code == 200:
+            return httpx.Response(200, json={"ok": True, "duplicate": False, "points": 7})
+        return resp
+
+
+def _video_rig(tmp_path, disp):
+    seen = {"at_hook": None, "result": None}
+    r = Rig(tmp_path, disp=disp, hangup="leave_room", reveal="video")
+
+    async def hook(seconds, wait):
+        seen["at_hook"] = list(disp.events())
+        seen["result"] = await wait()
+        seen["at_result"] = list(disp.events())
+    r.call._reveal_fn = hook
+    return r, seen
+
+
+def test_commit_precedes_reveal_and_points_come_from_the_dispatcher(tmp_path):
+    disp = PointsDispatcher()
+
+    async def go():
+        r, seen = _video_rig(tmp_path, disp)
+        assert await r.call.start()
+        assert await r.advance(180.5) is False
+        for _ in range(50):
+            await asyncio.sleep(0)
+        mid = [k for k, _ in disp.events()]
+        assert await r.advance(195) is True
+        await r.call.end("complete")
+        return r, seen, mid
+    r, seen, mid = run(go())
+    assert "reps_committed" in mid and "call_ended" not in mid          # committed at count end, call not ended yet
+    assert seen["result"] == {"points": 7}                               # the dispatcher's, never computed locally
+    assert [k for k, _ in disp.events()].count("reps_committed") == 1    # the real end() does not resend
+    assert [k for k, _ in disp.events()][-1] == "call_ended"
+    assert r.call.committed is True and r.call.sent == {"reps_committed": True, "call_ended": True}
+    assert r.left == [] or r.left[0][0] <= 195.0
+
+
+def test_no_early_commit_in_audio_only(tmp_path):
+    disp = PointsDispatcher()
+
+    async def go():
+        r = Rig(tmp_path, disp=disp, hangup="leave_room")
+        assert await r.call.start()
+        await r.advance(190)
+        for _ in range(50):
+            await asyncio.sleep(0)
+        return [k for k, _ in disp.events()]
+    assert "reps_committed" not in run(go())
+
+
+def test_early_commit_failure_is_retried_by_end_with_same_payload(tmp_path):
+    disp = PointsDispatcher(fail_status={"/calls/event": [503] * 40})
+
+    async def go():
+        r, seen = _video_rig(tmp_path, disp)
+        assert await r.call.start()
+        await r.advance(181)
+        for _ in range(200):
+            await asyncio.sleep(0)
+        disp.fail_status = {}
+        await r.advance(195)
+        await r.call.end("complete")
+        return r
+    r = run(go())
+    bodies = [b for p, b, _ in disp.requests if p == "/calls/event" and b["kind"] == "reps_committed"]
+    assert len({json.dumps(b["payload"], sort_keys=True) for b in bodies}) == 1
+    assert r.call.committed is True

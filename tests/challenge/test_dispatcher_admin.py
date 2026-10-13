@@ -58,7 +58,7 @@ def give_reps(c, conn, handle, n_valid, call_id, n_invalid=0):
     assert r["decision"] == "accept", r
     at = (T0 + timedelta(seconds=10)).isoformat()
     reps = [rep(i + 1, at) for i in range(n_valid)] + [rep(n_valid + i + 1, at, valid=False) for i in range(n_invalid)]
-    ev = {"kind": "reps_committed", "call_id": call_id, "idem_key": f"k-{call_id}", "at": at, "payload": {
+    ev = {"kind": "reps_committed", "call_id": call_id, "idem_key": f"{call_id}:reps_committed", "at": at, "payload": {
         "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(),
         "liveness_result": "pass", "judge_version": JUDGE_VERSION, "reps": reps}}
     assert c.post("/calls/event", headers=TOK, json=ev).json()["ok"] is True

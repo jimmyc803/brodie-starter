@@ -70,7 +70,8 @@ def msgs(conn, template):
                         (template,)).fetchall()
 
 
-def commit_ev(call_id, key="k-commit"):
+def commit_ev(call_id, key=None):
+    key = key or f"{call_id}:reps_committed"      # /calls/event requires idem_key == <call_id>:<kind>
     at = (T0 + timedelta(seconds=10)).isoformat()
     return {"kind": "reps_committed", "call_id": call_id, "idem_key": key, "at": at, "payload": {
         "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(),
@@ -166,10 +167,10 @@ def test_end_and_commit_idempotent_with_postcall(env):
     uid, handle = mkuser(conn)
     assert start(c, "c-1", handle).json()["decision"] == "accept"
     now["t"] = T0 + timedelta(seconds=200)
-    end = {"kind": "call_ended", "call_id": "c-1", "idem_key": "k-end", "at": now["t"].isoformat(),
+    end = {"kind": "call_ended", "call_id": "c-1", "idem_key": "c-1:call_ended", "at": now["t"].isoformat(),
            "payload": {"ended_at": (T0 + timedelta(seconds=195)).isoformat(),
                        "count_end_at": (T0 + timedelta(seconds=180)).isoformat(), "rep_count": 2}}
-    assert c.post("/calls/event", headers=H, json={"kind": "call_started", "call_id": "c-1", "idem_key": "k0"}).json() == {"ok": True, "duplicate": False}
+    assert c.post("/calls/event", headers=H, json={"kind": "call_started", "call_id": "c-1", "idem_key": "c-1:call_started"}).json() == {"ok": True, "duplicate": False}
     assert c.post("/calls/event", headers=H, json=end).json()["ok"] is True
     assert c.post("/calls/event", headers=H, json=end).json()["ok"] is True
     r1 = c.post("/calls/event", headers=H, json=commit_ev("c-1")).json()
@@ -205,7 +206,7 @@ def test_rank_drop_text_only_unthrottled(env):
     st.rpc("ch_rank_deltas", {"p_now": T0})  # baseline (nobody ranked yet)
     for cid, h, uid in (("rb", hb, b), ("ra", ha, a)):
         assert start(c, cid, h).json()["decision"] == "accept"
-        c.post("/calls/event", headers=H, json={"kind": "call_ended", "call_id": cid, "idem_key": "e" + cid,
+        c.post("/calls/event", headers=H, json={"kind": "call_ended", "call_id": cid, "idem_key": f"{cid}:call_ended",
                "payload": {"ended_at": (T0 + timedelta(seconds=195)).isoformat(), "count_end_at": None, "rep_count": 1}})
         st.rpc("ch_tick", {"p_now": T0 + timedelta(seconds=600)})
         if cid == "rb":
@@ -214,14 +215,15 @@ def test_rank_drop_text_only_unthrottled(env):
             c.post("/calls/event", headers=H, json=ev)
             now["t"] = T0 + timedelta(seconds=700)
     # a overtakes b with more reps
-    ev = commit_ev("ra", "k-ra")
+    ev = commit_ev("ra")
     r = c.post("/calls/event", headers=H, json=ev).json()
     assert r["ok"] and r["postcall"]["ok"] is True
     drops = [d for d in msgs(conn, "rank_drop") if d[3].endswith(":ra")]  # a's call overtook b
     assert [d[0] for d in drops] == [b] and drops[0][1]["old_rank"] == 1 and drops[0][1]["rank"] == 2
     # replay (new idem_key): DB already consumed deltas; no new drop texts
     total = len(msgs(conn, "rank_drop"))
-    c.post("/calls/event", headers=H, json=commit_ev("ra", "k-ra-2"))
+    st.rpc("ch_event_run", {"p_idem_key": "k-ra-2", "p_call_id": "ra", "p_kind": "reps_committed",
+                            "p_payload": commit_ev("ra")["payload"], "p_now": now["t"]})
     assert len(msgs(conn, "rank_drop")) == total
 
 
@@ -271,23 +273,24 @@ def test_duplicate_idem_key_returns_stored_result(env):
     c, conn, st, ob, now = env
     uid, handle = mkuser(conn)
     assert start(c, "c-idem", handle).json()["decision"] == "accept"
-    ev = commit_ev("c-idem", "same-key")
+    ev = commit_ev("c-idem")
     r1 = c.post("/calls/event", headers=H, json=ev).json()
     assert r1["ok"] and r1["duplicate"] is False and r1["already"] is False
     r2 = c.post("/calls/event", headers=H, json=ev).json()
     assert r2["duplicate"] is True and r2["already"] is False  # stored result, effect not re-run
-    assert conn.execute("select count(*) from ch_event_log where idem_key='same-key'").fetchone()[0] == 1
+    assert conn.execute("select count(*) from ch_event_log where idem_key='c-idem:reps_committed'").fetchone()[0] == 1
     # a different key for the same commit runs the RPC again and sees it is already committed
-    r3 = c.post("/calls/event", headers=H, json=commit_ev("c-idem", "other-key")).json()
-    assert r3["duplicate"] is False and r3["already"] is True
+    r3 = st.rpc("ch_event_run", {"p_idem_key": "other-key", "p_call_id": "c-idem", "p_kind": "reps_committed",
+                                 "p_payload": ev["payload"], "p_now": now["t"]})
+    assert r3["duplicate"] is False and r3["result"]["already"] is True
 
 
 def test_failed_effect_is_not_logged_and_can_retry(env):
     c, conn, *_ = env
     uid, handle = mkuser(conn)
-    ev = commit_ev("late", "late-key")
+    ev = commit_ev("late")
     assert c.post("/calls/event", headers=H, json=ev).json()["ok"] is False
-    assert conn.execute("select count(*) from ch_event_log where idem_key='late-key'").fetchone()[0] == 0
+    assert conn.execute("select count(*) from ch_event_log where idem_key='late:reps_committed'").fetchone()[0] == 0
     assert start(c, "late", handle).json()["decision"] == "accept"
     assert c.post("/calls/event", headers=H, json=ev).json()["ok"] is True
 
@@ -329,3 +332,27 @@ def test_scope_per_min_overrides(monkeypatch):
     lim = RateLimiter(2, now=lambda: 0.0)
     assert [lim.check("a", 4) for _ in range(5)] == [True] * 4 + [False]
     assert [lim.check("b") for _ in range(3)] == [True, True, False]
+
+
+def test_reps_committed_response_forwards_authoritative_points(env):
+    c, conn, *_ = env
+    uid, handle = mkuser(conn)
+    assert start(c, "c-pts", handle).json()["decision"] == "accept"
+    r = c.post("/calls/event", headers=H, json=commit_ev("c-pts")).json()
+    assert r["ok"] is True and r["points"] == conn.execute(
+        "select points from ch_call_stats where call_id=%s", ("c-pts",)).fetchone()[0]
+
+
+def test_idem_key_must_be_call_id_and_kind(env):
+    """ch_event_run matches on idem_key alone: call A's key replayed for call B must not return A's stored result."""
+    c, conn, *_ = env
+    uid, handle = mkuser(conn)
+    assert start(c, "c-a", handle).json()["decision"] == "accept"
+    assert c.post("/calls/event", headers=H, json=commit_ev("c-a")).json()["points"] is not None
+    stolen = commit_ev("c-b", "c-a:reps_committed")
+    r = c.post("/calls/event", headers=H, json=stolen)
+    assert r.status_code == 400 and "points" not in r.json()
+    wrong_kind = dict(commit_ev("c-a"), kind="call_ended")
+    assert c.post("/calls/event", headers=H, json=wrong_kind).status_code == 400
+    assert c.post("/calls/event", headers=H, json=dict(commit_ev("c-b"), idem_key="")).status_code == 400
+    assert conn.execute("select count(*) from ch_event_log where idem_key like 'c-b%'").fetchone()[0] == 0

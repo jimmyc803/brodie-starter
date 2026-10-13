@@ -667,7 +667,7 @@ class Sim:
         if agent:
             agent.started[self.et_day(t)] += 1
             agent.session_token += 1  # an accepted call ends the current waiting session
-        self.post_event(rec, "call_started", f"{cid}:started", {})
+        self.post_event(rec, "call_started", f"{cid}:call_started", {})
         self.build_call(rec, plan or {})
         if rec.crashed:
             self.metrics["worker_crashes"] += 1
@@ -755,7 +755,7 @@ class Sim:
     def reconcile(self, rec: CallRec, last_rep: datetime) -> None:
         """Reconciler for a crashed worker (C7): commits the checkpoint with ended_at = last rep time."""
         ended = max(last_rep, rec.started) if rec.reps else rec.started
-        self.post_event(rec, "reps_committed", f"{rec.id}:reconcile", self.commit_payload(rec, ended))
+        self.post_event(rec, "reps_committed", f"{rec.id}:reps_committed", self.commit_payload(rec, ended))
         self.model_commit(rec, ended)
         self.live.pop(rec.id, None)
         self.metrics["reconciled"] += 1

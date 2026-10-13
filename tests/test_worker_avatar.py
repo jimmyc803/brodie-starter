@@ -108,3 +108,37 @@ def test_competition_reps_on_screen_follow_what_the_controller_records(stored, c
     job._deliver({'type': 'rep', 't': 1.0, 'n': 1, 'exercise': 'pushups', 'valid': True})
     st = job.mirror_state
     assert (st.count if st else 0) == count and ((st is not None and st.verdict_ok is not None) == flashed)
+
+
+def test_reveal_frames_replace_the_mirror_in_coach_video_and_no_extra_track(monkeypatch):
+    from PIL import Image
+    published, captured, sizes = [], [], []
+    job = _mirror_job(monkeypatch, published, captured, sizes)
+    img = Image.new('RGB', (720, 1280), (10, 200, 30))
+    state = {'on': True}
+    job.reveal_frames = SimpleNamespace(current_frame=lambda landscape=False: img if state['on'] else None, landscape_size=None)
+    from facetime import pushup_mirror
+    def no_mirror(*a, **k): raise AssertionError('mirror rendered during the reveal')
+    monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', no_mirror)
+    _run(job, lambda: len(captured) >= 2)
+    assert [p[0] for p in published] == ['coach-video'] and sizes == [(720, 1280)]      # one track, no reveal track
+    assert captured[:2] == [(720, 1280)] * 2
+
+
+def test_reveal_follows_a_sideways_phone_to_the_landscape_layout(monkeypatch):
+    from PIL import Image
+    published, captured, sizes = [], [], []
+    job = _mirror_job(monkeypatch, published, captured, sizes)
+    port, land = Image.new('RGB', (720, 1280), (10, 200, 30)), Image.new('RGB', (1280, 720), (200, 10, 30))
+    asked = []
+    def current_frame(landscape=False):
+        asked.append(landscape)
+        return land if landscape else port
+    job.reveal_frames = SimpleNamespace(current_frame=current_frame, landscape_size=(1280, 720))
+    job.mirror_landscape = True
+    from facetime import pushup_mirror
+    def no_mirror(*a, **k): raise AssertionError('mirror rendered during the reveal')
+    monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', no_mirror)
+    _run(job, lambda: len(captured) >= 2)
+    assert captured[:2] == [(1280, 720)] * 2 and asked[:2] == [True, True]       # same track, landscape frames
+
