@@ -7,6 +7,7 @@ validity window). Only final results defer to the morning, since they are not st
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from datetime import date, datetime, timedelta
@@ -31,6 +32,7 @@ QUEUE_UPDATE_ETA_MIN = 10
 PH_WARN_LEAD = timedelta(minutes=15)
 PH_START_VALID = timedelta(minutes=10)
 DAILY_VALID = timedelta(hours=2)  # recap / streak risk / ending soon are stale after this
+OUTBOX_EVERY_S = 1.0  # the outbox runs on its own task (run_loop) so a slow provider never delays ch_tick
 
 
 def _hour_start(day: date, hour: int) -> datetime:
@@ -45,6 +47,7 @@ class Jobs:
         self._last: dict[str, datetime] = {}
         self._done: set[str] = set()
         self._audience: tuple[datetime, list[dict]] | None = None
+        self._held: set[str] = set()  # lines ch_tick held (stale worker heartbeat) on the previous tick
         self.errors: dict[str, str] = {}
 
     # ------------------------------------------------------------ plumbing
@@ -102,8 +105,9 @@ class Jobs:
         return parse_ts(self.cfg.get("window_start")) <= now < parse_ts(self.cfg.get("window_end"))
 
     # ------------------------------------------------------------ entrypoint
-    def run_due(self, now: datetime) -> dict:
-        """Run every due step once; a failing step is logged and does not stop the others."""
+    def run_due(self, now: datetime, include_outbox: bool = True) -> dict:
+        """Run every due step once; a failing step is logged and does not stop the others. include_outbox=False
+        leaves the send loop to the caller (run_loop runs it on its own task)."""
         now = parse_ts(now)
         out: dict[str, Any] = {}
         steps: list[tuple[str, Callable[[], Any]]] = [
@@ -118,8 +122,9 @@ class Jobs:
             ("queue_updates", lambda: self.queue_updates(now) if self._due("queue", now, QUEUE_UPDATE_EVERY) else None),
             ("alerts", lambda: self.alerts.check(now) if self._due("alerts", now, ALERTS_EVERY) else None),
             ("heartbeat", lambda: self.heartbeat(now) if self._due("heartbeat", now, HEARTBEAT_EVERY) else None),
-            ("outbox", lambda: self.outbox.run_once(now)),
         ]
+        if include_outbox:
+            steps.append(("outbox", lambda: self.outbox.run_once(now)))
         for name, fn in steps:
             try:
                 out[name] = fn()
@@ -132,11 +137,29 @@ class Jobs:
 
     run_once = run_due
 
+    def run_outbox(self, now: datetime) -> Any:
+        """One outbox send pass (run_loop's outbox task); errors are recorded like a run_due step, then re-raised."""
+        try:
+            out = self.outbox.run_once(parse_ts(now))
+        except Exception as exc:
+            self.errors["outbox"] = type(exc).__name__
+            raise
+        self.errors.pop("outbox", None)
+        return out
+
     # ------------------------------------------------------------ steps
     def tick(self, now: datetime) -> dict:
         r = self.store.rpc("ch_tick", {"p_now": now})
-        if r and (r.get("claims") or r.get("no_shows") or r.get("timeouts")):
+        if r and (r.get("claims") or r.get("no_shows") or r.get("timeouts") or r.get("restored")):
             logger.info("tick: %s", {k: len(v) for k, v in r.items() if isinstance(v, list)})
+        held = {str(x) for x in (r.get("held") or [])} if isinstance(r, dict) else set()
+        new = sorted(held - self._held)
+        if new:
+            # alert once per hold (plus the alerts' 30 min DB dedupe across dispatchers); a failed alert is retried
+            logger.error("tick: queue held, worker heartbeat stale on %s", new)
+            self.alerts.fire("line_held", f"worker heartbeat stale on {', '.join(new)}: queue held, no 'you're up' "
+                                          f"texts until the worker beats again", now)
+        self._held = held
         return r
 
     def heartbeat(self, now: datetime) -> None:
@@ -310,11 +333,30 @@ class Jobs:
         return sent
 
 
-async def run_loop(jobs: Jobs, interval_s: float = 2.0) -> None:
-    """Background loop for the FastAPI lifespan; never dies on a step error."""
+async def _outbox_loop(jobs: Jobs, interval_s: float) -> None:
     while True:
         try:
-            await asyncio.to_thread(jobs.run_due, jobs.clock())
+            await asyncio.to_thread(jobs.run_outbox, jobs.clock())
         except Exception:
-            logger.exception("jobs loop iteration failed")
+            logger.exception("outbox loop iteration failed")
         await asyncio.sleep(interval_s)
+
+
+async def run_loop(jobs: Jobs, interval_s: float = 2.0, outbox_interval_s: float = OUTBOX_EVERY_S) -> None:
+    """Background loop for the FastAPI lifespan; never dies on a step error. The outbox (provider sends can block
+    for up to 15 s) runs on its own task and thread, so ch_tick keeps its 2 s cadence (claim expiry, offline->idle,
+    next pop) whatever the text provider does."""
+    loop = asyncio.get_running_loop()
+    outbox = asyncio.create_task(_outbox_loop(jobs, outbox_interval_s), name="jobs-outbox")
+    try:
+        while True:
+            started = loop.time()
+            try:
+                await asyncio.to_thread(jobs.run_due, jobs.clock(), include_outbox=False)
+            except Exception:
+                logger.exception("jobs loop iteration failed")
+            await asyncio.sleep(max(0.0, interval_s - (loop.time() - started)))
+    finally:
+        outbox.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await outbox

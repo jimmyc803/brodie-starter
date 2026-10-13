@@ -412,10 +412,14 @@ def test_rank_drop_in_quiet_hours_is_dropped_not_deferred(env):
 class _Probe:
     def __init__(self):
         self.calls = 0
+        self.outbox_calls = 0
         self.clock = lambda: D
 
-    def run_due(self, now):
+    def run_due(self, now, include_outbox=True):
         self.calls += 1
+
+    def run_outbox(self, now):  # run_loop runs the outbox on its own task (P1-4)
+        self.outbox_calls += 1
 
 
 def test_app_starts_jobs_loop_unless_disabled(db, monkeypatch):
@@ -425,15 +429,15 @@ def test_app_starts_jobs_loop_unless_disabled(db, monkeypatch):
     probe = _Probe()
     with TestClient(create_app(store, None, clock=lambda: D, flags=Flags(), token="t", jobs=probe)):
         for _ in range(50):
-            if probe.calls:
+            if probe.calls and probe.outbox_calls:
                 break
             time.sleep(0.05)
-    assert probe.calls >= 1
+    assert probe.calls >= 1 and probe.outbox_calls >= 1
     monkeypatch.setenv("JOBS_ENABLED", "0")
     off = _Probe()
     with TestClient(create_app(store, None, clock=lambda: D, flags=Flags(), token="t", jobs=off)):
         time.sleep(0.2)
-    assert off.calls == 0
+    assert off.calls == 0 and off.outbox_calls == 0
 
 
 # ---------------------------------------------------------------- fix round

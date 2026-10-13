@@ -51,24 +51,24 @@ class Alerts:
             found["worker_heartbeat"] = f"worker heartbeat {int((now - parse_ts(beat)).total_seconds())}s old"
         return found
 
+    def fire(self, cond: str, detail: str, now: datetime) -> bool:
+        """Alert `cond` unless it was alerted in the last 30 minutes; True if sent."""
+        key = f"alert_last:{cond}"
+        # atomic per-condition claim in the DB: concurrent dispatchers cannot both alert
+        if not self.store.rpc("ch_job_claim", {"p_key": key, "p_now": now, "p_gap_s": int(DEDUPE.total_seconds())}):
+            return False
+        logger.error("ALERT %s: %s", cond, detail)
+        handles = self.cfg.get("team_alert_handles") or []
+        stamp = int(now.timestamp())
+        try:
+            for h in handles:
+                self.outbox.enqueue(handle=h, template="alert", ctx={"condition": cond, "detail": detail},
+                                    dedupe_key=f"alert:{cond}:{stamp // 600}:{h}", proactive=False)
+        except Exception:
+            self.store.rpc("ch_job_delete", {"p_key": key})  # release the claim so the next run retries
+            raise
+        return True
+
     def check(self, now: datetime) -> list[str]:
         """Send alerts for conditions not alerted in the last 30 minutes; returns the conditions sent."""
-        fired: list[str] = []
-        for cond, detail in self.conditions(now).items():
-            key = f"alert_last:{cond}"
-            # atomic per-condition claim in the DB: concurrent dispatchers cannot both alert
-            if not self.store.rpc("ch_job_claim", {"p_key": key, "p_now": now,
-                                                   "p_gap_s": int(DEDUPE.total_seconds())}):
-                continue
-            logger.error("ALERT %s: %s", cond, detail)
-            handles = self.cfg.get("team_alert_handles") or []
-            stamp = int(now.timestamp())
-            try:
-                for h in handles:
-                    self.outbox.enqueue(handle=h, template="alert", ctx={"condition": cond, "detail": detail},
-                                        dedupe_key=f"alert:{cond}:{stamp // 600}:{h}", proactive=False)
-            except Exception:
-                self.store.rpc("ch_job_delete", {"p_key": key})  # release the claim so the next run retries
-                raise
-            fired.append(cond)
-        return fired
+        return [cond for cond, detail in self.conditions(now).items() if self.fire(cond, detail, now)]

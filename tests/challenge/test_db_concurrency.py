@@ -77,7 +77,8 @@ INVARIANTS = {
                     <> (select count(*) from audit_log where action like 'line:%->in_call')""",
     "one_youre_up_per_pop": """
         select 1 where (select count(*) from messages where template = 'youre_up')
-                    <> (select count(*) from audit_log where action = 'queue:waiting->notified')""",
+                    <> (select count(*) from audit_log where action in ('queue:waiting->notified',
+                                                                       'queue:connected->notified'))""",
 }
 
 

@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from challenge.store import PgStore
-from db.test.harness import MIGRATIONS, connect
+from db.test.harness import MIGRATIONS, connect, migration_files
 
 ET = ZoneInfo("America/New_York")
 MIGRATION = MIGRATIONS / "20261013_challenge_calls.sql"
@@ -127,6 +127,10 @@ def test_migration_applies_twice(pg_cluster, db, st):
     name = db.split("dbname=")[1].split()[0]
     pg_cluster.apply_file(name, MIGRATION)
     pg_cluster.apply_file(name, MIGRATION)
+    # later migrations replace functions defined here: re-apply them so the rest of this module tests the live code
+    for later in migration_files():
+        if later.name > MIGRATION.name:
+            pg_cluster.apply_file(name, later)
 
 
 @pytest.mark.parametrize("fn", ["ch_call_start(text,text,text,text,timestamptz)",
@@ -231,7 +235,8 @@ def test_expired_claim_not_honoured_before_tick(st, conn):
     a, ha = user(conn)
     join(st, a, T0)
     tick(st, T0)
-    assert start(st, ha, T0 + timedelta(seconds=90))[1]["reason"] == "not_your_turn"
+    # claimed_until = T0+90; the dial grace (claim_grace_s, 20261023) ends at T0+100
+    assert start(st, ha, T0 + timedelta(seconds=100))[1]["reason"] == "not_your_turn"
 
 
 def test_at_cap_after_five_counted_calls_and_reset_after_et_midnight(st, conn):
@@ -275,6 +280,7 @@ def test_rejected_call_end_and_commit(st, conn):
 # ---------------------------------------------------------------- tick
 
 def test_claim_expiry_no_show_idle_and_next_pop_same_tick(st, conn):
+    set_cfg(conn, "claim_grace_s", 0)  # exact expiry timing; the dial grace is covered in test_db_call_reliability.py
     a, ha = user(conn)
     b, hb = user(conn, email=True)
     join(st, a, T0)
@@ -334,8 +340,9 @@ def test_in_call_timeout_finalizes_then_end_reconciles(st, conn):
     assert t["timeouts"] == [c]
     s = line(conn)
     assert (s[0], s[1], s[2], s[4]) == ("offline", None, None, T0 + timedelta(seconds=255 + 180))
+    # timed out with no commit and 0 reps: not counted (20261023 P1-2)
     assert conn.execute("select ended_at, counted_toward_cap from calls where id=%s", (c,)).fetchone() == \
-        (T0 + timedelta(seconds=195), True)
+        (T0 + timedelta(seconds=195), False)
     # late end from the worker: reconciles, line untouched, never double counts
     v = line(conn)[6]
     assert end(st, c, T0 + timedelta(seconds=190), 4, now=T0 + timedelta(seconds=300))["counted_toward_cap"] is True
@@ -346,6 +353,7 @@ def test_in_call_timeout_finalizes_then_end_reconciles(st, conn):
 
 
 def test_priority_calls_today_then_fifo(st, conn):
+    set_cfg(conn, "claim_grace_s", 0)  # one claim expires every 90 s below
     a, ha = user(conn)
     b, _ = user(conn)
     c, _ = user(conn)
@@ -398,9 +406,11 @@ def test_no_pops_after_window_end_or_before_start(st, conn):
     assert tick(st, et(2026, 10, 12, 19, 59, 59))["claims"] == []
     end_ts = et(2026, 10, 18, 23, 59, 59)
     assert tick(st, end_ts)["claims"] == []
-    assert conn.execute("select status from queue where user_id=%s", (a,)).fetchone()[0] == "waiting"
+    # window_end closes the queue (20261019_challenge_sim_fixes.sql 1a)
+    assert conn.execute("select status from queue where user_id=%s", (a,)).fetchone()[0] == "expired"
     b, _ = user(conn)
     assert join(st, b, end_ts)["reason"] == "frozen"
+    assert join(st, a, T0)["reason"] == "ok"
     set_cfg(conn, "competition_frozen", True)
     assert tick(st, T0)["claims"] == []
     set_cfg(conn, "competition_frozen", False)
@@ -598,11 +608,11 @@ def test_timeout_end_replaced_once_by_explicit_end(st, conn):
     uid, h = user(conn)
     c, _ = start(st, h, T0)
     tick(st, T0 + timedelta(seconds=255))
-    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), False, "timeout")  # no commit, 0 reps (20261023)
     # null retry after timeout keeps the timeout end (no move to p_now)
     st.rpc("ch_call_end", {"p_call_id": c, "p_ended_at": None, "p_count_end_at": None, "p_rep_count": 0,
                            "p_now": T0 + timedelta(seconds=400)})
-    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), False, "timeout")
     # explicit end: recovered 10 s, 0-rep call is not counted
     assert end(st, c, T0 + timedelta(seconds=10), 0, now=T0 + timedelta(seconds=500))["counted_toward_cap"] is False
     assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "end")
@@ -615,7 +625,7 @@ def test_late_commit_after_timeout_reconciles(st, conn):
     uid, h = user(conn)
     c, _ = start(st, h, T0)
     tick(st, T0 + timedelta(seconds=255))
-    assert call_row(conn, c) == (T0 + timedelta(seconds=195), True, "timeout")
+    assert call_row(conn, c) == (T0 + timedelta(seconds=195), False, "timeout")  # no commit, 0 reps (20261023)
     r = commit(st, c, [], T0 + timedelta(seconds=600), ended_at=T0 + timedelta(seconds=10))
     assert r["ok"] is True and r["already"] is False
     assert call_row(conn, c) == (T0 + timedelta(seconds=10), False, "commit")

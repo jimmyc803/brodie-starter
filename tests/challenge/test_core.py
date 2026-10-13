@@ -1,3 +1,4 @@
+import contextlib
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -265,13 +266,14 @@ def test_pgstore_wraps_jsonb(monkeypatch):
     class Conn:
         def __enter__(self): return self
         def __exit__(self, *a): return False
+        def transaction(self): return contextlib.nullcontext()  # PgStore sets a transaction-local statement_timeout
         def execute(self, sql, params):
             captured["sql"], captured["params"] = sql, params
             class C:
                 def fetchone(self): return ({"ok": True},)
             return C()
 
-    monkeypatch.setattr(psycopg, "connect", lambda dsn, autocommit: Conn())
+    monkeypatch.setattr(psycopg, "connect", lambda dsn, autocommit, connect_timeout: Conn())
     out = PgStore("x").rpc("ch_config_set", {"p_key": "k", "p_value": Json(5), "p_list": [1], "p_obj": {"a": 1}, "p_actor": "a"})
     assert out == {"ok": True}
     p = captured["params"]

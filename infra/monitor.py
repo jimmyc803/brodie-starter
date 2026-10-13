@@ -20,6 +20,86 @@ def command(*args):
     return subprocess.run(args, capture_output=True, text=True, timeout=25, check=True).stdout
 
 
+# Chert agent health from its unit + journal. `chert doctor` is not usable here: it exits 3 while the agent is
+# connected (line_free fails because the session IS connected; livekit vars are not in the doctor's env).
+CHERT_UNIT = 'chert-agent'
+CHERT_HEALTHY = ('connected to chert', 'joined a waiting room', 'call accepted', 'call ended', 'reconnected')
+CHERT_LOST = 'connection to chert lost'
+CHERT_EXPIRED = 'session expired'
+
+
+def chert_event(message):
+    """'expired' | 'lost' | 'healthy' | None for one chert-agent journal line."""
+    text = message.lower()
+    if CHERT_EXPIRED in text:
+        return 'expired'
+    if CHERT_LOST in text:
+        return 'lost'
+    if any(marker in text for marker in CHERT_HEALTHY):
+        return 'healthy'
+    return None
+
+
+def chert_status(active, entries, now, window_min, lost_grace_min):
+    """('ok' | 'pending' | 'fail', detail). entries: [(datetime, message)] from the last window_min minutes.
+    ok: unit active and the latest Chert state line is connected / waiting room / call. pending: the connection was
+    lost less than lost_grace_min ago (Chert reconnects on its own). fail: unit inactive, session expired, lost for
+    longer than the grace, or no connected/waiting-room line at all in the window."""
+    if not active:
+        return 'fail', CHERT_UNIT + ' unit is not active'
+    last, lost_since = None, None
+    for at, message in sorted(entries, key=lambda e: e[0]):
+        kind = chert_event(message)
+        if kind is None:
+            continue
+        if kind == 'lost':
+            lost_since = lost_since or at
+        else:
+            lost_since = None
+        last = kind
+    if last is None:
+        return 'fail', f'no connected or waiting-room state in the last {window_min} min of the {CHERT_UNIT} journal'
+    if last == 'expired':
+        return 'fail', 'Chert session expired; device login needed'
+    if last == 'lost':
+        minutes = (now - lost_since).total_seconds() / 60
+        if minutes > lost_grace_min:
+            return 'fail', f'Connection to Chert lost {int(minutes)} min ago without recovery'
+        return 'pending', f'Connection to Chert lost {int(minutes)} min ago; reconnecting'
+    return 'ok', 'connected'
+
+
+def journal_entries(unit, window_min):
+    """[(datetime, message)] for unit's journal over the last window_min minutes (journalctl -o json)."""
+    out = command('journalctl', '-u', unit, '--since', f'-{int(window_min)}min', '-o', 'json', '--no-pager')
+    entries = []
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        message = record.get('MESSAGE')
+        if isinstance(message, list):  # journald encodes non-UTF-8 messages as a byte array
+            message = bytes(message).decode('utf-8', 'replace')
+        if not isinstance(message, str) or '__REALTIME_TIMESTAMP' not in record:
+            continue
+        at = datetime.datetime.fromtimestamp(int(record['__REALTIME_TIMESTAMP']) / 1e6, datetime.timezone.utc)
+        entries.append((at, message))
+    return entries
+
+
+def unit_active(unit):
+    return subprocess.run(['systemctl', 'is-active', '--quiet', unit], timeout=25).returncode == 0
+
+
+def check_chert(now=None):
+    window_min = int(os.environ.get('CHERT_JOURNAL_WINDOW_MIN', '30'))
+    lost_grace_min = int(os.environ.get('CHERT_LOST_ALERT_MIN', '10'))
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    active = unit_active(CHERT_UNIT)
+    entries = journal_entries(CHERT_UNIT, window_min) if active else []
+    return chert_status(active, entries, now, window_min, lost_grace_min)
+
+
 def ping(name, body):
     url = os.environ.get(name)
     if url:
@@ -38,13 +118,19 @@ def main():
     except Exception:
         alert('Dispatcher erroring or missed dispatcher heartbeat')
 
+    worker_ok = unit_active('brodie-worker')
+    if not worker_ok:
+        alert('Worker down: brodie-worker unit is not active')
     try:
-        command('systemctl', 'is-active', '--quiet', 'brodie-worker', 'chert-agent')
-        # Read-only doctor checks the actual Chert registration, without dispatching a job.
-        command('runuser', '-u', 'brodie', '--', 'chert', 'doctor')
-        ping('HC_WORKER_URL', 'worker active; line registered with Chert')
-    except Exception:
-        alert('Worker/Chert down or line registration unavailable; missed worker heartbeat')
+        chert, detail = check_chert()
+    except Exception as exc:  # journal unreadable: report it, never pass silently
+        chert, detail = 'fail', f'chert check failed: {exc}'
+    if chert == 'fail':
+        alert('Chert agent unhealthy: ' + detail)
+    elif chert == 'pending':
+        print('chert: ' + detail, flush=True)
+    if worker_ok and chert == 'ok':
+        ping('HC_WORKER_URL', 'worker active; Chert agent connected')
 
     for unit in ('brodie-worker', 'chert-agent', 'brodie-dispatcher'):
         count = int(command('systemctl', 'show', unit, '--property=NRestarts', '--value').strip())

@@ -12,7 +12,11 @@ invariants are checked after every step:
   * <=1 active (waiting/notified) entry per user; a user is in at most one of {waiting entry, claim, in_call} and
     never claimed/in_call on two lines; notified entries and claims correspond 1:1;
   * a claim never lasts longer than claim_window_s (claimed_until - claim start <= claim_window_s and no claim
-    survives a tick past claimed_until), so a no-show never blocks a line longer than claim_window_s;
+    survives a tick past claimed_until + claim_grace_s, the dial grace in which ch_call_start still accepts the
+    holder), so a no-show never blocks a line longer than claim_window_s + claim_grace_s;
+  * turn restore (20261023): a claim_window call that ends short with no reps, or an in_call timeout without a
+    commit and with no reps, gives the holder the turn back exactly when the model says so (entry connected and
+    never restored before, user eligible, not frozen) - a new claim on that line - and never counts;
   * <=1 in_call per line and every in_call line points at a live accepted call on that line;
   * <=1 open (unended) accepted call per line, and a line has one exactly when it is in_call (with that call_id);
   * gatekeeper-rejected calls never count toward the cap; no pop and no accept at/after window_end (freeze);
@@ -43,6 +47,7 @@ BASE = datetime(2026, 10, 13, 22, 0, tzinfo=ET)  # inside the competition window
 N_USERS = 5
 CAP = 3
 CLAIM_S = 90
+GRACE_S = 10
 GAP_S = 30
 COUNT_S, REVEAL_S, EXTRA_S = 180, 15, 60
 MIN_COUNTED_S = 30
@@ -74,7 +79,7 @@ def _cfg(conn, key, value):
 def pconn(db):
     conn = psycopg.connect(db, autocommit=True)
     saved = conn.execute("select key, value from competition_config").fetchall()
-    for k, v in {"daily_call_cap": CAP, "claim_window_s": CLAIM_S, "line_offline_gap_s": GAP_S,
+    for k, v in {"daily_call_cap": CAP, "claim_window_s": CLAIM_S, "claim_grace_s": GRACE_S, "line_offline_gap_s": GAP_S,
                  "call_count_s": COUNT_S, "call_reveal_s": REVEAL_S, "in_call_timeout_extra_s": EXTRA_S,
                  "min_counted_call_s": MIN_COUNTED_S, "competition_frozen": False,
                  "window_start": "2026-10-12T20:00:00-04:00"}.items():
@@ -125,6 +130,7 @@ class SchedulerMachine(RuleBasedStateMachine):
         _cfg(c, "competition_frozen", False)
         c.execute("delete from competition_config where key = 'frozen_at'")
         self.paused = False
+        self.griefed = False
         self.now = BASE
         self.window_end = BASE + timedelta(days=30)
         self.claim_start: dict[str, datetime] = {}  # line -> time its current claim was made
@@ -144,9 +150,10 @@ class SchedulerMachine(RuleBasedStateMachine):
         clients = {str(r[0]): {"banned": r[1] is not None, "opted_out": r[2] is not None}
                    for r in c.execute("select id, banned_at, opted_out_at from clients")}
         calls = [{"id": r[0], "user_id": r[1] and str(r[1]), "line_id": r[2], "decision": r[3], "connected_at": r[4],
-                  "ended_at": r[5], "counted": r[6], "rep_count": r[7]}
+                  "ended_at": r[5], "counted": r[6], "rep_count": r[7], "via_claim": r[8], "queue_id": r[9],
+                  "session_id": r[10]}
                  for r in c.execute("select id, user_id, line_id, decision, connected_at, ended_at,"
-                                    " counted_toward_cap, rep_count from calls")]
+                                    " counted_toward_cap, rep_count, via_claim, queue_id, session_id from calls")]
         return {"lines": lines, "active": active, "clients": clients, "calls": calls}
 
     def calls_today(self, s: dict, uid: str, now: datetime) -> int:
@@ -223,9 +230,13 @@ class SchedulerMachine(RuleBasedStateMachine):
             if len(cands) > 1 and self.calls_today(model, cands[0]["user_id"], now) < max(
                     self.calls_today(model, q["user_id"], now) for q in cands):
                 self.stats["tiered_pops"] += 1
+        assert {x["call_id"] for x in r.get("restored", [])} <= set(r["timeouts"]), r
+        for cid in r["timeouts"]:  # no commit in this machine: a timed-out call with no reps gives the turn back
+            self.check_restore(before, after, cid, now, timed_out=True)
         for lid, l in after["lines"].items():
             if l["state"] == "claimed":
-                assert l["claimed_until"] > now, f"{lid}: claim survived a tick past claimed_until"
+                assert l["claimed_until"] + timedelta(seconds=GRACE_S) > now, \
+                    f"{lid}: claim survived a tick past claimed_until + grace"
             if l["state"] == "in_call":
                 assert l["in_call_since"] + timedelta(seconds=COUNT_S + REVEAL_S + EXTRA_S) > now, f"{lid}: stuck in_call"
             if l["state"] == "offline":
@@ -354,7 +365,8 @@ class SchedulerMachine(RuleBasedStateMachine):
         handle = self.handles[u] if u >= 0 else "+19998887777"  # -1 = unregistered caller
         s = self.snap()
         ls = s["lines"][lid]
-        live_claim = ls["state"] == "claimed" and ls["claimed_until"] > now and ls["user_id"] is not None
+        live_claim = (ls["state"] == "claimed" and ls["claimed_until"] + timedelta(seconds=GRACE_S) > now
+                      and ls["user_id"] is not None)
         uid = None
         if self.frozen(now):
             want = "frozen"
@@ -398,12 +410,63 @@ class SchedulerMachine(RuleBasedStateMachine):
         live = [l for l in self.snap()["lines"].values() if l["state"] == "in_call"]
         if not live:
             return
-        l = live[pick % len(live)]
+        self._end_call(live[pick % len(live)], dur, reps)
+
+    # once per example (per-instance state, so replays are deterministic) and not on the pausing machines (they cover
+    # the admin pause): it must not crowd out the pop coverage
+    @precondition(lambda self: not self.pausing and not self.griefed)
+    @rule(line=st.integers(0, 1), delay=st.integers(0, 20), dur=st.integers(0, 40))
+    def grief_claim(self, line, delay, dur):
+        """A stranger (no caller ID, claim_window) dials during someone's claim and hangs up after `dur` s, no reps."""
+        lid = self.lines[line % len(self.lines)]
+        if self.snap()["lines"][lid]["state"] != "claimed":
+            return
+        self.griefed = True
+        self.stats["grief"] += 1
+        self.now += timedelta(seconds=delay)
+        self.call_start(-1, line, "claim_window")
+        l = self.snap()["lines"][lid]
+        if l["state"] == "in_call":
+            self.now += timedelta(seconds=dur)
+            self._end_call(l, dur, 0)
+
+    def _end_call(self, l: dict, dur: int, reps: int) -> None:
         ended = min(l["in_call_since"] + timedelta(seconds=dur), self.now)
+        before = self.snap()
         r = self.st.rpc("ch_call_end", {"p_call_id": l["call_id"], "p_ended_at": ended, "p_count_end_at": None,
                                         "p_rep_count": reps, "p_now": self.now})
+        # no commits here, so a short claim_window call with reps never has known-invalid reps: the old rule holds
         want = reps >= 1 or (ended - l["in_call_since"]).total_seconds() >= MIN_COUNTED_S
         assert r["ok"] and r["counted_toward_cap"] == want
+        self.check_restore(before, self.snap(), l["call_id"], self.now, timed_out=False)
+
+    def check_restore(self, before: dict, after: dict, call_id: str, now: datetime, timed_out: bool) -> None:
+        """The one-time turn restore (20261023) happened exactly when the model says, as a fresh claim on the line."""
+        call = next(x for x in after["calls"] if x["id"] == call_id)
+        uid, lid = call["user_id"], call["line_id"]
+        dur = (call["ended_at"] - call["connected_at"]).total_seconds()
+        if timed_out:
+            exempt = call["session_id"] is None and not (call["rep_count"] or 0)
+        else:
+            exempt = call["via_claim"] and dur < MIN_COUNTED_S and not (call["rep_count"] or 0)
+        assert not (exempt and call["counted"]), f"exempt call {call_id} counted toward the cap"
+        q = self.conn.execute("select status, turn_restores from queue where id = %s", (call["queue_id"],)).fetchone() \
+            if call["queue_id"] is not None else None
+        restored = self.conn.execute("select count(*) from audit_log where action = 'call:turn_restored' and target = %s",
+                                     (call_id,)).fetchone()[0] == 1
+        cl = after["clients"][uid]
+        eligible = (exempt and q is not None and not cl["banned"] and not cl["opted_out"] and not self.frozen(now)
+                    and self.calls_today(after, uid, now) < CAP
+                    and not any(k != lid and l["user_id"] == uid for k, l in after["lines"].items()))
+        if restored:
+            assert eligible and q[1] == 1, (call_id, exempt, q)
+            l = after["lines"][lid]
+            assert l["state"] == "claimed" and l["user_id"] == uid and l["claimed_until"] == now + timedelta(seconds=CLAIM_S)
+            self.claim_start[lid] = now
+            self.stats["restores"] += 1
+        elif eligible:
+            # not restored although exempt: only because this entry already used its one restore
+            assert q[0] == "connected" and q[1] >= 1, (call_id, q)
 
     # ------------------------------------------------------------------ invariants (after every step)
     @invariant()
@@ -496,6 +559,7 @@ def test_scheduler_state_machine(pconn, machine):
     assert st_["pops"] >= 200 and st_["tiered_pops"] >= 10, st_
     assert all(st_["start:" + k] > 0 for k in ("ok", "not_your_turn", "at_cap", "banned", "frozen", "not_registered")), st_
     assert st_["closed_ticks"] > 0, st_
+    assert st_["restores"] > 0, st_
 
 
 @pytest.mark.parametrize("machine", [OneLinePausing, TwoLinesPausing], ids=["1-line", "2-lines"])

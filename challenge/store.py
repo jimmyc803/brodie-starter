@@ -46,11 +46,33 @@ def _jsonable(v: Any) -> Any:
     return v
 
 
-class PgStore:
-    """psycopg 3; dict/list args are sent as jsonb; `select fn(p_a => %(p_a)s, ...)`; autocommit per call."""
+PG_CONNECT_TIMEOUT_S = 5
+PG_STATEMENT_TIMEOUT_MS = 10_000
 
-    def __init__(self, dsn: str):
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    try:
+        return int(raw) if raw not in (None, "") else default
+    except ValueError as e:
+        raise StoreError(f"{name} must be an integer, got {raw!r}") from e
+
+
+class PgStore:
+    """psycopg 3; dict/list args are sent as jsonb; `select fn(p_a => %(p_a)s, ...)`; one transaction per call.
+
+    Bounded: connect_timeout (PG_CONNECT_TIMEOUT_S, default 5 s) and a per-call statement_timeout
+    (PG_STATEMENT_TIMEOUT_MS, default 10 s; 0 = none), set with set_config(..., is_local => true) so it never leaks
+    into a pooled server session. A timeout surfaces as StoreError like any other DB error."""
+
+    def __init__(self, dsn: str, connect_timeout_s: int | None = None, statement_timeout_ms: int | None = None):
         self.dsn = dsn
+        self.connect_timeout_s = (connect_timeout_s if connect_timeout_s is not None
+                                  else _env_int("PG_CONNECT_TIMEOUT_S", PG_CONNECT_TIMEOUT_S))
+        self.statement_timeout_ms = (statement_timeout_ms if statement_timeout_ms is not None
+                                     else _env_int("PG_STATEMENT_TIMEOUT_MS", PG_STATEMENT_TIMEOUT_MS))
+        if self.connect_timeout_s < 1 or self.statement_timeout_ms < 0:
+            raise StoreError("PgStore: connect_timeout_s must be >= 1 and statement_timeout_ms >= 0")
 
     def rpc(self, fn: str, args: dict | None = None) -> Any:
         import psycopg
@@ -62,8 +84,10 @@ class PgStore:
         params = {k: Jsonb(_jsonable(v)) if isinstance(v, (dict, list, tuple, Json)) else v for k, v in args.items()}
         sql = f"select {fn}({', '.join(f'{k} => %({k})s' for k in args)}) as r"
         try:
-            with psycopg.connect(self.dsn, autocommit=True) as conn:
-                row = conn.execute(sql, params).fetchone()
+            with psycopg.connect(self.dsn, autocommit=True, connect_timeout=self.connect_timeout_s) as conn:
+                with conn.transaction():
+                    conn.execute("select set_config('statement_timeout', %s, true)", (str(self.statement_timeout_ms),))
+                    row = conn.execute(sql, params).fetchone()
         except psycopg.Error as e:
             raise StoreError(f"{fn}: {e}") from e
         return row[0] if row else None

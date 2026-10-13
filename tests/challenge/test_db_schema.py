@@ -89,7 +89,7 @@ def test_migration_applies_twice_without_duplicate_seed(pg_cluster, db):
                 "streak_risk_hour", "avatar_level_thresholds",
                 "judge_thresholds", "registration_open", "competition_frozen", "swearing", "site_url",
                 "brodie_number", "team_alert_handles", "challenge_coach_id", "outbound_rate_per_min",
-                "ufc_fighter", "first_prize"} == keys
+                "ufc_fighter", "first_prize", "claim_grace_s", "worker_stale_s"} == keys
         assert c.execute("select value from competition_config where key='daily_call_cap'").fetchone()[0] == 5
         assert c.execute("select ch_cfg('window_start') #>> '{}'").fetchone()[0] == "2026-10-12T20:00:00-04:00"
 

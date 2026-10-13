@@ -13,6 +13,8 @@ DEFAULTS: dict[str, Any] = {
     "call_reveal_s": 15,
     "daily_call_cap": 5,
     "claim_window_s": 90,
+    "claim_grace_s": 10,      # ch_call_start still accepts the claim holder this long after claimed_until
+    "worker_stale_s": 120,    # ch_tick holds pops onto a line whose worker heartbeat is older (0 = off)
     "line_offline_gap_s": 180,
     "min_counted_call_s": 30,
     "in_call_timeout_extra_s": 60,

@@ -35,7 +35,10 @@ def c(db):
                  " offline_until=null, in_call_since=null, updated_at=now()")
     for k, v in {"competition_frozen": False, "window_start": "2026-10-12T20:00:00-04:00",
                  "window_end": "2026-10-18T23:59:59-04:00", "claim_window_s": CLAIM_S, "daily_call_cap": 5,
-                 "brodie_number": None, "outbound_rate_per_min": 20}.items():
+                 "brodie_number": None, "outbound_rate_per_min": 20,
+                 # these tests pin claim expiry at claimed_until; the dial grace has its own tests
+                 # (test_db_call_reliability.py)
+                 "claim_grace_s": 0}.items():
         cfg(conn, k, v)
     conn.execute("delete from competition_config where key = 'frozen_at'")
     try:
