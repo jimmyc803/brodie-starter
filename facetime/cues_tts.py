@@ -29,9 +29,16 @@ MANIFEST = os.path.join(CUES_DIR, 'manifest.json')      # openai bank; the gemin
 SILENCE_DBFS = -40.0
 TAIL_S = 0.060
 COUNT_TRIM = (-45.0, 0.030)          # count words: do not clip a soft onset, keep only 30 ms of tail (immediacy)
+COUNT_MAX = 100                      # spoken counts exist for 1..COUNT_MAX (competition calls count every valid rep aloud)
 
 def count_words():
-    return {w.capitalize() for w in COUNT_WORDS.values()} | {str(n) for n in range(21, 31)}
+    return {w.capitalize() for w in COUNT_WORDS.values()} | {str(n) for n in range(21, COUNT_MAX + 1)}
+
+def count_text(n):
+    """The bank text of the spoken count n, as the demo Coach says it: "One".."Twenty", then digits ("21".."100").
+    None outside 1..COUNT_MAX (no clip: stay silent)."""
+    if not isinstance(n, int) or n < 1 or n > COUNT_MAX: return None
+    return COUNT_WORDS[n].capitalize() if n in COUNT_WORDS else str(n)
 
 def trim_params(text):
     return COUNT_TRIM if text in count_words() else (SILENCE_DBFS, TAIL_S)
@@ -40,11 +47,13 @@ INSTRUCTIONS = ('You are an energetic, upbeat gym coach calling out short cues m
                 'Clear, punchy, confident, friendly. No trailing pause.')
 
 ONES = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split()
+TENS = {2: 'twenty', 3: 'thirty', 4: 'forty', 5: 'fifty', 6: 'sixty', 7: 'seventy', 8: 'eighty', 9: 'ninety'}
 def number_word(n):
-    """1..30 as words (Coach.COUNT_WORDS stops at twenty)."""
+    """0..100 as words (Coach.COUNT_WORDS stops at twenty); digits above that."""
     if n <= 20: return ONES[n]
-    if n < 30: return 'twenty ' + ONES[n - 20]
-    return 'thirty'
+    if n >= 100: return 'one hundred' if n == 100 else str(n)
+    t, o = divmod(n, 10)
+    return TENS[t] + (' ' + ONES[o] if o else '')
 
 def exercise_names():
     """Classifier names plus the canonical names used by assigned program days."""
@@ -56,7 +65,7 @@ def vocabulary():
     v.update(c['cue'] for c in CUES.values() if c.get('cue'))
     v.update(PRAISE)
     v.update(w.capitalize() for w in COUNT_WORDS.values())
-    v.update(str(n) for n in range(21, 31))                       # Coach says digits past twenty
+    v.update(str(n) for n in range(21, COUNT_MAX + 1))            # Coach says digits past twenty (competition counts to 100)
     v.update(f"That's {n}" for n in (5, 10, 15, 20, 25, 30))
     v.update(["Let's go", "That's it"])
     names = exercise_names()
@@ -158,7 +167,7 @@ REVIEW_PROMPT = ('You are auditioning takes for "Brodie", a hype push-up coach h
 
 def _words(s):
     import re
-    s = re.sub(r'(\d+)', lambda m: ' ' + number_word(int(m.group(1))) + ' ' if int(m.group(1)) <= 30 else m.group(1), s.lower())
+    s = re.sub(r'(\d+)', lambda m: ' ' + number_word(int(m.group(1))) + ' ' if int(m.group(1)) <= COUNT_MAX else m.group(1), s.lower())
     return re.findall(r"[a-z0-9']+", s.replace('-', ' ').replace('\u2019', "'"))
 
 def transcript_ok(text, heard):

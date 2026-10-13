@@ -8,8 +8,9 @@ Queue policy (one pending slot plus one deferred slot, so speech never lags the 
 - priorities count 0 < positive/start 1 < correction 2 < announce/milestone/visibility 3.
 - a count that arrives while a correction or praise is pending goes AHEAD of it: the count takes the pending slot and the
   displaced cue moves to the deferred slot and plays right after the count (the count on the rep, the cue on the next
-  descent). A count behind a pending count or a priority-3 cue is dropped (stale). A count arriving while a clip plays
-  takes the empty pending slot and is spoken right after the clip.
+  descent). A count arriving while an older count is still pending replaces it (the older one is stale: dropped, the
+  deferred cue stays behind the new count); a count behind a priority-3 cue is dropped. A count arriving while a clip
+  plays takes the empty pending slot and is spoken right after the clip.
 - a correction arriving while a count is pending is deferred behind it; it replaces a pending positive or an older
   pending correction; it is dropped behind a priority-3 cue. Positives are queued only when nothing is pending.
 - priority 3 replaces whatever is pending or deferred (both displaced cues are dropped).
@@ -255,6 +256,9 @@ class CuePlayer:
                 d = self.deferred[0]; d['status'] = 'dropped'; d['why_dropped'] = 'deferred slot taken'; self.n_dropped += 1; self._finish(d)
             old['status'] = 'deferred'; self.deferred = (old, old_pcm)
             rec['status'] = 'queued'; self.pending = (rec, pcm); self._wake.set(); return rec
+        if pr == 0 and pr_old == 0:                            # a newer count: the unplayed older one is stale
+            old['status'] = 'dropped'; old['why_dropped'] = 'stale count'; self.n_dropped += 1; self._finish(old)
+            rec['status'] = 'replaced'; self.pending = (rec, pcm); self._wake.set(); return rec
         if pr == 2 and pr_old == 0:                            # correction waits behind the pending count
             if self.deferred is not None:
                 d = self.deferred[0]; d['status'] = 'dropped'; d['why_dropped'] = 'replaced by a newer correction'; self.n_dropped += 1; self._finish(d)

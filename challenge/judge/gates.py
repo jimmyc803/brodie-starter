@@ -31,7 +31,9 @@ feet, ankles or knees outside the frame (or the occluded far side) never reject 
   classifier:<l>   label l (case-insensitive) is in classifier_veto or contains any classifier_veto_substrings
                    (both empty by default since j3).
 Missing threshold keys fall back to DEFAULT_THRESHOLDS. liveness_enabled (default False since j3) turns the liveness
-challenge (challenge/judge/liveness.py, run by challenge/worker/controller.py) back on.
+challenge (challenge/judge/liveness.py, run by challenge/worker/controller.py) back on. say_count (default True; not a
+gate) makes the competition worker speak the running valid-rep count; competition_config.judge_thresholds
+{"say_count": false} silences it from the next call on, no deploy.
 """
 from __future__ import annotations
 
@@ -56,6 +58,7 @@ DEFAULT_THRESHOLDS: dict[str, Any] = {
     "classifier_veto": [], "classifier_veto_substrings": [],
     "liveness_enabled": False, "liveness_window_s": [45, 150], "liveness_timeout_s": 4,
     "cue_min_gap_s": 4, "cue_repeat_gap_s": 10,
+    "say_count": True,   # competition calls: Brodie says the running valid-rep count aloud (challenge/worker/controller.py)
     # liveness challenge (challenge/judge/liveness.py; distances in torso lengths, times in seconds); only used with
     # liveness_enabled
     "liveness_lift_h": 0.4, "liveness_floor_leave": 0.25, "liveness_quiet_s": 2.0, "liveness_min_react_s": 0.5,

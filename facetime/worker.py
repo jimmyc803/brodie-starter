@@ -477,7 +477,8 @@ class CoachJob:
             from facetime.perception import JsonlWriter
             self.event_writer = JsonlWriter(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=ctx.job.id))
         else:
-            # competition: the controller's cues are the only audio (the demo session would count and correct invalid reps aloud)
+            # competition: the controller's cues are the only audio (the demo session would count and correct invalid reps aloud;
+            # the controller says the count of valid reps itself, see say_count)
             self.per = Perception(self.cfg, pipe=self.pipe, say=(self.say_from_worker if self.player is not None and not self.competition else None),
                                   clip_s=(self.bank.duration if self.bank is not None else None))
             self.per_wall0 = time.time() - (time.monotonic() - self.per.t0)
@@ -856,7 +857,8 @@ class CoachJob:
                                         on_config=self.queue_judge_config, drain=self.drain_feed,
                                         reveal_mode=(os.environ.get('REVEAL_MODE') or 'audio_only').strip(),
                                         hangup_mode=hangup, reveal=self.reveal_video,
-                                        chert_call_id=str(chert_id) if chert_id else None, chert_end=chert_end)
+                                        chert_call_id=str(chert_id) if chert_id else None, chert_end=chert_end,
+                                        count=self.say_count)
         except Exception as e:
             log.exception('competition setup failed')
             print(f'[competition] setup failed ({type(e).__name__}: {e}): leaving without counting (fail closed)', flush=True)
@@ -891,6 +893,16 @@ class CoachJob:
             print(f'[competition] cue {key}: {text!r} (no audio: events only)', flush=True); return
         if urgent: self.player.say_now(text, 'challenge', {'cue': key})
         else: self.player.say(text, 'correction', {'cue': key})
+
+    def say_count(self, n):
+        """The controller, on each counted rep: the running count on the player's count slot (priority 0: it jumps
+        ahead of a pending correction, which plays right after it; a newer count replaces an unplayed older one; it never
+        cuts a clip, so urgent cues such as "Time!" are never cut off). Above the bank's numbers (cues_tts COUNT_MAX)
+        nothing is said."""
+        from facetime.cues_tts import count_text
+        text = count_text(n)
+        if text is None or self.player is None: return
+        self.player.say(text, 'count', {'cue': 'count', 'n': n})
 
     def queue_challenge_window(self, t0_wall, t1_wall):
         """Controller (wall clock) -> the feed thread, which applies it to Perception on the event clock before its next frame."""

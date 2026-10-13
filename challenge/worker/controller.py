@@ -21,6 +21,9 @@ worker leaves the room (leave_room and unverified both leave; chert_api asks Che
 the worker deletes the LiveKit room once the commit is in, which makes Chert end the FaceTime call, and leaves the room
 if the delete fails).
 Only the latest due cue of a tick is played (a stalled loop never stacks cues).
+Running count: every counted rep (valid, outside a liveness challenge) before count end calls count(n) with the number
+of counted reps so far; the worker speaks it on the cue player's count slot (facetime/worker.py say_count). Off with
+judge_thresholds say_count false.
 
 Liveness (judge/liveness.py LivenessChallenge, C7.l: schedule/due/start/poll/finish/on_frame/on_rep/windows):
 scheduled once per call inside thr['liveness_window_s'], clamped so the first cue fires >= 2 attempts (FREEZE: timeout
@@ -251,13 +254,15 @@ class CompetitionCall:
                  sleep: Callable[[float], Awaitable[Any]] | None = None,
                  commit_deadline_s: float = COMMIT_DEADLINE_S, drain_max_s: float = DRAIN_MAX_S,
                  chert_call_id: str | None = None, chert_end: Any = None,
-                 reveal: Callable[[float, Callable[[], Awaitable[dict]]], Awaitable[Any]] | None = None):
+                 reveal: Callable[[float, Callable[[], Awaitable[dict]]], Awaitable[Any]] | None = None,
+                 count: Callable[[int], Any] | None = None):
         check_modes(hangup_mode, reveal_mode)
         self.call_id, self.line_id, self.handle = str(call_id), str(line_id), handle
         self.dispatcher = dispatcher
         self.judge_cfg = dict(judge_cfg or {})
         self.thr = merged_thresholds(self.judge_cfg)
         self.clock, self._say_fn, self._leave_fn = clock, say, leave
+        self._count_fn = count                     # spoken running count: count(n valid reps so far), see _say_count
         self._update_window_fn, self._on_config, self._drain = update_challenge_window, on_config, drain
         self.count_s = float(count_s if count_s is not None else DEFAULT_COUNT_S)
         self.reveal_s = float(reveal_s if reveal_s is not None else DEFAULT_REVEAL_S)
@@ -898,10 +903,26 @@ class CompetitionCall:
             except Exception as e:
                 self._lc_fail("on_rep", e)
         self._write()
+        if valid and not in_ch and not self.counting_stopped:
+            self._say_count()
         cue = event.get("cue")
         if cue and not valid and not in_ch and not self.counting_stopped:
             self._judge_cue(cue, rel)
         return rep
+
+    def counted_reps(self) -> int:
+        """Reps the score counts so far (valid and not inside a liveness challenge; the on-screen count too)."""
+        return sum(1 for r in self.reps if r.get("valid") is True and not r.get("in_challenge"))
+
+    def _say_count(self) -> None:
+        """A counted rep during the count: the running count goes to the worker (spoken as "One", "Two", ...; reps,
+        never points, so power hour counts the same). Off with judge_thresholds say_count false (live config)."""
+        if self._count_fn is None or self.thr.get("say_count", True) in (False, 0, "false", "0"):
+            return
+        try:
+            self._count_fn(self.counted_reps())
+        except Exception:
+            log.exception("call %s: count cue failed", self.call_id)
 
     def _judge_cue(self, key: str, rel: float) -> None:
         if key not in JUDGE_CUE_KEYS:
