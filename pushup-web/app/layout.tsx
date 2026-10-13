@@ -53,7 +53,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         >
           Skip to content
         </a>
-        <Ticker firstPrize={comp?.firstPrize ?? "$100"} />
+        <Ticker firstPrize={comp?.firstPrize ?? "$500"} />
         <header className="sticky top-0 z-30 border-b-2 border-ink bg-canvas/95 backdrop-blur-sm">
           <nav aria-label="Main" className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-2 sm:px-6">
             <Logo />
@@ -74,12 +74,16 @@ export default async function RootLayout({ children }: { children: React.ReactNo
             <div className="mt-6 flex flex-col gap-4 border-t border-canvas/25 pt-5 sm:flex-row sm:items-center sm:justify-between">
               <p className="max-w-md font-mono text-xs leading-relaxed text-canvas/70 uppercase">
                 No video or audio is stored. 18+, US only. Display names only, never phone numbers.
+                <span className="mt-2 block text-canvas/50">A Beat Muse student project at the University of Pennsylvania.</span>
               </p>
-              <ul className="flex gap-1">
+              <ul className="flex flex-wrap gap-x-1">
                 {[
                   ["/join", "Join"],
+                  ["/how-it-works", "How it works"],
                   ["/rules", "Rules"],
                   ["/setup", "Setup"],
+                  ["/privacy", "Privacy"],
+                  ["/terms", "Terms"],
                 ].map(([href, label]) => (
                   <li key={href}>
                     <Link

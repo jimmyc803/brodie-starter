@@ -7,6 +7,7 @@ import { JoinButton } from "@/components/join-button";
 const NAV = [
   { href: "/", label: "Board" },
   { href: "/rules", label: "Rules" },
+  { href: "/how-it-works", label: "How it works", short: "How" },
   { href: "/setup", label: "Setup" },
   // Web-only fallback (MESSAGING_PROVIDER=web_only): sign in, join and queue on the site.
   ...(process.env.NEXT_PUBLIC_WEB_JOIN === "1" ? [{ href: "/me", label: "My spot" }] : []),
@@ -48,7 +49,16 @@ export function SiteNav({ joinHref }: { joinHref: string | null }) {
                 aria-current={active ? "page" : undefined}
                 className={`relative flex min-h-11 items-center px-2.5 font-mono text-[0.8rem] font-bold tracking-wider uppercase transition-colors sm:px-3 ${active ? "text-ink" : "text-ink-2 hover:text-ink"}`}
               >
-                <span className={active ? "highlight" : ""}>{n.label}</span>
+                <span className={active ? "highlight" : ""}>
+                  {"short" in n && n.short ? (
+                    <>
+                      <span className="sm:hidden">{n.short}</span>
+                      <span className="hidden sm:inline">{n.label}</span>
+                    </>
+                  ) : (
+                    n.label
+                  )}
+                </span>
               </Link>
             </li>
           );

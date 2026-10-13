@@ -85,7 +85,7 @@ export default async function Home() {
           {[
             ["Athletes", `${rows.length.toLocaleString("en-US")}${more}`],
             ["Valid reps", `${totalReps.toLocaleString("en-US")}${more}`],
-            ["1st prize", comp?.firstPrize ?? "$100"],
+            ["1st prize", comp?.firstPrize ?? "$500"],
           ].map(([k, v], i) => (
             <div key={k} className={`px-3 py-3 sm:px-6 sm:py-4 ${i > 0 ? "border-l-2 border-ink" : ""} ${i === 2 ? "bg-yellow" : ""}`}>
               <dt className="eyebrow text-ink">{k}</dt>
@@ -140,7 +140,7 @@ export default async function Home() {
             <div className="relative px-5 pt-4 pb-5">
               <div aria-hidden className="halftone-fade absolute -top-6 -right-8 size-40 [--dot:var(--color-pink)]" />
               <p className="eyebrow relative text-ink">1st place</p>
-              <p className="relative font-display text-7xl leading-none overprint">{comp?.firstPrize ?? "$100"}</p>
+              <p className="relative font-display text-7xl leading-none overprint">{comp?.firstPrize ?? "$500"}</p>
               <div className="perf relative my-4" />
               <p className="eyebrow relative text-ink">Top 3</p>
               <p className="relative mt-1 text-lg leading-tight font-semibold">Group call with {ufcFighterCopy(comp?.ufcFighter)}</p>

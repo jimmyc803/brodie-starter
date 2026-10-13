@@ -14,8 +14,8 @@ export const metadata: Metadata = {
 };
 
 const STEPS = [
-  ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board after JOIN."],
-  ["Confirm", "Reply to confirm you're 18+ and accept the rules."],
+  ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board after JOIN, like JOIN Marcus_T. Use 3 to 20 letters, numbers or underscores, no spaces."],
+  ["Reply YES", "YES confirms you're 18+, in the US, and accept the official rules."],
   ["Text QUEUE", "Get in line. We text you your spot, then again when it's your turn."],
   ["FaceTime and rep", "When we text you're up, FaceTime Brodie within 90 seconds and do strict push-ups on camera."],
 ] as const;
@@ -34,7 +34,7 @@ function MessagesMock() {
             <span className="text-xs font-semibold text-ink-2">Brodie</span>
           </div>
           <div className="mt-4 flex flex-col gap-2">
-            <p className={`${bubble} self-end rounded-br-md bg-accent font-semibold text-on-accent`}>JOIN Marcus T</p>
+            <p className={`${bubble} self-end rounded-br-md bg-accent font-semibold text-on-accent`}>JOIN Marcus_T</p>
             <p className={`${bubble} self-start rounded-bl-md bg-surface-3 text-ink`}>
               Reply YES to confirm you&apos;re 18+, in the US, and agree to the rules.
             </p>
@@ -88,6 +88,13 @@ export default async function JoinPage() {
         )}
       </div>
 
+      <p className="prose-brodie max-w-3xl text-sm leading-relaxed">
+        <strong>By joining you accept the </strong>
+        <Link href="/rules" className="font-semibold text-accent underline">Official Rules</Link>,{" "}
+        <Link href="/terms" className="font-semibold text-accent underline">Terms</Link> and{" "}
+        <Link href="/privacy" className="font-semibold text-accent underline">Privacy Policy</Link>, and agree to get texts from Brodie about the challenge (message and data rates may apply; text STOP to stop, HELP for help). Free to enter, no purchase necessary. No video or audio is ever stored.
+      </p>
+
       <Sponsors />
 
       <section aria-labelledby="steps" className="space-y-5">
@@ -127,9 +134,17 @@ export default async function JoinPage() {
               </li>
             ))}
           </ul>
-          <Link href="/rules" className="inline-flex min-h-11 items-center gap-2 font-semibold text-accent hover:underline">
-            Read the full rules <ArrowRightIcon className="size-4" />
-          </Link>
+          <div className="flex flex-wrap gap-x-6">
+            <Link href="/rules" className="inline-flex min-h-11 items-center gap-2 font-semibold text-accent hover:underline">
+              Read the full rules <ArrowRightIcon className="size-4" />
+            </Link>
+            <Link href="/how-it-works" className="inline-flex min-h-11 items-center gap-2 font-semibold text-accent hover:underline">
+              How it works <ArrowRightIcon className="size-4" />
+            </Link>
+            <Link href="/setup" className="inline-flex min-h-11 items-center gap-2 font-semibold text-accent hover:underline">
+              Camera setup <ArrowRightIcon className="size-4" />
+            </Link>
+          </div>
         </div>
       </section>
     </div>

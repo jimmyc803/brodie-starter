@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { CtaBand, PageIntro, SectionHeading } from "@/components/editorial";
 import { SetupDiagram } from "@/components/setup-diagram";
 import { CheckIcon, XIcon } from "@/components/ui/icons";
+import { DocLinks } from "@/components/legal";
 import { getCompetition } from "@/lib/data";
 import { smsLink } from "@/lib/format";
 
@@ -11,18 +12,18 @@ export const metadata: Metadata = {
 };
 
 const CHECKLIST = [
-  ["Phone low, to your side", "On the floor or a low surface, 6–8 feet to your SIDE."],
-  ["Turn it sideways", "Landscape mode gives the judge your whole body."],
-  ["Head to feet in frame", "Check the preview before you start repping."],
+  ["Phone low, to your side", "On the floor or a low surface, about 6–8 feet to your side. Closer is fine if your upper body and knees stay in frame. Diagonal works too."],
+  ["Sideways or upright", "Either is fine, even with portrait lock on. Brodie rotates the picture for you."],
+  ["Upper body and knees in frame", "Shoulders, elbows and wrists must show. Feet can be out of frame. Check the camera pill says CAMERA ANGLE GOOD."],
   ["Light on you", "No bright window or lamp behind you."],
   ["Only you", "Nobody walking behind you while you rep."],
   ["Room to go flat", "Clear floor. Shoes or grippy socks."],
 ] as const;
 
 const DONTS = [
-  "Phone facing you head-on",
-  "Propped high, looking down",
-  "Feet or head cut off",
+  "Arms or shoulders cut off",
+  "Propped far above you, looking down",
+  "Someone else in the shot",
   "Backlit by a window",
 ];
 
@@ -66,7 +67,7 @@ export default async function SetupPage() {
             Instant no-reps
           </SectionHeading>
           <p className="max-w-md text-ink-2">
-            If the judge can&apos;t see your shoulders, hips, knees and ankles, it can&apos;t count the rep. These
+            If the judge can&apos;t see your shoulders, elbows and wrists, it can&apos;t count the rep. These
             setups cost people the most reps.
           </p>
         </div>
@@ -99,10 +100,12 @@ export default async function SetupPage() {
         ))}
       </section>
 
+      <DocLinks current="/setup" />
+
       <CtaBand
         joinHref={smsLink(comp?.brodieNumber ?? null)}
         title="Set? Get in line."
-        body="Text JOIN to sign up, then QUEUE when you're ready to rep."
+        body="Text JOIN to sign up, then QUEUE when you're ready to rep. New here? See how it all works."
       />
     </div>
   );

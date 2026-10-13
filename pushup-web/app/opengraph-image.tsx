@@ -8,7 +8,7 @@ export const contentType = "image/png";
 export const revalidate = 300;
 
 export default async function OpengraphImage() {
-  const firstPrize = await getCompetition().then((c) => c?.firstPrize ?? "$100").catch(() => "$100");
+  const firstPrize = await getCompetition().then((c) => c?.firstPrize ?? "$500").catch(() => "$500");
   return new ImageResponse(
     (
       <div
