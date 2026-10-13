@@ -88,6 +88,10 @@ Send James these questions (answers decide the flags; until answered the safe de
    `python3 scripts/chert_setup.py --subscribe` registers the webhook and stores `CHERT_WEBHOOK_SECRET`.
    `CHERT_MSG_URL` now defaults to the public API; `CHERT_TENANT` only for multi-tenant projects.
 3. Does FaceTime hang up when the agent leaves the room? Is there an API to end a call? -> `HANGUP_MODE=leave_room|chert_api|unverified`.
+   Answer from docs.trychert.com/facetime/calls-api: `POST /v1/calls/{id}/end` exists. To use it, create a project API key
+   (Developer -> Project API keys, `facetime:write`) and put `CHERT_FACETIME_TOKEN` and `CHERT_PROJECT_ID` in SSM, then set
+   `HANGUP_MODE=chert_api` (default stays `unverified` until a live call proves it). Caller identity: Chert exposes only
+   `from_handle_hash` (no phone/email), so `CALLER_ID_SOURCE` stays `claim_window`.
 4. How long is the line offline after a call? -> `LINE_OFFLINE_GAP_S` (default 180).
 5. Can `chert dev --agent` run 24/7 on EC2? Token expiry? Is there a production mode?
 6. Can we get more than one line? (Design already supports N lines via `LINE_ID`.)

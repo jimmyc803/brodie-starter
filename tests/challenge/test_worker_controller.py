@@ -1343,3 +1343,54 @@ def test_worker_commits_a_deferred_call_once_the_feed_thread_is_gone(tmp_path, m
     assert deferred is True and r.call.committed is True and r.ckpt()["sealed"] is True
     assert [k for k, _ in r.disp.events()] == ["call_started", "reps_committed", "call_ended"]
     assert r.client._client.is_closed
+
+
+# ------------------------------------------------------------------ HANGUP_MODE=chert_api (task 35, C7.h)
+class FakeChertEnd:
+    def __init__(self, ok=True, raises=False):
+        self.ok, self.raises, self.calls = ok, raises, []
+
+    async def end_call(self, call_id, sleep):
+        self.calls.append(call_id)
+        if self.raises:
+            raise RuntimeError("boom")
+        return self.ok
+
+
+def _chert_run(tmp_path, monkeypatch, fake, call_id="chert-77"):
+    monkeypatch.setenv("CHERT_FACETIME_TOKEN", "ftk_x")
+    monkeypatch.setenv("CHERT_PROJECT_ID", "p")
+
+    async def go():
+        r = Rig(tmp_path, hangup="chert_api", chert_call_id=call_id, chert_end=fake)
+        assert await r.call.start()
+        await r.call.run(interval=0.5)
+        await r.call.end("complete")
+        return r
+    return run(go())
+
+
+def test_chert_api_ends_via_api_then_leaves(tmp_path, monkeypatch):
+    fake = FakeChertEnd(ok=True)
+    r = _chert_run(tmp_path, monkeypatch, fake)
+    assert fake.calls == ["chert-77"] and r.call.chert_hangup == "acknowledged"
+    assert len(r.left) == 1 and "hang_up" not in r.keys()
+
+
+@pytest.mark.parametrize("fake,call_id,state", [(FakeChertEnd(ok=False), "c1", "failed"),
+                                                 (FakeChertEnd(raises=True), "c1", "failed"),
+                                                 (FakeChertEnd(ok=True), None, "no_call_id")])
+def test_chert_api_failure_falls_back_to_leaving(tmp_path, monkeypatch, fake, call_id, state):
+    r = _chert_run(tmp_path, monkeypatch, fake, call_id)
+    assert r.call.chert_hangup == state and len(r.left) == 1
+    assert r.disp.events()[-1][0] == "call_ended"
+
+
+def test_chert_api_refused_without_env(monkeypatch):
+    monkeypatch.delenv("CHERT_FACETIME_TOKEN", raising=False)
+    monkeypatch.delenv("CHERT_PROJECT_ID", raising=False)
+    with pytest.raises(UnsupportedMode, match="CHERT_FACETIME_TOKEN and CHERT_PROJECT_ID"):
+        ctl.check_modes("chert_api", "audio_only")
+    monkeypatch.setenv("CHERT_FACETIME_TOKEN", "t")
+    monkeypatch.setenv("CHERT_PROJECT_ID", "p")
+    assert ctl.check_modes("chert_api", "audio_only") == []

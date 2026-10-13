@@ -90,6 +90,9 @@ to `http://127.0.0.1:8080`. Choose C4 flags after live discovery: CALLER_ID_SOUR
 (default claim_window), MESSAGING_PROVIDER (default mock), HANGUP_MODE
 (default unverified), REVEAL_MODE (audio_only), CARD_DELIVERY (link).
 Optional LINE_OFFLINE_GAP_S and OUTBOUND_RATE_PER_MIN override defaults.
+HANGUP_MODE=chert_api additionally needs CHERT_FACETIME_TOKEN (an `ftk_` project key with `facetime:write`) and
+CHERT_PROJECT_ID in SSM; the worker refuses to start without them. After the reveal it POSTs Chert's end-call API (3
+attempts), and falls back to leaving the room (unverified) if that fails. Details: CONTRACTS C7.h.
 A live launch must explicitly review mock/web_only mode and hangup behavior.
 Do not copy empty `.env.example` assignments to SSM: empty values are not defaults.
 

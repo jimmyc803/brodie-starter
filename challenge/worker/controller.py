@@ -84,14 +84,15 @@ class UnsupportedMode(ValueError):
 
 
 def check_modes(hangup_mode: str, reveal_mode: str) -> list[str]:
-    """Validate HANGUP_MODE / REVEAL_MODE for the worker. Raises UnsupportedMode for chert_api (scripts/discover_chert.py
-    found no Chert hang-up API: docs/challenge/HUMAN_TASKS_discover.md); returns the fallback notes to log."""
+    """Validate HANGUP_MODE / REVEAL_MODE for the worker. chert_api needs CHERT_FACETIME_TOKEN and CHERT_PROJECT_ID
+    (C7.h); returns the fallback notes to log."""
     if hangup_mode not in HANGUP_MODES:
         raise UnsupportedMode(f"HANGUP_MODE={hangup_mode!r}: expected one of {', '.join(HANGUP_MODES)}")
     if hangup_mode == "chert_api":
-        raise UnsupportedMode("HANGUP_MODE=chert_api is not implemented: Chert discovery found no hang-up API "
-                              "(docs/challenge/HUMAN_TASKS_discover.md). Use leave_room (verified: leaving ends the "
-                              "call) or unverified (time's-up cue, then leave)")
+        from challenge.worker.chert import missing_env
+        if missing_env():
+            raise UnsupportedMode(f"HANGUP_MODE=chert_api needs {' and '.join(missing_env())} in the environment "
+                                  "(C7.h); set them or use leave_room / unverified")
     if reveal_mode not in REVEAL_MODES:
         raise UnsupportedMode(f"REVEAL_MODE={reveal_mode!r}: expected one of {', '.join(REVEAL_MODES)}")
     notes = []
@@ -172,7 +173,8 @@ class CompetitionCall:
                  liveness_factory: Callable[[random.Random, dict], Any] | None = None,
                  alert: Callable[[str, str], Any] | None = None,
                  sleep: Callable[[float], Awaitable[Any]] | None = None,
-                 commit_deadline_s: float = COMMIT_DEADLINE_S, drain_max_s: float = DRAIN_MAX_S):
+                 commit_deadline_s: float = COMMIT_DEADLINE_S, drain_max_s: float = DRAIN_MAX_S,
+                 chert_call_id: str | None = None, chert_end: Any = None):
         check_modes(hangup_mode, reveal_mode)
         self.call_id, self.line_id, self.handle = str(call_id), str(line_id), handle
         self.dispatcher = dispatcher
@@ -183,6 +185,8 @@ class CompetitionCall:
         self.count_s = float(count_s if count_s is not None else DEFAULT_COUNT_S)
         self.reveal_s = float(reveal_s if reveal_s is not None else DEFAULT_REVEAL_S)
         self.reveal_mode, self.hangup_mode = reveal_mode, hangup_mode
+        self.chert_call_id, self._chert_end = chert_call_id, chert_end    # HANGUP_MODE=chert_api (C7.h)
+        self.chert_hangup: str | None = None       # acknowledged | failed | no_call_id once the end-call was tried
         self.path = checkpoint_path(self.call_id, checkpoint_dir)
         self.rng = rng or random.SystemRandom()
         self.liveness_factory = liveness_factory or default_liveness_factory
@@ -252,6 +256,23 @@ class CompetitionCall:
             self._leave_fn(why)
         except Exception:
             log.exception("call %s: leave failed", self.call_id)
+
+    async def _hangup(self, why: str) -> None:
+        """Complete the call: chert_api asks Chert to end it first (retry, then fall back); always leaves the room."""
+        if self.hangup_mode == "chert_api" and self.chert_hangup is None:
+            if not self.chert_call_id or self._chert_end is None:
+                self.chert_hangup = "no_call_id"
+                log.error("call %s: chert_api hangup without a Chert call id; leaving the room (unverified)", self.call_id)
+            else:
+                try:
+                    ok = await self._chert_end.end_call(self.chert_call_id, self._sleep)
+                except Exception as e:
+                    ok = False
+                    log.error("call %s: chert end-call error (%s)", self.call_id, type(e).__name__)
+                self.chert_hangup = "acknowledged" if ok else "failed"
+                if not ok:
+                    log.error("call %s: chert end-call failed; falling back to leaving the room (unverified)", self.call_id)
+        self._leave(why)
 
     def _spawn(self, coro: Awaitable[Any]) -> asyncio.Task:
         t = asyncio.ensure_future(coro)
@@ -720,7 +741,7 @@ class CompetitionCall:
         while self.decision == "accept" and self.ended_at is None and self._end_task is None:
             if self.tick():
                 self._spawn(self.end("complete"))
-                self._leave("call complete")
+                await self._hangup("call complete")
                 return
             await self._sleep(interval)
 

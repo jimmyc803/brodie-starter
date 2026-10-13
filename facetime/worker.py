@@ -52,7 +52,7 @@ Competition (CHALLENGE_MODE=competition; default demo keeps everything above): p
 DEMO_CLIENT_ID; on bind a challenge.worker CompetitionCall gatekeeps through the dispatcher (POST /calls/start; reject or
 dispatcher down -> leave within 5 s, nothing recorded), then runs the 3:00 count + 0:15 reveal with the judge, liveness
 and timeline cues as the only audio, checkpoints data/tmp/sessions/<call_id>.challenge.json after every rep and commits
-via /calls/event (reps_committed, call_ended) before leaving. Startup refuses HANGUP_MODE=chert_api, a missing
+via /calls/event (reps_committed, call_ended) before leaving. Startup refuses HANGUP_MODE=chert_api without CHERT_FACETIME_TOKEN/CHERT_PROJECT_ID, a missing
 DISPATCHER_URL/DISPATCHER_TOKEN or a missing liveness module; a daemon thread beats /calls/heartbeat every 30 s. Env:
 LINE_ID, CALLER_ID_SOURCE, HANGUP_MODE, REVEAL_MODE, CHALLENGE_SESSIONS_DIR. No media is ever written to disk.
 Run:
@@ -586,13 +586,20 @@ class CoachJob:
         if source == 'chert_meta' and handle is None:
             print(f'[competition] CALLER_ID_SOURCE=chert_meta but chert_call has no handle (keys tried {CHERT_HANDLE_KEYS}); the dispatcher decides without one', flush=True)
         try:
+            hangup = (os.environ.get('HANGUP_MODE') or 'unverified').strip()
+            chert_id = (cc.get('call_id') or cc.get('id')) if isinstance(cc, dict) else None
+            chert_end = None
+            if hangup == 'chert_api':
+                from challenge.worker.chert import ChertEndClient
+                chert_end = ChertEndClient.from_env()
             self.comp_client = DispatcherClient.from_env()
             self.comp = CompetitionCall(self.call_id, os.environ.get('LINE_ID') or 'line-1', handle, self.comp_client,
                                         load_json_arg(getattr(self.a, 'judge_thr', None), None), clock=self.clock, say=self.say_cue,
                                         leave=self.end, update_challenge_window=self.queue_challenge_window, sleep=self.sleep,
                                         on_config=self.queue_judge_config, drain=self.drain_feed,
                                         reveal_mode=(os.environ.get('REVEAL_MODE') or 'audio_only').strip(),
-                                        hangup_mode=(os.environ.get('HANGUP_MODE') or 'unverified').strip())
+                                        hangup_mode=hangup,
+                                        chert_call_id=str(chert_id) if chert_id else None, chert_end=chert_end)
         except Exception as e:
             log.exception('competition setup failed')
             print(f'[competition] setup failed ({type(e).__name__}: {e}): leaving without counting (fail closed)', flush=True)
