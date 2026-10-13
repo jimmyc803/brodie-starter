@@ -354,7 +354,7 @@ def test_template_content_and_length():
     for field in ("120", "20", "7", "2", "3", "16:00–17:00"):
         assert field in render("status", CTX, False)
     assert "90s" in render("youre_up", CTX, False)
-    assert "FaceTime +15550001111 now" in render("youre_up", CTX, False)  # names the line to call
+    assert "FaceTime Brodie at +15550001111 now" in render("youre_up", CTX, False)  # names the line to call
     long = {**CTX, "display_name": "A" * 1000, "leaders": "Runner 100 points; " * 100}
     for key in ("welcome", "top"):
         text = render(key, long, True)
@@ -370,3 +370,12 @@ def test_template_errors_are_explicit():
         render("status", {}, False)
     with pytest.raises(ValueError, match="link"):
         render("post_call", {**CTX, "result_url": "https://example.com/" + "a" * 400}, False)
+
+
+def test_youre_up_restored_text_explains_the_redo():
+    ctx = {**CTX, "restored": True, "line_handle": "+15550001111", "claim_window_s": 90}
+    text = render("youre_up", ctx, False)
+    assert "ended too fast to count" in text
+    assert "FaceTime Brodie at +15550001111 now" in text
+    assert "90s" in text and len(text) <= 320
+    assert "ended too fast" not in render("youre_up", {**ctx, "restored": False}, False)

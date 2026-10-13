@@ -278,7 +278,7 @@ function StatusHero({
       return card(
         "Live",
         <span className="text-live">On the line</span>,
-        "Rep it out. Results land here the moment the call ends.",
+        "Rep it out: 3:00 to count, then Brodie hangs up at 3:15. Results land here when the call ends.",
         "border-live/40",
       );
     case "waiting": {

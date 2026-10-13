@@ -118,7 +118,7 @@ def test_youre_up_names_the_line(c):
     rpc(c, "ch_tick", p_now=T0)
     ctx = msgs(c, "youre_up")[-1][2]
     assert ctx["line_handle"] == "+15550009999"  # one active line -> the public Brodie number
-    assert "FaceTime +15550009999 now" in render("youre_up", ctx, False)
+    assert "FaceTime Brodie at +15550009999 now" in render("youre_up", ctx, False)
 
     # two lines: each line's own facetime_handle; never the shared brodie_number
     c.execute("insert into lines (id, chert_agent_name, active, facetime_handle) values ('line-2','brodie2',true,'+15550002222')")

@@ -17,6 +17,8 @@ export const metadata: Metadata = {
 
 const TOC = [
   ["sponsor", "Sponsor"],
+  ["eligibility", "Eligibility"],
+  ["period", "Entry period"],
   ["enter", "How to enter"],
   ["play", "How to play"],
   ["reps", "Valid reps"],
@@ -24,8 +26,10 @@ const TOC = [
   ["end", "The end"],
   ["prizes", "Prizes"],
   ["fair-play", "Fair play"],
+  ["disputes", "Disputes"],
   ["privacy", "Privacy"],
   ["sms", "Texts"],
+  ["publicity", "Publicity"],
   ["legal", "Legal"],
 ] as const;
 
@@ -149,12 +153,12 @@ export default async function RulesPage() {
             </>,
             <>
               <strong>Claim window.</strong> When it&apos;s your turn Brodie texts &ldquo;you&apos;re up&rdquo;. You have{" "}
-              <strong>90 seconds</strong> to FaceTime Brodie. If you miss it you lose your spot and can text QUEUE again.
+              <strong>90 seconds</strong> to FaceTime Brodie, plus about 10 seconds of grace. If you miss it you lose your spot and can text QUEUE again.
               If the line is open when you text QUEUE, Brodie tells you to FaceTime right away.
             </>,
             <>
               <strong>The call.</strong> Each call lasts 3:15. You get <strong>3:00 to count</strong> (setting up happens
-              inside that time), then a 15 second reveal of your result during which nothing more is counted. Then the call ends.
+              inside that time), then a 15 second reveal of your result during which nothing more is counted. At 3:15 Brodie hangs up. Keep your camera on: if Brodie can&apos;t see you it says so and hangs up after about 20 seconds.
             </>,
             <>
               <strong>Your turn only.</strong> Only the person who was texted &ldquo;you&apos;re up&rdquo; can start a call. Any
@@ -162,7 +166,7 @@ export default async function RulesPage() {
             </>,
             <>
               <strong>Daily cap.</strong> Up to <strong>5 counted calls</strong> per person per day. A call counts if you were
-              connected for 30 seconds or more, or made at least one rep. Calls an admin voids still count toward the cap. The
+              connected for 30 seconds or more, or made at least one rep. A call on your turn that ends in under 30 seconds with no valid reps (for example someone else grabbed the line, or a dropped call) does not count, and you get your turn back once with a new &ldquo;you&apos;re up&rdquo; text. Calls an admin voids still count toward the cap. The
               cap resets at <strong>midnight ET</strong>. At the cap, Brodie won&apos;t queue you until it resets.
             </>,
             <>
@@ -180,12 +184,12 @@ export default async function RulesPage() {
         </P>
         <ul className="grid gap-2 sm:grid-cols-2">
           {[
-            "Your upper body is visible: shoulders, elbows and wrists. Your feet and legs may be out of frame.",
+            "Your upper body and knees are in frame: shoulders, elbows and wrists visible. Your feet may be cut off.",
             "Only you are in frame.",
             "Real push-ups from your toes. Knee push-ups do not count, and your knees can't touch the floor.",
             "Your body stays roughly in one line. A small sag or pike is fine; a clearly sagging or piked-up body is not.",
             "Chest down until your elbows bend to about 90 to 125 degrees.",
-            "Lock out at the top: arms nearly straight (about 135 degrees or more) before the next rep.",
+            "Lock out at the top: arms nearly straight (about 130 degrees or more) before the next rep.",
             "Body roughly horizontal. A modest incline is fine; standing, wall or high-bench push-ups are not.",
             "No bouncing or rapid-fire half reps: each rep takes at least about half a second.",
           ].map((t) => (
@@ -198,7 +202,7 @@ export default async function RulesPage() {
         <RepIllustrations />
         <P>
           The judge is lenient on camera angle: side-on or diagonal both work, and the phone can be sideways or upright.
-          It can still miss or misjudge a rep, and reps close to the line can go either way. Use the{" "}
+          Brodie coaches you live, saying the most useful fix first and not repeating the same cue within 10 seconds. It can still miss or misjudge a rep, and reps close to the line can go either way. Use the{" "}
           <Link href="/setup" className="font-semibold text-accent underline">setup guide</Link> to give it the best view. The
           judge&apos;s count is the official count.
         </P>
@@ -288,7 +292,7 @@ export default async function RulesPage() {
         <Bullets
           items={[
             "By joining you agree to receive texts from Brodie about the Challenge: replies to your commands, queue and \"you're up\" messages, call results, power hour alerts, rank-drop alerts, a daily recap, reminders and final results. Message frequency varies. Message and data rates may apply. Consent isn't a condition of any purchase, but you need texts to play.",
-            "Text STOP any time to stop proactive texts and leave the queue; Brodie always honors STOP. Text START to turn them back on. Text HELP for the command list. Between 11 PM and 9 AM ET Brodie sends only replies to your commands, \"you're up\" texts and call results.",
+            "Text STOP any time to stop proactive texts and leave the queue; Brodie always honors STOP. Text START to turn them back on. Text HELP for the command list. Text DELETE MY DATA to ask us to delete your account and data. Between 11 PM and 9 AM ET Brodie sends only replies to your commands, \"you're up\" texts and call results.",
             "Carriers are not liable for delayed or undelivered messages. See the Terms for the full messaging terms.",
           ]}
         />

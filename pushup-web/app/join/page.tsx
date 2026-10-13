@@ -17,7 +17,7 @@ const STEPS = [
   ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board after JOIN, like JOIN Marcus_T. Use 3 to 20 letters, numbers or underscores, no spaces."],
   ["Reply YES", "YES confirms you're 18+, in the US, and accept the official rules."],
   ["Text QUEUE", "Get in line. We text you your spot, then again when it's your turn."],
-  ["FaceTime and rep", "When we text you're up, FaceTime Brodie within 90 seconds and do strict push-ups on camera."],
+  ["FaceTime and rep", "When we text you're up, FaceTime Brodie within 90 seconds, keep your camera on, and do strict push-ups. Brodie hangs up at 3:15."],
 ] as const;
 
 /** Illustrative Messages thread. Decorative: the steps below carry the same information. */
@@ -41,7 +41,7 @@ function MessagesMock() {
             <p className={`${bubble} self-end rounded-br-md bg-accent font-semibold text-on-accent`}>YES</p>
             <p className={`${bubble} self-end rounded-br-md bg-accent font-semibold text-on-accent`}>QUEUE</p>
             <p className={`${bubble} self-start rounded-bl-md bg-surface-3 text-ink`}>
-              You&apos;re #2 in line, about 8 min. We&apos;ll text you when you&apos;re up.
+              You&apos;re #2 in line, ETA 8 min. When we text &ldquo;you&apos;re up&rdquo;, you&apos;ll have 90s to FaceTime Brodie.
             </p>
           </div>
         </div>

@@ -44,19 +44,19 @@ const STEPS: [string, React.ReactNode][] = [
   [
     "Wait for \"You're up!\"",
     <>
-      Brodie texts when it&apos;s your turn. You have <strong>90 seconds</strong> to start the FaceTime call. Not ready? Text <Code>LEAVE</Code> and rejoin later.
+      Brodie texts when it&apos;s your turn. You have <strong>90 seconds</strong> to start the FaceTime call (plus a few seconds of grace). Not ready? Text <Code>LEAVE</Code> and rejoin later.
     </>,
   ],
   [
     "FaceTime Brodie",
     <>
-      Open FaceTime on your iPhone and call Brodie&apos;s number, the same one you text. Brodie answers and your <strong>3:00</strong> starts. Setup happens inside it, so have your phone placed first.
+      Open FaceTime on your iPhone and call Brodie&apos;s number, the same one you text. Brodie answers and your <strong>3:00</strong> starts. Setup happens inside it, so have your phone placed first. Keep your camera on: Brodie can&apos;t count what it can&apos;t see.
     </>,
   ],
   [
     "Rep it out",
     <>
-      Do strict push-ups. Brodie shows each rep live and says what to fix. At 3:00 counting stops and a 15 second reveal shows your result. Then the call ends.
+      Do strict push-ups. Brodie shows each rep live and says what to fix. At 3:00 counting stops and a 15 second reveal shows your result. At 3:15 Brodie hangs up for real.
     </>,
   ],
   [
@@ -81,6 +81,7 @@ const COMMANDS: [string, string][] = [
   ["RULES", "A short rules summary and the link."],
   ["POWER", "Today's power hour."],
   ["HELP", "The list of commands."],
+  ["DELETE MY DATA", "Ask us to delete your account and data. Done by the team within 30 days."],
   ["STOP", "Stop proactive texts and leave the queue. Always honored."],
   ["START", "Turn texts back on."],
 ];
@@ -128,16 +129,16 @@ export default async function HowItWorksPage() {
           <ul className="space-y-3">
             {[
               <>
-                <strong>Prop it up on the floor or a low surface, a few feet away.</strong> Far enough that Brodie sees your whole upper body and your knees.
+                <strong>Prop it up on the floor or a low surface, a few feet away.</strong> Far enough that Brodie sees your upper body and your knees.
               </>,
               <>
-                <strong>Side or diagonal view works.</strong> Side-on is best. A front-ish angle is fine too.
+                <strong>Side, diagonal or front view all work.</strong> The judge is lenient on camera angle. Side-on is still the easiest to read.
               </>,
               <>
-                <strong>Sideways or upright, either is fine.</strong> Portrait lock is OK: Brodie rotates the picture for you.
+                <strong>Sideways or upright, either is fine.</strong> Turn your phone sideways and Brodie&apos;s video switches to a landscape layout on its own; upright gets the portrait layout. Portrait lock is OK. No zooming or panning needed.
               </>,
               <>
-                <strong>Upper body and knees in frame.</strong> Shoulders, elbows and wrists must be visible. Feet can be out of frame.
+                <strong>Upper body and knees in frame.</strong> Shoulders, elbows and wrists must be visible. Feet can be cut off.
               </>,
               <>
                 <strong>Good light on you</strong>, nobody else in frame, and a clear patch of floor.
@@ -164,8 +165,8 @@ export default async function HowItWorksPage() {
           What Brodie&apos;s screen shows
         </SectionHeading>
         <P>
-          On the call you see <strong>your own live video</strong> with a skeleton drawn on your body: green lines where you&apos;re
-          doing it right, red where something is off (sagging hips, bent legs). Floating on the video:
+          On the FaceTime call you see <strong>your own live video</strong> with a skeleton drawn on your body: green lines where you&apos;re
+          doing it right, red where something is off (sagging hips, bent legs). It switches between a portrait and a landscape layout by itself, depending on how you hold your phone. On the video:
         </P>
         <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
           {[
@@ -191,10 +192,10 @@ export default async function HowItWorksPage() {
           </li>
           <li className="card-flat p-4">
             <span className="inline-block border-2 border-ink bg-surface-2 px-2 py-0.5 font-display text-lg uppercase text-ink">12 valid reps</span>
-            <p className="mt-2 text-sm text-ink-2">A big valid-rep count sits below the video; the countdown timer is in the header.</p>
+            <p className="mt-2 text-sm text-ink-2">The valid-rep count stays on screen; the countdown timer is in the header.</p>
           </li>
         </ul>
-        <P>Brodie also talks to you with short spoken cues like &ldquo;lock those arms out&rdquo;, and calls &ldquo;thirty seconds left&rdquo;.</P>
+        <P>Brodie also talks to you with short spoken cues like &ldquo;Lower!&rdquo; or &ldquo;lock those arms out&rdquo;, and calls &ldquo;thirty seconds left&rdquo;. When several things are off, you hear the most useful fix first, and the same cue never repeats within 10 seconds.</P>
       </section>
 
       <section aria-labelledby="commands" className="space-y-5 border-t border-hairline pt-8">
@@ -226,13 +227,13 @@ export default async function HowItWorksPage() {
           <Faq q="Brodie hung up right away, or said “Not your turn”">
             <P>
               That means it wasn&apos;t your turn. Only the person who got the &ldquo;you&apos;re up&rdquo; text can start a call, and nothing is
-              recorded. Brodie says: &ldquo;Not your turn! Text this number JOIN, then QUEUE. I&apos;ll text you when you&apos;re up.&rdquo; Other reasons:
+              recorded. If you called while you were in line, Brodie texts you your spot. Brodie says: &ldquo;Not your turn! Text this number JOIN, then QUEUE. I&apos;ll text you when you&apos;re up.&rdquo; Other reasons:
               you haven&apos;t joined yet, you&apos;ve used today&apos;s 5 calls, your 90 seconds ran out, or the Challenge isn&apos;t open. Text
               <Code>STATUS</Code> to see where you stand.
             </P>
           </Faq>
           <Faq q="I missed my 90 seconds">
-            <P>You lose that spot, nothing else. Text <Code>QUEUE</Code> to get back in line.</P>
+            <P>You get 90 seconds from the &ldquo;you&apos;re up&rdquo; text, plus about 10 seconds of grace if you&apos;re already dialing. After that you lose that spot, nothing else. Text <Code>QUEUE</Code> to get back in line.</P>
           </Faq>
           <Faq q="My reps aren't counting">
             <P>Check the stamp on the screen. The reason is right there:</P>
@@ -255,12 +256,25 @@ export default async function HowItWorksPage() {
           </Faq>
           <Faq q="My call dropped">
             <P>
-              A new call needs a new turn: text <Code>QUEUE</Code> and wait for &ldquo;you&apos;re up&rdquo;. A call counts toward your daily 5 if
-              it lasted 30 seconds or you made a rep.
+              If a call on your turn ends in under 30 seconds with no valid reps (someone else grabbed the line, or the call dropped), it does
+              not count toward your 5 a day and you get your turn back once: Brodie sends a new &ldquo;you&apos;re up&rdquo; text. After that, or
+              for a longer call, a new call needs a new turn: text <Code>QUEUE</Code>. A call counts toward your daily 5 if it lasted 30
+              seconds or you made a rep.
             </P>
           </Faq>
-          <Faq q="Brodie didn't end the call at 3:15">
-            <P>Counting stopped at 3:00, so you can hang up. Anything after that doesn&apos;t score.</P>
+          <Faq q="Brodie says “I can’t see you!”">
+            <P>
+              Your camera is off or blocked. Turn it on so Brodie can count. If it stays off, Brodie hangs up after about 20 seconds.
+            </P>
+          </Faq>
+          <Faq q="Brodie said “Something glitched on my end”">
+            <P>
+              Something failed while the call was starting. Hang up and call back in a minute. If it happened on your turn and the call
+              was short with no reps, it doesn&apos;t count toward your daily 5.
+            </P>
+          </Faq>
+          <Faq q="When does the call end?">
+            <P>Counting stops at 3:00, a 15 second reveal follows, and Brodie hangs up at 3:15. Anything after 3:00 doesn&apos;t score.</P>
           </Faq>
           <Faq q="I don't get Brodie's texts">
             <P>
@@ -325,7 +339,7 @@ export default async function HowItWorksPage() {
           </Faq>
           <Faq q="How do I quit and delete my data?">
             <P>
-              Text <Code>STOP</Code> to stop texts and leave the queue. To delete your data, text Brodie &ldquo;delete my data&rdquo;. See the{" "}
+              Text <Code>STOP</Code> to stop texts and leave the queue. To delete your data, text <Code>DELETE MY DATA</Code>. See the{" "}
               <Link href="/privacy#delete" className="font-semibold text-accent underline">privacy policy</Link>.
             </P>
           </Faq>

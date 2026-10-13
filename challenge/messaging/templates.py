@@ -10,25 +10,26 @@ TEMPLATES: dict[str, str] = {
     "join_confirm_prompt": "Clean push-ups earn points; power hour reps earn 2×. Daily call cap applies. One person, one account; 18+, US, iPhone. Reply YES to confirm you're 18+, in the US, and agree to the rules.",
     "join_bad_name": "Let's pick a clean name: 3–20 letters, numbers, or underscores. Text JOIN your_name.",
     "join_taken": "That name's already on the board. Pick another and text JOIN your_name. Your spot is waiting!",
-    "queue_joined": "You're in line! Position #{position}, ETA {eta}. {calls_left} calls left today. Get warmed up!",
-    "queue_line_open": "Line's open — FaceTime now! {calls_left} calls left today. Let's get clean reps!",
+    "queue_joined": "You're in line! #{position}, ETA {eta}. {calls_left} calls left today. When we text \"you're up\", you'll have 90s to FaceTime Brodie. Get warmed up!",
+    "queue_line_open": "Line's open — FaceTime Brodie right now! {calls_left} calls left today. You get 3:00 to rep once Brodie answers.",
     "queue_at_cap": "You've hit today's call limit. Strong work showing up — come back tomorrow!",
-    "call_queued": "Line's busy, so you're in line: #{position}, ETA {eta}. We'll text you when you're up, then FaceTime back. {calls_left} calls left today.",
+    "call_queued": "Not your turn yet, Brodie's with someone else. You're #{position} in line, ETA {eta}. We'll text \"you're up\", then FaceTime Brodie again. {calls_left} calls left today.",
     "queue_already": "You're already in line: #{position}, ETA {eta}. Stay ready!",
     "queue_in_call": "You're already in a call. Focus on those clean reps — you've got this!",
-    "youre_up": "You're up! FaceTime {line_handle} now — you've got {claim_window_s}s to claim your turn. Let's go!",
-    "missed_slot": "Missed your slot? No sweat. Text QUEUE when you're ready to jump back in.",
+    "youre_up": "You're up! FaceTime Brodie at {line_handle} now. You've got {claim_window_s}s to start the call or you lose your spot. Then 3:00 to rep!",
+    "youre_up_restored": "That last call ended too fast to count, so it won't use up one of your daily calls. You're up again! FaceTime Brodie at {line_handle} now, you've got {claim_window_s}s. One redo per turn.",
+    "missed_slot": "Time ran out, so Brodie moved on to the next person. No sweat, text QUEUE to jump back in line.",
     "queue_update": "Moving up! You're #{position} in line, ETA {eta}. Stay loose, stay ready!",
     "left_queue": "You're out of the queue. Text QUEUE when you're ready for another round.",
     "status": "{points} points · {valid_reps} valid reps · rank #{rank}. Calls left: {calls_left}. Streak: {streak} days. Queue: {position}. Power hour: {power_hour} ET.",
     "top": "The top 5: {leaders}. Your next clean rep can move the board!",
-    "rules": "Clean reps count. Power hour = 2×. Daily cap: {daily_call_cap} calls. One person, one account; alts give no advantage. 18+, US, iPhone. Full rules:",
+    "rules": "Strict push-ups only; knee push-ups don't count. 3:00 per call, {daily_call_cap} counted calls a day. Power hour = 2×. One person, one account. 18+, US, iPhone. Full rules:",
     "power": "Today's power hour: {power_hour} ET. Every valid rep during the hour earns 2× points. Bring that energy!",
-    "help": "JOIN name to sign up; YES to confirm. QUEUE (Q/LINE), STATUS (S/ME), TOP (LB), LEAVE, RULES, POWER. DELETE MY DATA asks us to erase your data. STOP pauses proactive texts; START resumes.",
+    "help": "Commands: JOIN name, YES, QUEUE (Q), STATUS (S), TOP, LEAVE, RULES, POWER. Got \"you're up\"? FaceTime Brodie within 90s. DELETE MY DATA asks us to erase your data. STOP pauses texts; START resumes.",
     "delete_request": "Got your request. Our team will delete your account, handle, messages, and call and rep records within 30 days, and you'll come off the leaderboard. Text STOP to stop all texts right now.",
     "stop_ack": "You're opted out of proactive texts and out of the queue. Text START to re-enable texts.",
     "start_ack": "Texts are back on! Text QUEUE when you're ready. Let's get after it!",
-    "unknown": "Try JOIN name, QUEUE, STATUS, TOP, LEAVE, RULES, or POWER. HELP lists commands. STOP pauses proactive texts; START resumes.",
+    "unknown": "Didn't catch that. Try JOIN name, QUEUE, STATUS, TOP, LEAVE, RULES, or POWER. HELP lists commands. DELETE MY DATA erases your data. STOP pauses texts.",
     "post_call": "Work logged! {valid_reps} valid, {rejected_reps} rejected. +{points_earned} points; total {points}. Rank #{rank}. Streak: {streak} days. Your results:",
     "rank_drop": "You dropped from #{old_rank} to #{rank}. #{next_rank} is {points_gap} points ahead. Clean reps can close that gap!",
     "streak_risk": "Your {streak}-day streak needs a rep today! Text QUEUE and keep it going. You've got this!",
@@ -66,7 +67,8 @@ def render(template_key: str, ctx: dict, swearing: bool) -> str:
 Missing context or unknown templates raise KeyError. Links exceeding the message
 budget raise ValueError rather than silently delivering an unusable URL.
 """
-    prose = TEMPLATES[template_key].format_map(ctx)
+    body_key = "youre_up_restored" if template_key == "youre_up" and ctx.get("restored") else template_key
+    prose = TEMPLATES[body_key].format_map(ctx)
     if swearing:
         prose = "Hell yeah! " + prose
     suffix = ""
