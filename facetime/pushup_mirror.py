@@ -33,7 +33,7 @@ overprint, yellow tickets, ink borders, hard shadows, Anton + Space Mono) via fa
 respects mirror.SAFE_X / SAFE_TOP / SAFE_BOTTOM (FaceTime Fill crops the sides, the island covers the top, the
 self-view the bottom left).
 
-Framing (Framer): the person's keypoint box (head to knees = "core"; with the feet = "full") is collected per pose over
+Framing (Framer): live (follow=False, the default) the caller's whole picture, never zoomed or moved. With follow=True: the person's keypoint box (head to knees = "core"; with the feet = "full") is collected per pose over
 the last WINDOW_S seconds and reduced per edge to its 10th / 90th percentile, so a rep or a jittery landmark does not
 move it. The crop is the panel's aspect around that region (padded; head room; feet included only when that costs no
 picture height), never zoomed beyond S_MAX output px per source px. The first framing (LOCK_SAMPLES poses) is a cut and
@@ -228,8 +228,9 @@ class Framer:
     """The stable virtual camera (module docstring). Works in source pixels of one frame size: view = (cx, cy, cw),
     the crop centre and width; the crop height is min(cw / PANEL_ASPECT, source height)."""
 
-    def __init__(self, src_w, src_h):
+    def __init__(self, src_w, src_h, follow=False):
         self.w, self.h = float(src_w), float(src_h)
+        self.follow = follow                      # False (live default): always the caller's whole picture, never moved
         self.hist = deque()                       # (t, core box, full box or None)
         self.target = self._whole()               # no pose yet: the whole picture
         self.view = self.target
@@ -238,7 +239,7 @@ class Framer:
         self.locked = False                       # the zoom is set (first framing)
 
     def _whole(self):
-        cw = self.w
+        cw = max(self.w, self.h * PANEL_ASPECT)   # the whole picture fits the panel (ink beside a tall one)
         return (self.w / 2, self.h / 2, cw)
 
     def crop_h(self, cw):
@@ -246,6 +247,7 @@ class Framer:
 
     def add(self, lm, t):
         """One pose (normalised (33, >=4) landmarks of this frame size, or None: nothing recorded, the framing holds)."""
+        if not self.follow: return
         if lm is not None:
             a = np.asarray(lm, dtype=float); c = _conf(a)
             core = [i for i in CORE if c[i] > 0.5]
@@ -327,7 +329,8 @@ class PushupMirror:
     """Stateful (framing, side choice, signal medians, depth-this-rep, status hysteresis): one per call, used from one
     thread at a time."""
 
-    def __init__(self, mascot=True):
+    def __init__(self, mascot=True, follow=False):
+        self.follow = follow                                         # True: the person-following crop (Framer)
         """mascot: True = Brodie (facetime/mascot.py, his common expressions pre-composed here), False = none."""
         self.mascot = self.idle_mascot = None
         if mascot:
@@ -420,7 +423,7 @@ class PushupMirror:
         if seq is not None: fresh = seq != self._last_seq
         else: fresh = (rgb is not self._last_rgb) or (lm is not self._last_lm)
         if rgb.shape != self._last_shape or self.framer is None:     # new picture size: the framing restarts
-            self.framer = Framer(rgb.shape[1], rgb.shape[0]); fresh = True; self._draw_lm = None
+            self.framer = Framer(rgb.shape[1], rgb.shape[0], self.follow); fresh = True; self._draw_lm = None
         if fresh:
             self._observe(rgb, lm, now)
             self._last_lm = lm; self._last_seq = seq

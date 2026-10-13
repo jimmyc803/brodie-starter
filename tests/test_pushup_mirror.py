@@ -225,7 +225,7 @@ def test_jittery_landmarks_do_not_move_the_camera():
     rng = np.random.default_rng(3)
     def lm_at(t):
         lm = plank(); lm[:, :2] += rng.normal(0, 0.012, (33, 2)).astype(np.float32); return lm
-    pm = PushupMirror(mascot=False)
+    pm = PushupMirror(mascot=False, follow=True)
     views = _run_camera(pm, lm_at, 0.0, 12.0)
     first = views[0][1]
     assert first == (SRC[1] / 2, SRC[0] / 2, float(SRC[1]))       # before LOCK_SAMPLES poses: the whole picture
@@ -241,14 +241,14 @@ def test_no_zoom_pulse_across_reps():
         for i in (0, 7, 8, 11, 12, 13, 14): lm[i, 1] += d
         lm[23, 1] += d / 2; lm[24, 1] += d / 2
         return lm
-    pm = PushupMirror(mascot=False)
+    pm = PushupMirror(mascot=False, follow=True)
     views = _run_camera(pm, lm_at, 0.0, 15.0)
     dx, dy, dz = _spread([(t, v) for t, v in views if t >= 4.0])
     assert dx < 0.5 and dy < 0.5 and dz < 0.002
 
 
 def test_no_pose_holds_the_framing():
-    pm = PushupMirror(mascot=False)
+    pm = PushupMirror(mascot=False, follow=True)
     views = _run_camera(pm, lambda t: plank(), 0.0, 4.0)
     held = views[-1][1]
     later = _run_camera(pm, lambda t: None, 4.0, 10.0)
@@ -257,7 +257,7 @@ def test_no_pose_holds_the_framing():
 
 
 def test_camera_follows_a_person_who_moves_away_with_an_eased_move():
-    pm = PushupMirror(mascot=False)
+    pm = PushupMirror(mascot=False, follow=True)
     _run_camera(pm, lambda t: plank(), 0.0, 4.0)
     before = pm.framer.view
     def moved(t):
@@ -274,7 +274,7 @@ def test_camera_follows_a_person_who_moves_away_with_an_eased_move():
 
 
 def test_framer_crop_never_zooms_past_s_max():
-    f = Framer(486, 274)
+    f = Framer(486, 274, follow=True)
     lm = plank(); lm[:, :2] = 0.5 + (lm[:, :2] - 0.5) * 0.15        # a tiny person
     for k in range(40): f.add(lm, 0.1 * k)
     f.update(10.0)
@@ -284,7 +284,7 @@ def test_framer_crop_never_zooms_past_s_max():
 
 def test_zoom_is_set_once_and_never_zooms_in_again():
     """The live complaint (it keeps re-zooming): the first framing is a cut, later the zoom never shrinks."""
-    pm = PushupMirror(mascot=False)
+    pm = PushupMirror(mascot=False, follow=True)
     views = _run_camera(pm, lambda t: plank(), 0.0, 3.0)
     zs = [v[2] for t, v in views if t >= 0.5]
     assert np.ptp(zs) == 0.0 and zs[0] < SRC[1] * 0.95             # framed within half a second, never eased in
@@ -292,6 +292,22 @@ def test_zoom_is_set_once_and_never_zooms_in_again():
         lm = plank(); lm[:, :2] = 0.5 + (lm[:, :2] - 0.5) * 0.6; return lm
     later = _run_camera(pm, closer, 3.0, 10.0)
     assert all(v[2] >= zs[0] - 1e-9 for _, v in later)
+
+
+def test_live_default_shows_the_whole_picture_and_never_moves():
+    """The live ask: no zoom, no pan, just what the caller's camera records."""
+    for src in (SRC, (720, 486, 3)):
+        pm = PushupMirror(mascot=False); rgb = np.full(src, 110, np.uint8)
+        views = set()
+        for k in range(60):
+            lm = plank(); lm[:, 0] -= 0.004 * k                      # the person moves around
+            pm.render(rgb, lm, DEFAULT_THRESHOLDS, MirrorState(), now=0.066 * k, seq=k); views.add(pm.framer.view)
+        assert len(views) == 1
+        M, y1 = pm.framer.matrix()
+        h, w = src[:2]
+        corners = M @ np.array([[0, 0, 1], [w, h, 1]], float).T        # the whole source lands inside the panel
+        assert corners[0].min() >= -1e-6 and corners[0].max() <= pmod.PANEL_W + 1e-6
+        assert corners[1].min() >= pmod.VID_Y0 - 1e-6 and corners[1].max() <= y1 + 1e-6
 
 
 def test_render_is_fast_enough_for_the_live_loop():
