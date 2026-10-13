@@ -138,6 +138,7 @@ def test_landscape_full_bleed_caps_the_zoom_for_a_portrait_picture():
     x0, y0, x1, y1 = pm.boxes['picture']
     fit_w = 274 * (pmod.LH / 486)
     assert y0 == 0 and y1 == pmod.LH                                      # full height
+    assert abs((x0 + x1) / 2 - pmod.LW / 2) <= 1                          # centred
     assert fit_w * 1.6 <= (x1 - x0) <= fit_w * 1.8                        # bigger than the fit, far from a cover strip
     assert np.all(img[pmod.LH // 2, :x0 - 1] != (0, 255, 255)) and np.all(img[pmod.LH // 2, x1 + 1:] != (0, 255, 255))
 
