@@ -30,7 +30,7 @@ import {
   writeAudit,
   type ActionResult,
 } from "@/lib/admin";
-import { SupabaseError, authLogout, authSendOtp, serviceRpc } from "@/lib/supabase-server";
+import { SupabaseError, authLogout, authPasswordSignIn, authSendOtp, serviceRpc } from "@/lib/supabase-server";
 
 // Every exported function here is a public POST endpoint. All admin mutations go through runAdminAction, which
 // re-verifies the Supabase session and admin_allowlist membership server-side before touching anything.
@@ -95,6 +95,49 @@ export async function verifyLoginCode(_prev: Prev, fd: FormData): Promise<Action
   }
   for (const c of sessionCookies(session)) store.set(c.name, c.value, c.options);
   store.set(LOGIN_NONCE_COOKIE, "", cookieOptions(0));
+  redirect("/admin");
+}
+
+/**
+ * Email + password sign-in: no email round trip and no login nonce (the password itself proves who is signing in).
+ * Wrong email and wrong password get the same answer, and the allowlist is re-checked on the verified session email.
+ */
+export async function signInWithPassword(_prev: Prev, fd: FormData): Promise<ActionResult> {
+  let email: string;
+  const password = String(fd.get("password") ?? "");
+  try {
+    email = parseEmail(fd.get("email"));
+    if (!password || password.length > 200) throw new AdminInputError("Enter your password.");
+  } catch (e) {
+    return { ok: false, status: 400, error: e instanceof AdminInputError ? e.message : "Invalid input." };
+  }
+  let session: Awaited<ReturnType<typeof authPasswordSignIn>>;
+  try {
+    session = await authPasswordSignIn(email, password);
+  } catch (e) {
+    if (e instanceof SupabaseError && e.status === 429) {
+      return { ok: false, status: 429, error: "Too many attempts. Wait a minute and try again." };
+    }
+    if (e instanceof SupabaseError && e.status >= 500) {
+      console.error("[admin] password sign-in failed", `${e.status} ${e.message}`);
+      return { ok: false, status: 503, error: "Sign-in is unavailable right now; try again." };
+    }
+    return { ok: false, status: 401, error: "Wrong email or password." };
+  }
+  let allowed: boolean;
+  try {
+    allowed = !!session.email && (await isAllowlisted(session.email));
+  } catch (e) {
+    console.error("[admin] allowlist check failed", e);
+    await ADMIN_REALM.logoutQuietly(session.accessToken);
+    return { ok: false, status: 503, error: "Could not verify allowlist; try again." };
+  }
+  if (!allowed) {
+    await ADMIN_REALM.logoutQuietly(session.accessToken);
+    return { ok: false, status: 403, error: "Forbidden: not on the admin allowlist." };
+  }
+  const store = await cookies();
+  for (const c of sessionCookies(session)) store.set(c.name, c.value, c.options);
   redirect("/admin");
 }
 

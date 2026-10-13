@@ -41,6 +41,7 @@ import {
   sendLoginCode,
   setBan,
   setConfigValue,
+  signInWithPassword,
   verifyLoginCode,
 } from "@/app/admin/actions";
 import { GET as confirmGet, POST as confirmPost } from "@/app/admin/auth/confirm/route";
@@ -53,6 +54,7 @@ const ALLOW = ["Boss@Example.com"];
 const TOKENS: Record<string, string> = { "tok-boss": "boss@example.com", "tok-rando": "rando@example.com" };
 
 const HASHES: Record<string, string> = { "hash-boss-0001": "boss@example.com", "hash-rando-001": "rando@example.com" };
+const PASSWORDS: Record<string, string> = { "boss@example.com": "boss-pass", "rando@example.com": "rando-pass" };
 let verifyOmitsEmail = false;
 let refreshReply: { status: number; body: unknown } = { status: 200, body: {} };
 
@@ -87,6 +89,11 @@ function fakeFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respon
     if (!email) return json(403, { error_code: "otp_expired", msg: "Token has expired or is invalid" });
     const user = verifyOmitsEmail ? { id: "u1" } : { id: "u1", email };
     return json(200, { access_token: "tok-new", refresh_token: "rt-new", expires_in: 3600, user });
+  }
+  if (url === `${SUPA}/auth/v1/token?grant_type=password`) {
+    const b = body as Record<string, string>;
+    if (b.password !== PASSWORDS[b.email]) return json(400, { error_code: "invalid_credentials", msg: "Invalid login credentials" });
+    return json(200, { access_token: "tok-pw", refresh_token: "rt-pw", expires_in: 3600, user: { id: "u2", email: b.email } });
   }
   if (url.startsWith(`${SUPA}/auth/v1/logout`)) return Promise.resolve(new Response(null, { status: 204 }));
   if (url === `${SUPA}/auth/v1/token?grant_type=refresh_token`) return json(refreshReply.status, refreshReply.body);
@@ -449,5 +456,40 @@ describe("service key never reaches the browser", () => {
   const STATIC = join(ROOT, ".next", "static");
   it.skipIf(!existsSync(STATIC))("built .next/static contains no service key name or value (run after `next build`)", () => {
     expect(scanDir(STATIC)).toEqual([]);
+  });
+});
+
+describe("password sign-in", () => {
+  const pwCalls = () => calls.filter((c) => c.url.endsWith("grant_type=password"));
+
+  it("allowlisted admin signs in with a password, no nonce or email needed", async () => {
+    await expect(signInWithPassword(PREV, form({ email: " Boss@Example.com ", password: "boss-pass" }))).rejects.toThrow(
+      "REDIRECT:/admin",
+    );
+    expect(pwCalls()[0].body).toEqual({ email: "boss@example.com", password: "boss-pass" });
+    expect(cookieJar.get(ACCESS_COOKIE)).toBe("tok-pw");
+    expect(cookieJar.get(REFRESH_COOKIE)).toBe("rt-pw");
+    expect(calls.filter((c) => c.url.endsWith("/auth/v1/otp"))).toHaveLength(0);
+  });
+
+  it("wrong password and unknown email get the same answer and set no session", async () => {
+    const a = await signInWithPassword(PREV, form({ email: "boss@example.com", password: "nope" }));
+    const b = await signInWithPassword(PREV, form({ email: "ghost@example.com", password: "nope" }));
+    expect(a).toEqual(b);
+    expect(a).toMatchObject({ ok: false, status: 401 });
+    expect(cookieJar.has(ACCESS_COOKIE)).toBe(false);
+  });
+
+  it("a valid password for a non-admin is refused and its session is logged out", async () => {
+    const r = await signInWithPassword(PREV, form({ email: "rando@example.com", password: "rando-pass" }));
+    expect(r).toMatchObject({ ok: false, status: 403 });
+    expect(cookieJar.has(ACCESS_COOKIE)).toBe(false);
+    expect(logoutCalls()).toHaveLength(1);
+  });
+
+  it("rejects empty input without calling Supabase", async () => {
+    expect(await signInWithPassword(PREV, form({ email: "boss@example.com", password: "" }))).toMatchObject({ status: 400 });
+    expect(await signInWithPassword(PREV, form({ email: "nope", password: "x" }))).toMatchObject({ status: 400 });
+    expect(pwCalls()).toHaveLength(0);
   });
 });

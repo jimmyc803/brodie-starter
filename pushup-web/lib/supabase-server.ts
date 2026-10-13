@@ -193,6 +193,19 @@ export async function authVerifyOtp(
   return toSession(body);
 }
 
+/** Email + password sign-in (no email is sent; passwords are set by scripts/set_admin_password.py). */
+export async function authPasswordSignIn(email: string, password: string, fetchImpl: FetchLike = fetch): Promise<AuthSession> {
+  const res = await fetchImpl(`${supabaseUrl()}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ email, password }),
+    cache: "no-store",
+  });
+  const body = await readJson(res);
+  if (!res.ok) throw errorFrom(res.status, body);
+  return toSession(body);
+}
+
 export async function authRefresh(refreshToken: string, fetchImpl: FetchLike = fetch): Promise<AuthSession> {
   const res = await fetchImpl(`${supabaseUrl()}/auth/v1/token?grant_type=refresh_token`, {
     method: "POST",
