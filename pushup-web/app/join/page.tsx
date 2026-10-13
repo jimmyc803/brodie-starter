@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { PageIntro, SectionHeading } from "@/components/editorial";
 import { JoinButton } from "@/components/join-button";
+import { Sponsors } from "@/components/sponsors";
 import { ArrowRightIcon, CheckIcon } from "@/components/ui/icons";
 import { getCompetition } from "@/lib/data";
 import { smsLink } from "@/lib/format";
@@ -86,6 +87,8 @@ export default async function JoinPage() {
           </p>
         )}
       </div>
+
+      <Sponsors />
 
       <section aria-labelledby="steps" className="space-y-5">
         <SectionHeading id="steps" index="01">
