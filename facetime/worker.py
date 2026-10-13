@@ -219,6 +219,10 @@ def build_parser():
                                                                                                         'open = always allowed to speak, nothing is ever cut (the default with --perception off; env FLOOR)')
     ap.add_argument('--vision', action='store_true', default=truthy(os.environ.get('VISION')), help='with --voice gemini: tee the caller\'s video into the model session at --vision-fps (env VISION=1)')
     ap.add_argument('--vision-fps', type=float, default=float(os.environ.get('VISION_FPS', '1') or 1), help='frames per second handed to the model with --vision (default 1, at most 2; JPEG per frame)')
+    ap.add_argument('--avatar', dest='avatar', action='store_true', default=truthy(os.environ.get('AVATAR', '1')), help="publish Brodie's face as a video track "
+                    '"coach-video" (facetime/avatar.py) so the FaceTime caller sees him; mouth moves while a cue plays (default on; env AVATAR=0 turns it off)')
+    ap.add_argument('--no-avatar', dest='avatar', action='store_false', help='publish no video track')
+    ap.add_argument('--avatar-fps', type=float, default=float(os.environ.get('AVATAR_FPS', '10') or 10), help='avatar frames per second (default 10)')
     ap.add_argument('-h', '--help', action='store_true', help='show this help and exit')
     return ap
 
@@ -379,6 +383,7 @@ class CoachJob:
         self.feed_lock = threading.Lock(); self.feed_sealed = False   # the feed thread processes a frame only under the lock and
                                                                   # stops once sealed: drain_feed() then knows no rep can follow
         self.hb_task = None
+        self.avatar_task = None
 
     # ---- lifecycle ----
     async def run(self):
@@ -409,6 +414,8 @@ class CoachJob:
             await self.room.local_participant.publish_track(self.player.track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE))
             self.player_task = asyncio.create_task(self.player.run())
             print(f'[worker] published audio track {AUDIO_TRACK_NAME}', flush=True)
+        if getattr(a, 'avatar', False):
+            self.avatar_task = asyncio.create_task(self.avatar_loop(), name='avatar')
         if self.voice_mode:                                       # no Perception: the worker's own session/status events, logged the same way
             from facetime.perception import JsonlWriter
             self.event_writer = JsonlWriter(a.event_log, extra=dict(room=self.room.name, call_id=self.call_id, job=ctx.job.id))
@@ -453,6 +460,28 @@ class CoachJob:
         except Exception: why = str(args[0]) if args else 'unknown'
         print(f'[worker] room disconnected ({why}): leaving', flush=True); self.end(f'room disconnected ({why})')
 
+    async def avatar_loop(self):
+        """Brodie's face (facetime/avatar.py) as the "coach-video" track; Chert's bridge shows it to the FaceTime caller. The mouth moves
+        while a cue plays. Rendered off the loop (PIL, a few ms a frame); any failure is logged and leaves the call alone."""
+        try:
+            from facetime.avatar import Avatar
+            av = await asyncio.to_thread(Avatar); fps = max(1.0, float(getattr(self.a, 'avatar_fps', 10.0) or 10.0))
+            source = rtc.VideoSource(av.W, av.H)
+            track = rtc.LocalVideoTrack.create_video_track('coach-video', source)
+            await self.room.local_participant.publish_track(track, rtc.TrackPublishOptions(
+                source=rtc.TrackSource.SOURCE_CAMERA, simulcast=False, video_encoding=rtc.VideoEncoding(max_framerate=int(fps), max_bitrate=600_000)))
+            print(f'[worker] published video track coach-video {av.W}x{av.H} at {fps:g} fps (avatar)', flush=True)
+            period = 1.0 / fps; loop = asyncio.get_running_loop(); next_t = loop.time()
+            while not self.stop.is_set():
+                speaking = self.player is not None and self.player.playing is not None
+                buf = await asyncio.to_thread(av.frame_bytes, speaking=speaking)
+                source.capture_frame(rtc.VideoFrame(av.W, av.H, rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420))
+                next_t += period; await asyncio.sleep(max(0.0, next_t - loop.time()))
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            print(f'[worker] avatar stopped: {e!r}', flush=True)
+
     async def _leave_grace(self):
         await asyncio.sleep(max(0.0, self.a.leave_grace_s))
         self.leave_task = None
@@ -471,6 +500,7 @@ class CoachJob:
         if self.leave_task is not None: self.leave_task.cancel()
         if self.open_task is not None and not self.open_task.done(): self.open_task.cancel()
         for t in getattr(self, 'consumer_tasks', []): t.cancel()
+        if self.avatar_task is not None: self.avatar_task.cancel()
         if self.comp is not None or self.comp_task is not None: await self.close_competition()   # commit before the teardown
         recap_close = asyncio.create_task(self.recap.aclose()) if self.recap is not None else None   # hang-up save runs alongside the teardown
         if self.video_task is not None and not self.video_task.done():                 # closes the VideoStream (read_video's finally)
