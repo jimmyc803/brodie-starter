@@ -228,7 +228,7 @@ def test_jittery_landmarks_do_not_move_the_camera():
     pm = PushupMirror(mascot=False)
     views = _run_camera(pm, lm_at, 0.0, 12.0)
     first = views[0][1]
-    assert first == (SRC[1] / 2, SRC[0] / 2, float(SRC[1]))       # before any pose: the whole picture
+    assert first == (SRC[1] / 2, SRC[0] / 2, float(SRC[1]))       # before LOCK_SAMPLES poses: the whole picture
     settled = [(t, v) for t, v in views if t >= 3.0]
     dx, dy, dz = _spread(settled)
     assert dx < 0.5 and dy < 0.5 and dz < 0.002                   # still (the old EMA crop moved on 244 of 250 frames)
@@ -280,6 +280,18 @@ def test_framer_crop_never_zooms_past_s_max():
     f.update(10.0)
     M, y1 = f.matrix()
     assert M[0, 0] <= pmod.S_MAX + 1e-9 and pmod.VID_Y0 + pmod.PANEL_MIN <= y1 <= pmod.VID_Y0 + pmod.PANEL_MAX
+
+
+def test_zoom_is_set_once_and_never_zooms_in_again():
+    """The live complaint (it keeps re-zooming): the first framing is a cut, later the zoom never shrinks."""
+    pm = PushupMirror(mascot=False)
+    views = _run_camera(pm, lambda t: plank(), 0.0, 3.0)
+    zs = [v[2] for t, v in views if t >= 0.5]
+    assert np.ptp(zs) == 0.0 and zs[0] < SRC[1] * 0.95             # framed within half a second, never eased in
+    def closer(t):                                                # walks up to the phone: a smaller region would zoom in
+        lm = plank(); lm[:, :2] = 0.5 + (lm[:, :2] - 0.5) * 0.6; return lm
+    later = _run_camera(pm, closer, 3.0, 10.0)
+    assert all(v[2] >= zs[0] - 1e-9 for _, v in later)
 
 
 def test_render_is_fast_enough_for_the_live_loop():

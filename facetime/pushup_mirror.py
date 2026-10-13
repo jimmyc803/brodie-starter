@@ -36,8 +36,9 @@ self-view the bottom left).
 Framing (Framer): the person's keypoint box (head to knees = "core"; with the feet = "full") is collected per pose over
 the last WINDOW_S seconds and reduced per edge to its 10th / 90th percentile, so a rep or a jittery landmark does not
 move it. The crop is the panel's aspect around that region (padded; head room; feet included only when that costs no
-picture height), never zoomed beyond S_MAX output px per source px. The crop moves only when the region leaves the
-inner safe area of the current crop or would zoom in by > 25 %, sustained SUSTAIN_S, and then eases there in EASE_S.
+picture height), never zoomed beyond S_MAX output px per source px. The first framing (LOCK_SAMPLES poses) is a cut and
+sets the zoom for good: later the crop only pans, when the region leaves the inner safe area of the current crop,
+sustained SUSTAIN_S, easing there in EASE_S (it widens only if the person no longer fits; it never zooms in again).
 No pose: the last framing holds. The picture is warped once per frame (cubic, a mild unsharp mask on the small source
 crop when upscaling, area-averaged when downscaling); the skeleton and overlays are drawn afterwards at output
 resolution.
@@ -76,12 +77,12 @@ COUNT_PX = (120, 260)                      # the numerals fill the score zone's 
 COUNT_MAX_W = 330                          # ... and never run into Brodie
 FLASH_S = 1.5; STAMP_S = 0.55; FADE_S = 0.3
 CUE_MIN_S = 1.2                            # a cue bubble shows at least this long (then only while he talks)
-S_MAX = 3.0                                # never zoom the source more than this (output px per source px)
+S_MAX = 2.0                                # never zoom the source more than this (output px per source px; sharper)
 WINDOW_S = 4.0                             # framing: the person's region over this many seconds
 SUSTAIN_S = 0.8                            # ... must want a move this long before the camera moves
 EASE_S = 1.0                               # ... which then takes this long
 SAFE_IN = 0.05                             # the inner safe area: the crop shrunk by this fraction per side
-ZOOM_IN = 0.75                             # zoom in only when the wanted crop is < this times the current width
+LOCK_SAMPLES = 3                           # poses before the first framing (a cut; the zoom then never changes)
 CORE = [i for i in range(0, 17)] + [23, 24, 25, 26]       # head, arms, hips, knees
 FULL = CORE + [27, 28, 29, 30, 31, 32]                   # + ankles, heels, toes
 
@@ -234,6 +235,7 @@ class Framer:
         self.view = self.target
         self.ease = None                          # (t0, from view, to view)
         self.want_t = None                        # since when a move has been wanted
+        self.locked = False                       # the zoom is set (first framing)
 
     def _whole(self):
         cw = self.w
@@ -255,15 +257,19 @@ class Framer:
                 self.hist.append((t, cb, fb))
         while self.hist and t - self.hist[0][0] > WINDOW_S: self.hist.popleft()
         if not self.hist: return
+        if not self.locked:                                          # the first framing: a cut, then the zoom is fixed
+            if len(self.hist) < LOCK_SAMPLES: return
+            self.target = self.view = self._want(); self.ease = None; self.locked = True; return
         want = self._want()
         cur = self.target
-        move = self._outside(cur) or want[2] < ZOOM_IN * cur[2]
+        move = self._outside(cur)
         if not move:
             self.want_t = None; return
         if self.want_t is None: self.want_t = t
         if t - self.want_t >= SUSTAIN_S:                             # frame where the person is now: drop the samples
             while len(self.hist) > 3 and self.hist[0][0] < self.want_t: self.hist.popleft()   # from before the change
-            want = self._want()                                      # (one eased move, not one per window turnover)
+            want = self._want(); cw = max(cur[2], want[2])         # a pan at the locked zoom (wider only if the person
+            want = self._place(want[0], want[1], cw)                 # no longer fits): it never zooms in again
             self.ease = (t, self.view, want); self.target = want; self.want_t = None
 
     def _region(self, k):
@@ -291,9 +297,12 @@ class Framer:
         if fw <= max(cw, fill):                                      # the feet too, when that costs no picture height
             cw = max(cw, fw); x0, x1 = min(x0, fx0 - 0.02 * self.w), max(x1, fx1 + 0.02 * self.w)
         cw = max(min(cw, max(self.w, (y1 - y0) * PANEL_ASPECT)), PANEL_W / S_MAX)   # wider than the source only for height
-        cx = (x0 + x1) / 2; ch = self.crop_h(cw)
+        return self._place((x0 + x1) / 2, (y0 + y1) / 2, cw)
+
+    def _place(self, cx, cy, cw):
+        """(cx, cy, cw) clamped so the crop stays on the picture."""
+        ch = self.crop_h(cw)
         cx = min(max(cx, cw / 2), self.w - cw / 2) if cw <= self.w else self.w / 2
-        cy = (y0 + y1) / 2
         cy = min(max(cy, ch / 2), self.h - ch / 2)
         return (cx, cy, cw)
 

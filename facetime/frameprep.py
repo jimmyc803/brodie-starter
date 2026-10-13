@@ -41,7 +41,7 @@ import numpy as np
 LIT = 12                    # a "black" bar pixel has max channel <= this (H.264 black is 0-4, ringing next to the edge more)
 LIT_FRAC = 0.01             # a row / column is content when >= this fraction of its samples are lit
 MIN_FRAC = 0.1             # a content rect smaller than this fraction of the frame (either side) is not trusted
-SAMPLE_S = 0.25; WINDOW_S = 3.0; SUSTAIN_S = 1.5; CHANGE_FRAC = 0.06
+SAMPLE_S = 0.25; WINDOW_S = 3.0; SUSTAIN_S = 4.0; CHANGE_FRAC = 0.06
 ROTATIONS = (0, 90, 270)    # degrees clockwise applied to the content to make it upright
 PROBE_EVERY_S = 1.0; BAD_S = 0.5; WINS = 2
 LANDSCAPE_NO_POSE_S = 3.0; WINS_LANDSCAPE = 3   # landscape content: probe only after 3 s without any pose
