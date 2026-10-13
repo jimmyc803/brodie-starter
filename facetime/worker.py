@@ -85,7 +85,7 @@ CHALLENGE_MODES = ('demo', 'competition')
 CHERT_HANDLE_KEYS = ('caller', 'handle', 'from', 'phone', 'email')   # chert_call keys tried for the caller handle, in order
 HEARTBEAT_EVERY_S = 30.0
 JOB_BEAT_S = 30.0                     # job heartbeat (scope job) while a competition job runs
-MIRROR_BITRATE = 2_800_000            # the push-up mirror's 720x1280 track: a static framing + 2.8 Mbps keeps the caller's picture crisp
+MIRROR_BITRATE = 2_800_000            # the push-up mirror's 1280x720 track: a static framing + 2.8 Mbps keeps the caller's picture crisp
 JOB_STALL_S = 10.0                    # a counting job with no processed frame / controller tick this long is unhealthy
 JOB_STALE_S = 90.0                    # an active job whose health file is older than this is wedged
 IDLE_CARD_FPS = float(os.environ.get('IDLE_CARD_FPS', '4') or 4)   # coach-video rate while no caller video (warm room)
@@ -597,7 +597,7 @@ class CoachJob:
                 except Exception as e:
                     log.exception('push-up mirror unavailable'); print(f'[worker] push-up mirror unavailable ({e!r}): plain avatar', flush=True)
             if renderer is not None:
-                from facetime.pushup_mirror import W as VW, H as VH
+                from facetime.pushup_mirror import LW as VW, LH as VH      # the 16:9 track (see _fit_track)
                 self.mirror_live = True; kind = 'push-up mirror'; bitrate = MIRROR_BITRATE
                 fps = max(1.0, float(getattr(self.a, 'mirror_fps', 15.0) or 15.0))
             else:
@@ -615,13 +615,13 @@ class CoachJob:
                 speaking = self.player is not None and self.player.playing is not None
                 rf = getattr(self, 'reveal_frames', None)
                 rot = int(getattr(self, 'mirror_rot', 0) or 0) or 90           # the card's pre-turn (update_layout); never 0:
-                                                                               # the track must stay portrait (no size switch)
+                                                                               # a flat phone reads the column pre-turned
                 rv_land = (rf is not None and renderer is not None and getattr(rf, 'landscape_size', None) is not None
                            and bool(getattr(self, 'mirror_landscape', False)))       # sideways phone: landscape card
                 rv_img = rf.current_frame(rv_land) if rf is not None else None
                 if rv_img is not None:                                         # reveal (C7.v): the whole card, never the mirror
                     if rv_land and rot: rv_img = rv_img.rotate(rot, expand=True)     # locked phone: landscape card pre-turned
-                    frame = await asyncio.to_thread(self._reveal_frame, rv_img, (VW, VH) if not rv_land or rot else rf.landscape_size)
+                    frame = await asyncio.to_thread(self._reveal_frame, rv_img, (VW, VH))
                     source.capture_frame(frame)
                     next_t = loop.time() + 1.0 / IDLE_CARD_FPS
                     await asyncio.sleep(max(0.0, next_t - loop.time())); continue
@@ -656,34 +656,52 @@ class CoachJob:
             self.mirror_live = False; self.mirror_in = None
 
     @staticmethod
+    def _fit_track(img, size):
+        """Any card onto the constant `size` (w, h) track frame: a matching card passes through; a different shape
+        (the portrait idle card, a pre-turned scoreboard for a locked sideways phone) rides fitted WHOLE on ink bars,
+        never stretched. The track size NEVER changes mid-call: live calls (2026-10-13) showed FaceTime dropping to
+        a small fitted box for the rest of the call after any mid-stream size switch."""
+        ih, iw = img.shape[:2]
+        if (iw, ih) == tuple(size): return img
+        import numpy as np, cv2
+        from facetime.brand import INK
+        s = min(size[0] / iw, size[1] / ih)
+        nw, nh = max(1, int(round(iw * s))), max(1, int(round(ih * s)))
+        out = np.empty((size[1], size[0], 3), np.uint8); out[:] = INK
+        x0, y0 = (size[0] - nw) // 2, (size[1] - nh) // 2
+        out[y0:y0 + nh, x0:x0 + nw] = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if s < 1.0 else cv2.INTER_LINEAR)
+        return out
+
+    @staticmethod
     def _reveal_frame(img, size):
-        """The reveal image as an I420 frame of `size` (letterboxed whole by the provider; resized only if it differs)."""
-        if img.size != tuple(size): img = img.resize(tuple(size))
-        return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, img.convert('RGB').tobytes()).convert(rtc.VideoBufferType.I420)
+        """The reveal image as an I420 frame of `size` (a different shape, e.g. a pre-turned card, fitted whole)."""
+        import numpy as np
+        arr = CoachJob._fit_track(np.asarray(img.convert('RGB')), size)
+        return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, arr.tobytes()).convert(rtc.VideoBufferType.I420)
 
     @staticmethod
     def _avatar_frame(av, speaking, size):
-        """Brodie's plain face as an I420 frame of `size` (the mirror's size after a fallback)."""
+        """Brodie's plain face as an I420 frame of `size` (fitted whole after a mirror fallback)."""
         buf = av.frame_bytes(speaking=speaking)
         if size != (av.W, av.H):
-            import numpy as np, cv2
-            img = cv2.resize(np.frombuffer(buf, np.uint8).reshape(av.H, av.W, 3), size, interpolation=cv2.INTER_LINEAR)
-            buf = img.tobytes()
+            import numpy as np
+            buf = CoachJob._fit_track(np.frombuffer(buf, np.uint8).reshape(av.H, av.W, 3), size).tobytes()
         return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420)
 
     def _mirror_frame(self, renderer, av, snap, st, now, fails, stats, newer=None, landscape=False, rot=0):
-        """Render thread: one mirror frame (I420); on any error the plain face for this frame. newer: a caller VideoFrame
-        that arrived after snap's (the pose's) frame: shown with snap's skeleton when the feed's crop + rotation fit it.
-        landscape: the caller's phone is sideways -> a 1280x720 frame on the same track (the size changes mid-stream: the
-        native VideoSource passes any frame size through and WebRTC reconfigures the encoder, no republish).
-        rot (with landscape): the caller's phone is sideways AND portrait-locked (frameprep's orientation lock turns the
-        caller's picture by `rot` deg CW). The screen never rotates on such a phone, so a landscape track gets mangled
-        (live calls 2026-10-13: shown turned and cropped / zoomed). Instead the landscape card is pre-turned by the
-        inverse of `rot` into the normal portrait frame: FaceTime fills the portrait screen with it as always, and the
-        physical turn of the phone makes the card read upright. The track size then never changes mid-call."""
-        from facetime.pushup_mirror import W as VW, H as VH, LW, LH
+        """Render thread: one mirror frame (I420), always LW x LH = 1280x720: the track is 16:9 like the bridge's own
+        camera, so nothing wraps it in black bars (live 2026-10-13: an upright phone showed our old portrait track as
+        the middle ~32 % of a full-width 16:9 band, the rest black - the exact pillarbox of a portrait column fitted
+        into a 16:9 stream). newer: a caller VideoFrame that arrived after snap's (the pose's) frame: shown with
+        snap's skeleton when the feed's crop + rotation fit it. landscape: a WIDE caller picture -> the scoreboard;
+        else the tall upright-phone card. rot (with landscape): the caller's phone is sideways AND portrait-locked
+        (frameprep's orientation lock turns the caller's picture by `rot` deg CW). The screen never rotates on such a
+        phone, so a plain landscape card gets mangled (live calls 2026-10-13: shown turned and cropped / zoomed).
+        Instead the scoreboard is pre-turned by the inverse of `rot` and rides the 16:9 track as a pillarboxed
+        column: the physical turn of the phone makes it read upright. The track size never changes mid-call."""
+        from facetime.pushup_mirror import LW, LH
         from facetime.frameprep import unrotate
-        if landscape and not rot: VW, VH = LW, LH
+        VW, VH = LW, LH
         t0 = time.perf_counter()
         try:
             if snap is None: img = renderer.render(None, None, self.mirror_thresholds(), st, now=now)
@@ -692,8 +710,10 @@ class CoachJob:
                 if newer is not None and prep is not None:
                     up = prep.apply(frame_to_rgb(newer))
                     if up is not None and up.shape == rgb.shape: rgb = up
-                img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2], **({'landscape': True} if landscape else {}))
+                img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2],
+                                      layout=('scoreboard' if landscape else 'tall'))
                 if landscape and rot: img = unrotate(img, rot)
+            img = self._fit_track(img, (VW, VH))
             fails[0] = 0
             stats['n'] += 1; stats['ms'] += (time.perf_counter() - t0) * 1000
             ih, iw = img.shape[:2]
@@ -1265,11 +1285,12 @@ class CoachJob:
 
     def update_layout(self, raw, now):
         """Feed thread: the live card MIRRORS the caller's picture shape (live test 2026-10-13: an upright phone showed
-        the sideways card small and turned, drowning in black - a tall picture now gets the tall card, upright on the
-        portrait track, so an upright phone's screen fills; a wide picture keeps the landscape scoreboard, pre-turned
+        the sideways card small and turned, drowning in black - a tall picture now gets the tall 16:9 card, which an
+        upright phone fit-displays as a full-width band; a wide picture keeps the landscape scoreboard, pre-turned
         by mirror_rot so a sideways phone reads it upright). The shape is frameprep's slow content rect made upright
         by the MEASURED rotation lock (the signal the rep judge itself depends on), landscape until a rect exists;
-        the track itself stays 720x1280 for the whole call, no exceptions: live calls (2026-10-13) showed FaceTime
+        the track itself stays 1280x720 (16:9, the bridge camera's own shape) for the whole call, no exceptions:
+        live calls (2026-10-13) showed FaceTime
         dropping to a small fitted box for the rest of the call after any mid-stream size switch. Cosmetic: a failure
         is logged and the layout stays as it was."""
         try:
@@ -1287,7 +1308,7 @@ class CoachJob:
             if (self.mirror_landscape, self.mirror_rot) != was:
                 card = (f'landscape pre-turned {self.mirror_rot} deg' if self.mirror_landscape else 'portrait, upright')
                 print(f"[worker] caller's picture {'wide' if self.mirror_landscape else 'tall'} (rotation {rot_now} deg): "
-                      f'coach-video {card} on the portrait track', flush=True)
+                      f'coach-video {card} on the 16:9 track', flush=True)
         except Exception as e:
             self.layout_fails = getattr(self, 'layout_fails', 0) + 1
             if self.layout_fails == 1 or self.layout_fails % 100 == 0:

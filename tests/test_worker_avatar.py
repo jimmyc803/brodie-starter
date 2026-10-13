@@ -60,16 +60,16 @@ def _run(job, until):
     asyncio.run(go())
 
 
-def test_mirror_loop_publishes_720x1280_and_renders_the_newest_frame(monkeypatch):
+def test_mirror_loop_publishes_1280x720_and_renders_the_newest_frame(monkeypatch):
     import numpy as np, time
     published, captured, sizes = [], [], []
     job = _mirror_job(monkeypatch, published, captured, sizes)
     seen = []
     from facetime import pushup_mirror
     orig = pushup_mirror.PushupMirror.render
-    def spy(self, rgb, lm, thr=None, state=None, now=None, seq=None):
+    def spy(self, rgb, lm, thr=None, state=None, now=None, seq=None, landscape=False, layout=None):
         seen.append((None if rgb is None else rgb.shape, seq, state.count))
-        return orig(self, rgb, lm, thr, state, now, seq)
+        return orig(self, rgb, lm, thr, state, now, seq, landscape, layout)
     monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', spy)
     def feed_once():
         if job.mirror_live and job.mirror_in is None and not any(s[0] for s in seen):
@@ -77,8 +77,8 @@ def test_mirror_loop_publishes_720x1280_and_renders_the_newest_frame(monkeypatch
             job.mirror_rep(True, [], False); job.mirror_rep(False, ['too_shallow'], False); job.mirror_rep(True, [], True)
         return any(s[0] == (720, 1280, 3) for s in seen) and len(captured) >= 3
     _run(job, feed_once)
-    assert published == [('coach-video', worker.MIRROR_BITRATE)] and worker.MIRROR_BITRATE >= 2_500_000 and sizes == [(720, 1280)]
-    assert set(captured) == {(720, 1280)}
+    assert published == [('coach-video', worker.MIRROR_BITRATE)] and worker.MIRROR_BITRATE >= 2_500_000 and sizes == [(1280, 720)]
+    assert set(captured) == {(1280, 720)}
     assert seen[0][0] is None                                     # idle card before the first frame
     assert any(s[0] == (720, 1280, 3) and s[1] == 7 and s[2] == 1 for s in seen)   # valid, not in a challenge: counted once
     assert job.mirror_live is False and job.mirror_in is None     # nothing kept after the loop
@@ -91,7 +91,7 @@ def test_mirror_render_failures_fall_back_to_the_plain_face(monkeypatch):
     def boom(self, *a, **k): raise RuntimeError('render broke')
     monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', boom)
     _run(job, lambda: len(captured) >= 14)
-    assert len(captured) >= 14 and set(captured) == {(720, 1280)}  # every tick still sends a frame, same size
+    assert len(captured) >= 14 and set(captured) == {(1280, 720)}  # every tick still sends a frame, same size
 
 
 @pytest.mark.parametrize('stored, count, flashed', [
@@ -121,8 +121,8 @@ def test_reveal_frames_replace_the_mirror_in_coach_video_and_no_extra_track(monk
     def no_mirror(*a, **k): raise AssertionError('mirror rendered during the reveal')
     monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', no_mirror)
     _run(job, lambda: len(captured) >= 2)
-    assert [p[0] for p in published] == ['coach-video'] and sizes == [(720, 1280)]      # one track, no reveal track
-    assert captured[:2] == [(720, 1280)] * 2
+    assert [p[0] for p in published] == ['coach-video'] and sizes == [(1280, 720)]      # one track, no reveal track
+    assert captured[:2] == [(1280, 720)] * 2
 
 
 def test_reveal_follows_a_sideways_phone_to_the_landscape_layout(monkeypatch):
@@ -141,5 +141,5 @@ def test_reveal_follows_a_sideways_phone_to_the_landscape_layout(monkeypatch):
     monkeypatch.setattr(pushup_mirror.PushupMirror, 'render', no_mirror)
     _run(job, lambda: len(captured) >= 2)
     assert asked[:2] == [True, True]                                             # the landscape reveal card...
-    assert captured[:2] == [(720, 1280)] * 2                                     # ...pre-turned on the portrait track
+    assert captured[:2] == [(1280, 720)] * 2                                     # ...pre-turned, pillarboxed on the 16:9 track
 

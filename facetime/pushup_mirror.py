@@ -102,8 +102,9 @@ SUSTAIN_S = 0.8                            # ... must want a move this long befo
 EASE_S = 1.0                               # ... which then takes this long
 SAFE_IN = 0.05                             # the inner safe area: the crop shrunk by this fraction per side
 LOCK_SAMPLES = 3                           # poses before the first framing (a cut; the zoom then never changes)
-# Landscape (render(..., landscape=True)): the one live layout (sideways-only). The 1280x720 card rides pre-turned on
-# the constant 720x1280 track; FaceTime fills the (never-rotating) portrait screen with it, so on the ~19.5:9 iPhone
+# Landscape (render(..., landscape=True / layout='scoreboard')): the live layout for a WIDE picture (flat / sideways
+# phones). For a locked sideways phone the card rides pre-turned (worker unrotates it, then pillarboxes it onto the
+# 16:9 track); FaceTime fills the (never-rotating) portrait screen with it, so on the ~19.5:9 iPhone
 # the card loses LS_CROP_Y = (720 - 1280 * 9 / 19.5) / 2 ~ 65 px top and bottom to the fill crop. The camera island sits mid-way along one short edge
 # (left or right, by the way the phone is turned; rounded corners there too) -> LS_SAFE_X on both sides. FaceTime's
 # self-view tile sits in a bottom corner of the visible area (~120 x 90 pt + inset on a ~900 x 420 pt screen) ->
@@ -130,6 +131,17 @@ LS_MASCOT_FEET = LS_SAFE_BOTTOM
 LS_COUNT_PX = (110, 230)
 LS_COUNT_W = 264                           # the count ticket, top right: x LW-LS_SAFE_X-LS_COUNT_W .. LW-LS_SAFE_X
 LS_COUNT_Y1 = 396                          # ... ends above the self-view keep-out band
+# Tall (render(..., layout='tall')): the 16:9 card for an UPRIGHT phone. Live 2026-10-13: an upright phone shows the
+# remote video as a full-width 16:9 band (the bridge's outgoing camera is 16:9, like its incoming window) - our old
+# portrait track filled only the middle ~32 % of that band, the rest was black bars. The track is 1280x720 now and
+# this card uses all of it: the caller's whole tall picture fitted in the middle, the scoreboard's furniture in the
+# side panels. An upright phone FIT-displays the band whole, so the margins are slim (nothing is trimmed).
+T_PIC_BOX = (430, 6, 850, 714)             # the caller's WHOLE picture, fitted and centred (like their self-view)
+T_X = 28                                   # left panel: wordmark, timer, status pill, then the count ticket under them
+T_COUNT_W = 264
+T_COUNT_Y1 = 700
+T_MASCOT_CX = 1070                         # right panel: Brodie, his bubble above him
+T_MASCOT_FEET = 706
 CORE = [i for i in range(0, 17)] + [23, 24, 25, 26]       # head, arms, hips, knees
 FULL = CORE + [27, 28, 29, 30, 31, 32]                   # + ankles, heels, toes
 
@@ -457,11 +469,12 @@ class PushupMirror:
         self.depth_frac = float(np.clip((ref - f.elbow) / (ref - depth), 0.0, 1.0))
 
     # -- render -------------------------------------------------------------------------------------------------
-    def render(self, rgb, lm, thr=None, state=None, now=None, seq=None, landscape=False):
+    def render(self, rgb, lm, thr=None, state=None, now=None, seq=None, landscape=False, layout=None):
         """seq: the pose update's id (the pose runs slower than the render): the per-pose analysis (status, medians,
         framing) runs once per seq. None: once per new (rgb, landmarks) object pair. rgb may be a newer frame of the
-        same size than the one the landmarks came from (the skeleton then lags it by a frame). landscape: the caller's
-        phone is sideways -> a (LH, LW, 3) = (720, 1280, 3) canvas (the idle card stays portrait)."""
+        same size than the one the landmarks came from (the skeleton then lags it by a frame). layout: 'scoreboard'
+        (= landscape=True; a wide picture) or 'tall' (a tall picture, upright phone) - the two live (LH, LW, 3) =
+        (720, 1280, 3) cards for the 16:9 track - else the legacy portrait card (the idle card stays portrait)."""
         now = time.monotonic() if now is None else now
         state = state if state is not None else MirrorState()
         self.thr = merged_thresholds(thr)
@@ -480,7 +493,9 @@ class PushupMirror:
             self._last_lm = lm; self._last_seq = seq
         self._last_rgb = rgb; self._last_shape = rgb.shape
         self.framer.update(now)
-        if landscape: return self._render_landscape(rgb, lm, state, now)
+        layout = layout or ('scoreboard' if landscape else 'portrait')
+        if layout == 'scoreboard': return self._render_landscape(rgb, lm, state, now)
+        if layout == 'tall': return self._render_tall(rgb, lm, state, now)
         M, self.vid_y1 = self.framer.matrix()
         self._clip = (0, VID_Y0, W, self.vid_y1); self._xlim = (SAFE_X, W - SAFE_X); self._label_y0 = PILL_Y + 80
         img = self._base()
@@ -782,13 +797,14 @@ class PushupMirror:
     def _mascot_feet(self):
         return min(MASCOT_FEET, self.vid_y1 + MASCOT_H - MASCOT_POP)
 
-    # -- landscape (sideways-only: the live layout of every competition call) ----------------------------------------
-    def _ls_fill(self, rgb):
+    # -- the 16:9 live cards (scoreboard for a wide picture, tall for an upright phone's) ----------------------------
+    @staticmethod
+    def _fit_box(rgb, box):
         """The source -> output affine for the picture: the WHOLE picture - every pixel the caller's phone sent us,
-        any shape - fitted and centred inside LS_PIC_BOX, like their own camera preview. Full-bleed looked great in
+        any shape - fitted and centred inside `box`, like their own camera preview. Full-bleed looked great in
         renders and cut the caller's head and feet off live (2026-10-13: the phone trims ~250 px off each side of
-        the card): the picture never leaves the safe band again. Returns the affine and the picture's output box."""
-        bx0, by0, bx1, by1 = LS_PIC_BOX
+        the card): the picture never leaves its box again. Returns the affine and the picture's output box."""
+        bx0, by0, bx1, by1 = box
         h, w = rgb.shape[:2]
         s = min((bx1 - bx0) / w, (by1 - by0) / h)
         pw, ph = w * s, h * s
@@ -796,6 +812,9 @@ class PushupMirror:
         M = np.array([[s, 0.0, x0], [0.0, s, y0]], np.float64)
         pic = (int(round(x0)), int(round(y0)), int(round(x0 + pw)), int(round(y0 + ph)))
         return M, pic
+
+    def _ls_fill(self, rgb):
+        return self._fit_box(rgb, LS_PIC_BOX)
 
     def _ls_ticket(self, img, x0, y0, x1, y1):
         """A paper ticket (hard ink shadow, ink border) for overlays that must read over any video."""
@@ -845,6 +864,46 @@ class PushupMirror:
             x = LS_MASCOT_CX - int(0.42 * self.ls_mascot.art_w) - w_
             y = min(LS_SAFE_BOTTOM - h, LS_MASCOT_FEET - int(0.62 * LS_MASCOT_H) - int(0.62 * h))
             self._blit(img, 'bubble', rgb_, a, max(LS_SAFE_X, x), max(LS_SAFE_TOP, y))
+        return img
+
+    def _render_tall(self, rgb, lm, state, now):
+        """The upright-phone card (16:9, T_* constants): the caller's WHOLE tall picture fitted in the middle, the
+        wordmark + timer + status pill and the count ticket on the left panel, Brodie with his bubble on the right.
+        An upright phone FIT-displays the 16:9 band whole (nothing trimmed), so the margins are slim; only the
+        verdict stamp flashes over the picture, on purpose, like the scoreboard's."""
+        M, pic = self._fit_box(rgb, T_PIC_BOX)
+        img = np.empty((LH, LW, 3), np.uint8); img[:] = INK
+        self._clip = pic; self._xlim = (T_X, LW - T_X)
+        self._picture(img, rgb, M, pic)
+        self.boxes['picture'] = pic
+        if self._draw_lm is not None and lm is not None: self._skeleton(img, M)
+        wm = brand.pill((('BRODIE', 36, INK), ('PUSH-UP CHALLENGE', 11, PINK, 'mono')), CANVAS, radius=4, pad=(14, 8), border=3, shadow=5, gap=3)
+        self._blit(img, 'wordmark', *wm, T_X, 18)
+        chip = self._timer_chip(state)
+        self._blit(img, 'timer', *chip, T_X, 18 + wm[1].shape[0] + 12)
+        pill = self._pill_sprite(); ph_, pw_ = pill[1].shape[:2]
+        py = 18 + wm[1].shape[0] + 12 + chip[1].shape[0] + 14
+        self._blit(img, 'pill', *pill, T_X, py)
+        self._label_y0 = py + ph_ + 8
+        cy0 = py + ph_ + 22
+        self._ls_ticket(img, T_X, cy0, T_X + T_COUNT_W, T_COUNT_Y1)
+        cy = cy0 + 14
+        fit = (T_COUNT_Y1 - 14 - (cy + 26) - 26) / 0.9
+        self._count_at(img, state, now, T_X + 18, cy, fit, LS_COUNT_PX, T_COUNT_W - 64)
+        if self.ls_mascot is not None:
+            self._mascot(img, state, now, self.ls_mascot, T_MASCOT_CX, T_MASCOT_FEET)
+        s = self._stamp_sprite(state, now)
+        if s is not None:
+            srgb, sa, op = s; h, w_ = sa.shape[:2]
+            scx, scy = (pic[0] + pic[2]) // 2, (pic[1] + pic[3]) // 2
+            self._blit(img, 'stamp', srgb, sa, scx - w_ // 2, scy - h // 2, opacity=op)
+        if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: above him, over the right panel
+            maxw = 400
+            rgb_, a = brand.bubble(self._cue_lines(state, 28, maxw - 44), 28, maxw, tail='down', radius=4, tail_at=0.75)
+            h, w_ = a.shape[:2]
+            x = min(LW - 16 - w_, T_MASCOT_CX - int(0.6 * w_))
+            y = T_MASCOT_FEET - LS_MASCOT_H - h - 8
+            self._blit(img, 'bubble', rgb_, a, x, max(8, y))
         return img
 
     # -- idle card ------------------------------------------------------------------------------------------------

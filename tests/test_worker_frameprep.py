@@ -59,7 +59,7 @@ def test_check_orientation_logs_a_turn_and_survives_a_probe_failure(capsys):
 
 class _Renderer:
     def __init__(self): self.got = None
-    def render(self, rgb, lm, thr, st, now=None, seq=None):
+    def render(self, rgb, lm, thr, st, now=None, seq=None, landscape=False, layout=None):
         self.got = rgb; return np.zeros((1280, 720, 3), np.uint8)
 
 

@@ -150,6 +150,33 @@ def test_landscape_shows_a_tall_picture_whole_like_the_self_view():
     assert np.all(img[(y0 + y1) // 2, :x0 - 1] != (0, 255, 255)) and np.all(img[(y0 + y1) // 2, x1 + 1:] != (0, 255, 255))
 
 
+def test_tall_card_fills_the_band_and_keeps_the_furniture_off_the_picture():
+    """The upright phone's 16:9 card (layout='tall'): the caller's WHOLE tall picture in T_PIC_BOX in the middle, the
+    count ticket and status on the left panel, Brodie on the right - the phone fit-displays the band whole, edge to
+    edge, so there is no safe-band trim to dodge."""
+    pm = PushupMirror()
+    rgb = np.zeros((486, 274, 3), np.uint8); rgb[:] = (0, 255, 255)       # a colour nothing else on the canvas uses
+    st = MirrorState(time_left_s=42.0); st.count = 7
+    st.say('Chest all the way down', now=0.0); st.speaking = True
+    st.rep(False, ['hips_sag'], now=0.4)
+    img = None
+    for k in range(6):
+        img = pm.render(rgb, plank(), DEFAULT_THRESHOLDS, st, now=0.1 * k, seq=k, layout='tall')
+    assert img.shape == (pmod.LH, pmod.LW, 3) == (720, 1280, 3)
+    x0, y0, x1, y1 = pm.boxes['picture']
+    bx0, by0, bx1, by1 = pmod.T_PIC_BOX
+    assert (y0, y1) == (by0, by1)                                         # the tall picture: its box's full height...
+    assert abs((x1 - x0) - 274 * (by1 - by0) / 486) <= 1                  # ...the WHOLE picture, nothing cover-zoomed off
+    assert abs((x0 + x1) / 2 - (bx0 + bx1) / 2) <= 1                      # centred in its box
+    m = np.all(img == (0, 255, 255), axis=2)
+    assert m[y0 + 2, x0 + 2] and m[y1 - 3, x1 - 3]                        # video out to its own corners
+    for k in ('count', 'pill', 'timer', 'wordmark', 'mascot'):
+        assert inside(pm.boxes[k], (0, 0, pmod.LW, pmod.LH)), (k, pm.boxes[k])
+        assert not overlaps(pm.boxes[k], pmod.T_PIC_BOX), (k, pm.boxes[k])    # the panels, never the caller's body
+    assert inside(pm.boxes['bubble'], (0, 0, pmod.LW, pmod.LH))           # his bubble stays on the band...
+    assert 'stamp' in pm.boxes                                            # ...and the verdict flashes over the picture, on purpose
+
+
 def test_landscape_render_costs_no_more_than_portrait():
     rgb = (np.random.default_rng(1).integers(0, 255, SRC)).astype(np.uint8)
     def bench(landscape):
@@ -259,8 +286,9 @@ def _mirror_job(monkeypatch, captured):
 
 
 def test_mirror_loop_keeps_one_canvas_size_for_the_whole_call(monkeypatch):
-    """The track is 720x1280 from the first frame to the last, through idle, portrait and sideways (pre-turned) phases:
-    live calls (2026-10-13) showed FaceTime dropping to a small fitted box for good after any mid-stream size switch."""
+    """The track is 1280x720 (16:9, the bridge camera's own shape) from the first frame to the last, through idle,
+    portrait and sideways (pre-turned) phases: live calls (2026-10-13) showed FaceTime dropping to a small fitted
+    box for good after any mid-stream size switch."""
     captured = []; job = _mirror_job(monkeypatch, captured)
     rgb = np.full(SRC, 90, np.uint8); phase = {'n': 0}
     job.mirror_rot = 0
@@ -282,15 +310,16 @@ def test_mirror_loop_keeps_one_canvas_size_for_the_whole_call(monkeypatch):
         job.stop.set(); await asyncio.wait_for(t, 5)
     asyncio.run(go())
     assert len(captured) >= 10
-    assert set(captured) == {(720, 1280)}                                 # never a landscape frame on the track
-    assert captured[-1] == (720, 1280)                                    # no caller video: the idle card, portrait
+    assert set(captured) == {(1280, 720)}                                 # one frame size, never a mid-call switch
+    assert captured[-1] == (1280, 720)                                    # no caller video: the idle card, pillarboxed
 
 
 def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     job = worker.CoachJob.__new__(worker.CoachJob); job.mirror_thresholds = lambda: None
     r = PushupMirror(mascot=False)
+    assert r.render(None, None, None, MirrorState(), now=0.0, landscape=True).shape == (1280, 720, 3)   # the card: portrait
     f = job._mirror_frame(r, None, None, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True)
-    assert (f.width, f.height) == (720, 1280)
+    assert (f.width, f.height) == (1280, 720)                             # ...riding pillarboxed on the constant 16:9 track
     f = job._mirror_frame(r, None, (np.full(SRC, 90, np.uint8), None, 1, 0.0), MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True)
     assert (f.width, f.height) == (1280, 720)
 
@@ -358,16 +387,22 @@ def test_unrotate_is_the_inverse_of_rotate():
 
 
 def test_locked_sideways_phone_gets_the_card_pre_turned_on_the_portrait_track():
-    """prep.rotation != 0 = the caller's screen never rotates: the track stays 720x1280 the whole call and carries the
-    landscape card pre-turned by the inverse of the caller's rotation (live calls 2026-10-13: a landscape track on a
-    rotation-locked phone was shown turned and cropped / zoomed)."""
+    """prep.rotation != 0 = the caller's screen never rotates: the track stays 1280x720 the whole call and carries the
+    scoreboard pre-turned by the inverse of the caller's rotation, a pillarboxed column the physical turn of the phone
+    makes read upright (live calls 2026-10-13: a landscape card on a rotation-locked phone was shown turned and
+    cropped / zoomed, and any mid-stream track-size switch dropped FaceTime to a small fitted box for good)."""
     job = worker.CoachJob.__new__(worker.CoachJob); job.mirror_thresholds = lambda: None
-    r = PushupMirror(mascot=False)
+    card = np.zeros((720, 1280, 3), np.uint8); card[:, :640] = (200, 40, 40); card[:, 640:] = (40, 40, 200)
+    class R:
+        def render(self, *a, **k): return card
     snap = (np.full(SRC, 90, np.uint8), None, 1, 0.0)
     for rot in (90, 270):
-        f = job._mirror_frame(r, None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=rot)
-        assert (f.width, f.height) == (720, 1280)
-    f = job._mirror_frame(r, None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=0)
-    assert (f.width, f.height) == (1280, 720)                             # no lock (screen rotates): landscape track as before
+        f = job._mirror_frame(R(), None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=rot)
+        assert (f.width, f.height) == (1280, 720)
+        want = worker.CoachJob._fit_track(unrotate(card.copy(), rot), (1280, 720))
+        got = np.frombuffer(f.convert(worker.rtc.VideoBufferType.RGB24).data, np.uint8).reshape(720, 1280, 3)
+        assert np.abs(got.astype(int) - want.astype(int)).mean() < 8.0    # the pre-turned column, pillarboxed, unstretched
+    f = job._mirror_frame(R(), None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=0)
+    assert (f.width, f.height) == (1280, 720)                             # no lock (screen rotates): the plain scoreboard
 
 
