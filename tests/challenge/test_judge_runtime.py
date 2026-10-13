@@ -22,6 +22,10 @@ C2_METRICS = {'min_elbow_deg_l', 'min_elbow_deg_r', 'top_elbow_deg', 'max_hip_li
               'knee_floor_contact', 'shoulder_wrist_drop', 'shoulder_elbow_gap', 'min_keypoint_conf', 'frame_conf_frac',
               'persons_in_frame', 'rep_duration_s', 'torso_ok', 'side', 'classifier_labels'}
 RP = {k: v for k, v in REP_PARAMS_V2.items() if k != 'v2'}
+# j3 lenient defaults flag knees_down only below 120 deg; the synthetic knee push-up (shins flat on the floor) reads
+# about 141 deg, so the knee tests run the judge with the j2 knee limit (the config can always tighten it again)
+KNEES_THR = {'knee_min_deg': 150}
+SHALLOW = 140          # elbow at the bottom of a shallow rep: past the j3 defaults (125 deg / drop 0.88 ~ 130 deg)
 
 
 def pipeline(judge=True, **kw):
@@ -32,9 +36,9 @@ def shifted(clip, dt):
     return [dataclasses.replace(f, t=round(f.t + dt, 6)) for f in clip.frames]
 
 
-def run_pipeline(clip, judge=True):
+def run_pipeline(clip, judge=True, judge_thr=None):
     """Feed a synth clip through the seam; returns (pipe, [(n, t, fields)])."""
-    pipe = pipeline(judge)
+    pipe = pipeline(judge, judge_thr=judge_thr)
     reps = []
     for f in clip.frames:
         r = pipe.process_landmarks(f.img.astype(np.float32), f.world.astype(np.float32), persons=f.persons,
@@ -63,7 +67,7 @@ def test_clean_side_view_reps_counted_and_valid(side):
 
 def test_knee_reps_counted_but_invalid():
     clip = synth_pushups(n_reps=5, lead_in_s=2.0, knees_down=True)
-    pipe, reps = run_pipeline(clip)
+    pipe, reps = run_pipeline(clip, judge_thr=KNEES_THR)
     assert pipe.coach.rc.count == 5 and len(reps) == 5
     assert all(not v['valid'] and v['reject_reasons'][0] == 'knees_down' for _, _, v in reps)
     cues = [v['cue'] for _, _, v in reps]
@@ -81,7 +85,7 @@ def test_two_people_counted_but_invalid_multiple_people():
 
 
 def test_shallow_reps_invalid_too_shallow():
-    clip = synth_pushups(n_reps=4, lead_in_s=2.0, depth=110)
+    clip = synth_pushups(n_reps=4, lead_in_s=2.0, depth=SHALLOW)
     _, reps = run_pipeline(clip)
     assert len(reps) == 4 and all(v['reject_reasons'] == ['too_shallow'] for _, _, v in reps)
 
@@ -113,7 +117,8 @@ def test_process_without_pose_model_raises():
 
 def test_perception_rep_events_carry_verdicts():
     clip = synth_pushups(n_reps=5, lead_in_s=3.0, knees_down=True)
-    per = Perception(Config(exercise='pushups', announce=False, judge=True), pipe=pipeline(), clip_s=lambda _t: None, t0=0)
+    per = Perception(Config(exercise='pushups', announce=False, judge=True), pipe=pipeline(judge_thr=KNEES_THR),
+                     clip_s=lambda _t: None, t0=0)
     events = []
     per.on_event(events.append)
     try:
@@ -158,7 +163,7 @@ def _feed(j, clip):
 
 def test_runtime_labels_window_and_classifier_veto():
     clip = synth_pushups(n_reps=3, lead_in_s=1.0)
-    j = JudgeRuntime()
+    j = JudgeRuntime({'classifier_veto': ['pushups - shallow']})     # j3 defaults veto no classifier label
     j.on_label(0.5, 'pushups - shallow')        # before rep 1 fires (3.0): belongs to rep 1
     j.on_label(3.5, 'pushups - good form?')     # rep 2 window, not a veto label
     v = _feed(j, clip)
@@ -169,12 +174,12 @@ def test_runtime_labels_window_and_classifier_veto():
 
 def test_runtime_most_important_reason_wins_cue():
     clip = synth_pushups(n_reps=2, lead_in_s=1.0, knees_down=True, extra_person=True)
-    v = _feed(JudgeRuntime(), clip)
+    v = _feed(JudgeRuntime(KNEES_THR), clip)
     assert v[0].reasons[:2] == ['multiple_people', 'knees_down'] and v[0].cue_key == 'multiple_people'
 
 
 def test_runtime_cue_gap_from_thresholds_and_bad_window():
-    clip = synth_pushups(n_reps=4, lead_in_s=1.0, depth=110)
+    clip = synth_pushups(n_reps=4, lead_in_s=1.0, depth=SHALLOW)
     v = _feed(JudgeRuntime({'cue_min_gap_s': 0}), clip)
     assert [x.cue_key for x in v] == ['too_shallow'] * 4
     with pytest.raises(ValueError):
@@ -299,7 +304,7 @@ def test_person_switch_restarts_partial_rep_and_judge_window():
     later = shifted(b, first[-1].t + 0.1)
 
     def run(flag):
-        pipe = pipeline()
+        pipe = pipeline(judge_thr=KNEES_THR)
         out = []
         for k, f in enumerate(first + later):
             r = pipe.process_landmarks(f.img, f.world, f.persons, round(f.t * 1000), f.aspect,

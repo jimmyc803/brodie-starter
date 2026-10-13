@@ -159,3 +159,68 @@ line reads -25..-43 deg from the camera angle. px_8435123 is accepted 3/4.
 cannot change them. j1 rows stored a different `shoulder_wrist_drop` and other judged frames, so
 `scripts/rejudge.py` (and `/admin/rejudge`) only re-judge reps whose judge_version family (before the first '.')
 is the current JUDGE_VERSION. Other reps are kept as stored and reported as "skipped".
+
+## j3 lenient (owner decision, 2026-10-13)
+
+The owner's first real call scored 0/34 under j2. 25 of the reps failed on gates, and the other 9 failed only because
+of liveness_fail. The owner asked for these changes: no liveness "cheater test", acceptance from more camera angles,
+no need to prop the phone close to the floor, and leniency in general. JUDGE_VERSION is now "j3", and `scripts/rejudge.py`
+re-judges j2 and j3 rows (`REJUDGE_FAMILIES`). j2 metrics are a stricter reading of the same quantities.
+
+Liveness. The challenge is off unless `judge_thresholds.liveness_enabled` is true. The default is false, and migration
+20261022 also sets it to false. When it is off, the controller starts no challenge, plays no challenge_* cues, opens no
+window and voids no reps. Commits carry `liveness_result = 'skipped'`, which ch_commit_reps treats as neutral because it
+voids only on 'fail'. The liveness code and its tests stay in place, and the tests turn it on explicitly.
+
+Gates and metrics (challenge/judge/gates.py, metrics.py):
+- Per-signal keypoints. Each signal needs only its own landmarks. not_in_frame now means only that the upper body
+  (shoulder, elbow, wrist on either side) is unmeasurable. Missing hips, knees or ankles never reject a rep.
+  `frame_conf_frac` is the share of judged frames in which an arm is measurable.
+- `leg_min_conf` is 0.7. A knee or ankle counts only at this confidence or higher. MediaPipe extrapolates legs that
+  are outside the frame at about 0.4-0.6, and those guesses caused a false knees_down on px_10280888.
+- Hip line. It uses shoulder-hip-ankle when the ankle is measurable and shoulder-hip-knee otherwise. Only clear sag
+  (more than 30 deg) or pike (more than 40 deg) is rejected.
+- knees_down requires both a knee at the floor line and a measured knee angle below `knee_min_deg` (120). The knee-pivot
+  heuristic is gone. A straight-legged plank is never knees_down, and neither is a plank with the legs out of frame.
+- Depth. A rep is deep if the better side's elbow is at or below `depth_elbow_max_deg` (125), or if the
+  shoulder-wrist drop ratio is at or below `depth_drop_max` (0.88). The live DB value of 0.92 combined with the OR rule
+  accepted 150-deg bends on the synthetic suite (23/60). 0.88 accepts 125 deg, and sometimes 130-135 deg, but never
+  150 deg.
+- Incline and decline use the wrist-to-ankle support line in MediaPipe world landmarks, which is metric and does not
+  depend on camera perspective. The image line is only a fallback for clips without world landmarks. The limits are
+  25 deg incline and 35 deg decline. Under j2 the image line read -25..-43 deg on off-angle clips.
+- Lockout is 135 deg. too_fast fires only on clear bouncing (under 0.45 s, or a cadence above 100 rpm). Classifier
+  vetoes are empty. multiple_people is unchanged.
+
+Owner call rejudge, read-only from the stored j2 metrics (`reps`, last 3 hours): 0/34 before, 26/34 after, both with the
+code defaults and with the live DB config. Of the 8 still rejected, 4 are setup or junk frames (frame_conf 0.12-0.47,
+hip line -132/-82). The others are one rep with hips at -97 and knee 81, one with the torso not horizontal, one at
+elbow 128 with drop 0.96, and one with top 125 that is not horizontal. Live j3 metrics (per-signal keypoints) are at
+least as lenient as this rejudge, which uses stricter j2 metrics.
+
+Real clips (`judge_eval.run`, j2 then j3):
+
+| | j2 | j3 |
+|---|---|---|
+| clean reps accepted | 26/30 = 86.7% | 29/30 = 93.3% (ship gate met) |
+| worst clean count error | 2 | 1 |
+| off_angle reps accepted (44 expected) | 3 | 31 |
+| bad_light | - | 8/10 |
+| partial_frame | - | 6/15 (counter arms on few reps) |
+| knees, two_people accepted | 0 | 0 |
+| not_horizontal reps accepted | 0 | 8/12 (moderate inclines, by design) |
+
+`judge_eval/check_real_clips.py` now pins clean at 93% / 1 and off_angle at 31 or more accepted, and
+not_horizontal at 8 or fewer accepted. not_horizontal is no longer a never-accept category.
+The default synthetic suite (`--synthetic`) now accepts some synthetic cheats by design, such as the 140-150 deg
+"half" reps near the boundary and inclines. The mechanism tests and the synthetic ship-gate test pin the j2 values
+explicitly (`STRICT` / `STRICT_THR`).
+
+Known trade-off: a classic knee push-up with flat shins reads 140-160 deg at the knee and passes knee_min 120. The real
+knees clip (about 90 deg) is caught. Raising `knee_min_deg` in the DB, for example to 150, catches more of these but
+starts flagging bent-leg planks.
+
+DB config (competition_config.judge_thresholds). The live row was set by hand to j3-like values. Applying migration
+`db/migrations/20261022_challenge_judge_j3.sql` (not yet applied) aligns it with the code defaults: it adds
+leg_min_conf 0.7 and liveness_enabled false, changes depth to 125 / 0.88 (from 120 / 0.92), and changes
+knee_floor_margin to 0.1 (from -1, which turns knees_down off completely).

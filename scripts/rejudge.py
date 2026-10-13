@@ -8,7 +8,7 @@ challenge.judge.gates.judge_rep over DEFAULT_THRESHOLDS overlaid by the --thresh
 reps whose verdict changes and, per user, points before -> after. Facts the judge does not decide are kept: reasons set
 at commit by the clock/liveness rules (after_freeze, before_start, after_count, liveness_fail) and in_challenge reps stay
 rejected; points = the rep's stored multiplier when valid, else 0. Reps whose judge_version family (the part before the
-first '.') is not the current JUDGE_VERSION are kept as stored and reported as skipped (their metrics mean different
+first '.') is not in gates.REJUDGE_FAMILIES (j2, j3) are kept as stored and reported as skipped (their metrics mean different
 things, e.g. j1 shoulder_wrist_drop vs the j2 ratio). --apply writes the changed reps in ONE transaction via
 ch_rejudge_apply (which also writes the audit_log row); --actor and --reason are required with --apply.
 Needs ch_rejudge_fetch / ch_rejudge_apply from db/migrations/20261015_challenge_rejudge.sql (NEEDS-SQL is printed if absent).
@@ -29,7 +29,7 @@ for _p in (ROOT, ROOT / "src"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from challenge.judge.gates import JUDGE_VERSION, judge_rep, merged_thresholds  # noqa: E402
+from challenge.judge.gates import JUDGE_VERSION, REJUDGE_FAMILIES, judge_rep, merged_thresholds  # noqa: E402
 from challenge.judge.metrics import RepMetrics  # noqa: E402
 from challenge.store import Store, StoreError  # noqa: E402
 
@@ -77,17 +77,19 @@ def judge_family(version: Any) -> str:
 
 def rejudge_row(row: dict[str, Any], thr: dict) -> RepDiff:
     """Recompute one stored rep. Commit-time facts (window/liveness reasons, in_challenge) are preserved.
-    Only reps whose metrics were computed by the current judge family are re-judged: j1 metrics mean different things
+    Only reps whose metrics were computed by a judge family in gates.REJUDGE_FAMILIES (the current one and j2, whose
+    metrics are a stricter reading of the same quantities) are re-judged: j1 metrics mean different things
     (shoulder_wrist_drop was an absolute drop, not the j2 bottom/top ratio; different judged frames), so judging them
     with the current gates would invent verdicts. Those reps are kept as stored and reported as skipped."""
     old_reasons = list(row.get("reject_reasons") or [])
-    if judge_family(row.get("judge_version")) != JUDGE_VERSION:
+    if judge_family(row.get("judge_version")) not in REJUDGE_FAMILIES:
         old_valid, old_points = bool(row.get("valid")), int(row.get("points") or 0)
         return RepDiff(rep_id=str(row["rep_id"]), call_id=str(row["call_id"]), user_id=str(row["user_id"]),
                        display_name=row.get("display_name"), rep_number=int(row.get("rep_number") or 0),
                        old_valid=old_valid, new_valid=old_valid, old_reasons=old_reasons,
                        new_reasons=list(old_reasons), old_points=old_points, new_points=old_points,
-                       skipped=f"judge_version {row.get('judge_version')!r} is not {JUDGE_VERSION}: metrics not comparable")
+                       skipped=f"judge_version {row.get('judge_version')!r} is not {'/'.join(REJUDGE_FAMILIES)}: "
+                               "metrics not comparable")
     valid, reasons = judge_rep(metrics_from_row(row), thr)
     extras = [r for r in old_reasons if r in COMMIT_REASONS]
     in_challenge = bool(row.get("in_challenge"))

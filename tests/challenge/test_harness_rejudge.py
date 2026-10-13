@@ -132,9 +132,19 @@ def test_missing_labels_and_missing_clip_exit_2(tmp_path, capsys):
     assert ev.main(["--clips-dir", str(tmp_path), "--labels", str(tmp_path / "l.yaml")]) == 2
 
 
+# j3 made the DEFAULT thresholds lenient (owner decision, docs/challenge/CALIBRATION.md "j3 lenient"): the synthetic
+# cheat categories (125 deg half reps, ~20 deg sag / -28 deg pike, 140 deg lockout, knee push-ups at ~141 deg) are
+# accepted by design. The ship gate is therefore run with the j2 strict values to pin the cheat-detection mechanics
+# (depth_drop_max matched to the 100 deg elbow limit because j3 accepts depth on either signal).
+STRICT_THR = {"min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 150, "knee_floor_margin": 0.02,
+              "hip_line_max_dev_deg": 17.5, "hip_pike_max_dev_deg": 20, "depth_elbow_max_deg": 100,
+              "depth_drop_max": 0.64, "lockout_min_deg": 150, "incline_max_deg": 9, "decline_max_deg": 23,
+              "min_rep_s": 0.8, "max_cadence_rpm": 60}
+
+
 def test_synthetic_run_passes_and_writes_results(tmp_path, capsys):
     thr = tmp_path / "thr.json"
-    thr.write_text("{}")
+    thr.write_text(json.dumps(STRICT_THR))
     assert ev.main(["--synthetic", "--bench", "--thresholds", str(thr), "--results-dir", str(tmp_path / "res")]) == 0
     out = capsys.readouterr().out
     assert "VERDICT: PASS" in out and "SHIP GATE" in out and "LATENCY per frame" in out
@@ -211,9 +221,12 @@ class FakeStore:
 def test_rejudge_skips_reps_of_another_judge_family():
     # j1 stored shoulder_wrist_drop as an absolute drop (0.1 would read as a j2 ratio far below depth_drop_max either
     # way, so use a value that j2 would reject): such a rep must be kept as stored, not re-judged with j2 gates
+    # (j3: depth passes on either signal, so the re-judged rep's elbow is shallow too; j2 rows are re-judged as well,
+    # see test_rejudge_rejudges_j2_rows_under_j3)
     rows = [row(1, judge_version="j1", shoulder_wrist_drop=1.2), row(2, judge_version="j1.rejudge.20261015",
             shoulder_wrist_drop=1.2), row(3, judge_version=None, shoulder_wrist_drop=1.2),
-            row(4, judge_version=f"{JUDGE_VERSION}.rejudge.20261020", shoulder_wrist_drop=1.2)]
+            row(4, judge_version=f"{JUDGE_VERSION}.rejudge.20261020", shoulder_wrist_drop=1.2, min_elbow_deg_l=140.0,
+                min_elbow_deg_r=140.0)]
     d = rj.rejudge_rows(rows, {})
     assert [x.changed for x in d] == [False, False, False, True]
     assert all(x.skipped and x.new_valid and x.new_points == 1 for x in d[:3]) and d[3].skipped is None
@@ -223,6 +236,16 @@ def test_rejudge_skips_reps_of_another_judge_family():
     st = FakeStore(rows)
     assert rj.apply_changes(st, d, {}, "v", "a", "r")["changed"] == 1
     assert [c["rep_id"] for c in st.calls[-1][1]["p_changes"]] == ["r4"]
+
+
+def test_rejudge_rejudges_j2_rows_under_j3():
+    # j2 metrics are a stricter reading of the same quantities, so j3 re-judges them (gates.REJUDGE_FAMILIES); a
+    # commit-time liveness_fail stays (the call was played under the liveness rule)
+    hips = dict(judge_version="j2", valid=False, points=0, reject_reasons=["hips_pike"], max_hip_line_dev_deg=-23.0)
+    rows = [row(1, **hips), row(2, **dict(hips, reject_reasons=["hips_pike", "liveness_fail"]))]
+    d = rj.rejudge_rows(rows, {})
+    assert [(x.skipped, x.new_valid, x.new_points) for x in d] == [(None, True, 1), (None, False, 0)]
+    assert d[1].new_reasons == ["liveness_fail"]
 
 
 def test_rejudge_row_unchanged_under_same_thresholds():

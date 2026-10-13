@@ -28,6 +28,8 @@ update_challenge_window (wall clock); windows also mark reps in_challenge here (
 Every recorded rep goes to lc.on_rep (reps earned: the result can no longer be 'skipped'). poll 'skipped' (no rep
 earned, nobody in frame) mid-count -> ONE reschedule in the remaining window. Without a pass every valid rep is
 committed as liveness_fail; 'fail' goes to the payload as liveness_result (the DB voids the call).
+Since j3 the challenge is OFF unless thr['liveness_enabled'] is true (competition_config.judge_thresholds): no
+challenge is scheduled, no challenge cue or window, reps keep their judge verdict and liveness_result is 'skipped'.
 
 Checkpoint: data/tmp/sessions/<call_id>.challenge.json (CHALLENGE_SESSIONS_DIR overrides), atomic (tmp + fsync +
 os.replace), written on accept, after every rep and at every end step; `committed` turns true only after both
@@ -497,7 +499,15 @@ class CompetitionCall:
             self.liveness_fires.append(fire)
         return fire
 
+    def liveness_enabled(self) -> bool:
+        """thr['liveness_enabled'] (default False since j3): off = no challenge is ever scheduled, no challenge cue or
+        window, every judged rep counts on its own verdict and the call commits liveness_result 'skipped'."""
+        return self.thr.get("liveness_enabled") is True
+
     def _schedule_liveness(self, rel: float = 0.0) -> None:
+        if not self.liveness_enabled():
+            self.liveness_result, self.lc = "skipped", None    # also overrides a result adopted from a checkpoint
+            return
         if self.liveness_result is not None:
             return
         latest = self._liveness_latest()
@@ -696,7 +706,7 @@ class CompetitionCall:
         """The reps as committed: in_challenge recomputed from the final windows (a FREEZE deadline that shrank after
         the judge flagged a rep no longer covers it); without a passed challenge every valid rep is marked
         liveness_fail (C7.l: earned reps never count without a pass)."""
-        mark = self.liveness_result != "pass"
+        mark = self.liveness_enabled() and self.liveness_result != "pass"
         out = []
         for r in self.reps:
             r = dict(r, reject_reasons=list(r["reject_reasons"]))

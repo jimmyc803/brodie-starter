@@ -142,13 +142,14 @@ def _wrist_for(B: dict, knees_down: bool, depth: float) -> np.ndarray:
 
 def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bool = False, hip_offset: float = 0.0,
                   n_reps: int = 5, rep_s: float = 2.0, noise: float = 0.0, extra_person: bool = False,
-                  occlude_lower_body: bool = False, side: str = "left", body: str = "average", fps: float = 10.0,
+                  occlude_lower_body: bool = False, occlude_arms: bool = False, side: str = "left", body: str = "average", fps: float = 10.0,
                   lead_in_s: float = 1.0, tail_s: float = 0.5, aspect: float = 16 / 9, seed: int = 0,
                   bottom_hold_s: float = 0.0, hand_motions: list | tuple = (), far_vis: float = 0.45,
                   pauses: list | tuple = (), camera_shifts: list | tuple = ()) -> SynthClip:
     """Side-view plank push-up clip at `fps`. depth / lockout = elbow angle (deg) at the bottom / top of every rep.
     fire_times = the end of each rep cycle (back at the top), when a rep counter would fire. n_reps=0 = a plank hold.
-    hand_motions / far_vis / pauses / camera_shifts: see the module docstring."""
+    hand_motions / far_vis / pauses / camera_shifts: see the module docstring. occlude_lower_body / occlude_arms: knees,
+    ankles and feet / both shoulders, elbows and wrists at visibility 0.08 in every frame."""
     if not 0.0 <= bottom_hold_s < rep_s:
         raise ValueError("bottom_hold_s must be in [0, rep_s)")
     if side not in ("left", "right"):
@@ -257,10 +258,14 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
             for idx in (25, 26, 27, 28, 29, 30, 31, 32):
                 img[idx, 3] = 0.08
                 img[idx, 4] = 0.3
+        if occlude_arms:
+            for idx in (11, 12, 13, 14, 15, 16):
+                img[idx, 3] = 0.08
+                img[idx, 4] = 0.3
         frames.append(FrameObs(t=t, img=img, world=world, persons=2 if extra_person else 1, aspect=aspect))
     meta = dict(depth=depth, lockout=lockout, knees_down=knees_down, hip_offset=hip_offset, n_reps=n_reps, rep_s=rep_s,
                 noise=noise, bottom_hold_s=bottom_hold_s, extra_person=extra_person,
-                occlude_lower_body=occlude_lower_body, side=side, body=body,
+                occlude_lower_body=occlude_lower_body, occlude_arms=occlude_arms, side=side, body=body,
                 fps=fps, seed=seed, hand_motions=[tuple(m) for m in hand_motions], far_vis=far_vis,
                 pauses=pz, camera_shifts=[tuple(c) for c in camera_shifts])
     return SynthClip(frames=frames, fire_times=fires, meta=meta)

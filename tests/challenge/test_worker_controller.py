@@ -160,14 +160,17 @@ def factory(*outcomes, fire=None, **kw):
 
 
 class Rig:
-    def __init__(self, tmp_path, disp=None, liveness=None, hangup="unverified", reveal="audio_only", start=None, **kw):
+    def __init__(self, tmp_path, disp=None, liveness=None, hangup="unverified", reveal="audio_only", start=None,
+                 judge_cfg=None, **kw):
         self.clock = Clock()
         self.disp = disp or Dispatcher(start=start)
         self.client = DispatcherClient("http://dispatcher", "tok", timeout=3, retries=3, backoff_s=0.5,
                                        transport=httpx.MockTransport(self.disp), sleep=self.clock.sleep, monotonic=self.clock)
         self.said, self.left, self.windows, self.alerts = [], [], [], []
         self.dir = str(tmp_path / "sessions")
-        self.call = CompetitionCall("call-1", "line-1", "+15550001", self.client, {}, clock=self.clock,
+        # the liveness challenge is off by default since j3 (thresholds liveness_enabled); these rigs test it ON
+        cfg = {"liveness_enabled": True} if judge_cfg is None else judge_cfg
+        self.call = CompetitionCall("call-1", "line-1", "+15550001", self.client, cfg, clock=self.clock,
                                     say=lambda k, text, urgent: self.said.append((round(self.clock.t - T0, 2), k, urgent)),
                                     leave=lambda why: self.left.append((round(self.clock.t - T0, 2), why)),
                                     update_challenge_window=lambda a, b: self.windows.append((a - T0, b - T0)),
@@ -436,6 +439,39 @@ def test_rescheduled_challenge_knows_reps_already_earned(tmp_path):
     assert len(FakeLiveness.made) == 2 and FakeLiveness.made[1].reps == [63.0] and FakeLiveness.made[0].reps == []
 
 
+def _no_liveness(rng, thr):
+    raise AssertionError("liveness challenge built while liveness_enabled is off")
+
+
+@pytest.mark.parametrize("judge_cfg,start_cfg", [
+    ({}, {}),                                                            # j3 default: off
+    ({"liveness_enabled": True}, {"judge_thresholds": {"liveness_enabled": False}}),   # live config turns it off
+])
+def test_liveness_off_every_judged_rep_counts_and_no_challenge(tmp_path, judge_cfg, start_cfg):
+    async def go():
+        r = Rig(tmp_path, liveness=_no_liveness, judge_cfg=judge_cfg,
+                start={"decision": "accept", "user_id": "u1", "reason": "ok", "cue": None, "config": start_cfg})
+        assert await r.call.start() is True
+        r.call.judge_applied()
+        for i, rel in enumerate((20, 61, 62, 120)):
+            await r.advance(rel)
+            r.call.on_rep(rep_ev(valid=(rel != 62), n=i + 1), t=T0 + rel)
+        await r.advance(196)
+        res = await r.call.end("complete")
+        return r, res
+    r, res = run(go())
+    assert r.call.liveness_enabled() is False and r.call.lc is None
+    assert not [k for k in r.keys() if k.startswith("challenge_")] and r.windows == []
+    assert "time_up" in r.keys() and res["committed"] is True
+    body = _payload(r.disp)
+    reps = body["reps"]
+    assert [x["t"] for x in reps] == [20.0, 61.0, 62.0, 120.0]
+    assert [x["valid"] for x in reps] == [True, True, False, True]
+    assert reps[2]["reject_reasons"] == ["too_shallow"]
+    assert not [x for x in reps if "liveness_fail" in x["reject_reasons"]]
+    assert body["liveness_result"] == "skipped" and r.ckpt()["liveness_result"] == "skipped"
+
+
 def test_go_cue_played_and_shrunk_deadline_pushed(tmp_path):
     async def go():
         r = Rig(tmp_path, liveness=factory("pass", fire=60.0, cue="challenge_freeze", go=1.0, after=2.5, timeout=10.0))
@@ -629,7 +665,7 @@ def test_privacy_full_call_writes_no_media(tmp_path, monkeypatch):
     monkeypatch.setenv("DISPATCHER_URL", "http://dispatcher")
     monkeypatch.setenv("DISPATCHER_TOKEN", "tok")
     disp = Dispatcher(start={"decision": "accept", "user_id": "u1", "reason": "ok", "cue": None, "power_hour_active": False,
-                             "config": {"judge_thresholds": {"cue_min_gap_s": 6}}})
+                             "config": {"judge_thresholds": {"cue_min_gap_s": 6, "liveness_enabled": True}}})
     clock = Clock()
 
     async def yield_sleep(dt):
@@ -859,7 +895,7 @@ def test_liveness_transitions_checkpointed_immediately(tmp_path):
 def test_live_thresholds_wait_for_the_pipeline_judge(tmp_path):
     async def go():
         cfgs = []
-        r = Rig(tmp_path, on_config=cfgs.append,
+        r = Rig(tmp_path, on_config=cfgs.append, judge_cfg={},
                 start={"decision": "accept", "user_id": "u1", "reason": "ok", "cue": None,
                        "config": {"judge_thresholds": {"cue_min_gap_s": 9}}})
         await r.call.start()

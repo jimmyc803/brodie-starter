@@ -9,7 +9,7 @@ import { ufcFighterCopy } from "@/lib/mappers";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "Rules",
-  description: "How strict push-ups are judged, scored and ranked in the Brodie Push-Up Challenge.",
+  description: "How push-ups are judged, scored and ranked in the Brodie Push-Up Challenge.",
 };
 
 const TOC = [
@@ -95,16 +95,16 @@ export default async function RulesPage() {
         />
       </Block>
 
-      <Block id="standard" index="02" title="The strict rep standard">
+      <Block id="standard" index="02" title="The rep standard">
         <ul className="grid gap-2 sm:grid-cols-2">
           {[
-            "Whole body in frame from the side: shoulders, hips, knees, ankles.",
+            "Your arms and shoulders in frame. Side or diagonal view works best; your feet can be out of frame.",
             "Only you in frame.",
-            "Knees off the floor the entire rep.",
-            "Straight line from shoulders to ankles.",
-            "Chest down until elbows hit 90° or lower.",
-            "Full lockout at the top before the next rep.",
-            "No rushing: each rep takes at least ~0.8 seconds.",
+            "Push-ups from your toes, not your knees.",
+            "Body roughly in a plank. A small hip sag or pike is fine.",
+            "Go down until your elbows are bent to about 90-120°.",
+            "Straighten your arms at the top before the next rep.",
+            "No bouncing: each rep takes at least about half a second.",
           ].map((t) => (
             <li key={t} className="card-flat flex gap-3 px-4 py-3">
               <CheckIcon className="mt-0.5 size-4 shrink-0 text-blue" />
@@ -113,11 +113,6 @@ export default async function RulesPage() {
           ))}
         </ul>
         <RepIllustrations />
-        <p className="border-2 border-dashed border-ink bg-yellow/60 px-4 py-3 text-sm leading-relaxed text-ink-2">
-          <strong className="text-ink">Liveness check.</strong> Once per call you get a quick challenge (for example,
-          tap your left shoulder). Reps during it do not count and are not penalized. Fail it twice and that
-          call&apos;s reps are voided.
-        </p>
       </Block>
 
       <Block id="calls" index="03" title="Calls and the queue">

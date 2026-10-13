@@ -96,11 +96,16 @@ def test_status_filter_hysteresis():
     assert f.update(ST_PLANK) == ST_PLANK
 
 
-def _feed(pm, lm, n=5, t0=0.0):
+# The mirror colours follow whatever thresholds it is given. These fixtures were drawn for the strict j2 gate values
+# (judge j3 defaults are lenient: hip 30, depth 125, lockout 135), so the geometry tests pin those values explicitly.
+J2_THR = dict(DEFAULT_THRESHOLDS, hip_line_max_dev_deg=17.5, depth_elbow_max_deg=100, lockout_min_deg=150)
+
+
+def _feed(pm, lm, n=5, t0=0.0, thr=DEFAULT_THRESHOLDS):
     rgb = np.full((720, 1280, 3), 100, np.uint8)
     img = None
     for k in range(n):
-        img = pm.render(rgb, lm.copy(), DEFAULT_THRESHOLDS, MirrorState(), now=t0 + 0.1 * k, seq=k + int(t0 * 100))
+        img = pm.render(rgb, lm.copy(), thr, MirrorState(), now=t0 + 0.1 * k, seq=k + int(t0 * 100))
     return img
 
 
@@ -110,10 +115,10 @@ def test_good_plank_is_green_and_sagging_hips_are_red():
     assert img.shape == (1280, 720, 3) and img.dtype == np.uint8
     body, legs, arm, hip_lab, knee_lab = pm._colors()
     assert pm.status.shown == ST_GOOD and body == GOOD and legs == GOOD and hip_lab is None
-    _feed(pm, plank(hip_y=0.61), t0=1.0)
+    _feed(pm, plank(hip_y=0.61), t0=1.0, thr=J2_THR)
     body, legs, arm, hip_lab, knee_lab = pm._colors()
     assert body == BAD and hip_lab == 'HIPS SAGGING'
-    assert pm.form.dev > DEFAULT_THRESHOLDS['hip_line_max_dev_deg']
+    assert pm.form.dev > J2_THR['hip_line_max_dev_deg']
 
 
 def test_colours_follow_the_live_thresholds():
@@ -140,15 +145,15 @@ def test_front_view_is_good_but_draws_no_body_line_verdict():
 
 def test_depth_latch_per_rep():
     pm = PushupMirror(mascot=False)
-    lm = plank(); _feed(pm, lm)
+    lm = plank(); _feed(pm, lm, thr=J2_THR)
     assert not pm.depth_hit
     bent = plank(); bent[13, :2] = (0.30, 0.62); bent[15, :2] = (0.36, 0.70)         # elbow well under 100 deg
-    _feed(pm, bent, t0=1.0)
-    assert pm.form.elbow <= DEFAULT_THRESHOLDS['depth_elbow_max_deg'] and pm.depth_hit
-    _feed(pm, lm, t0=2.0); assert pm.depth_hit                                       # still this rep at the top
+    _feed(pm, bent, t0=1.0, thr=J2_THR)
+    assert pm.form.elbow <= J2_THR['depth_elbow_max_deg'] and pm.depth_hit
+    _feed(pm, lm, t0=2.0, thr=J2_THR); assert pm.depth_hit                                       # still this rep at the top
     mid = plank(); mid[13, :2] = (0.30, 0.62); mid[15, :2] = (0.36, 0.74)            # ~102 deg: descending, not deep yet
-    _feed(pm, mid, t0=3.0)
-    assert DEFAULT_THRESHOLDS['depth_elbow_max_deg'] < pm.form.elbow < DEFAULT_THRESHOLDS['lockout_min_deg'] - 10
+    _feed(pm, mid, t0=3.0, thr=J2_THR)
+    assert J2_THR['depth_elbow_max_deg'] < pm.form.elbow < J2_THR['lockout_min_deg'] - 10
     assert not pm.depth_hit                                                             # the next descent started
 
 

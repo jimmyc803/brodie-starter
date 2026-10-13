@@ -34,33 +34,39 @@ Evidence rule (D-16): no single frame decides a gate in either direction.
   * persons_in_frame is the 2nd-highest RAW count: any 2 frames of the rep (consecutive or not) with > 1 person.
   With a single eligible value the metric is that value.
 
-Per-frame values, all median-filtered as above ("good" frame = all six visible-side keypoints at conf >= min_conf;
+Per-frame values, all median-filtered as above. j3 (lenient, docs/challenge/CALIBRATION.md "j3 lenient"): each value
+needs only its own keypoints at conf >= min_conf, so feet / ankles / knees outside the frame or an occluded far side
+never make the arm signals unmeasurable; a value whose keypoints are missing is None and its gate is skipped. Knee and
+ankle need conf >= leg_min_conf (higher than min_conf: pose models extrapolate legs outside the frame at about 0.4-0.6,
+real visible-side legs read >= 0.8).
 torso_len = per-side exponential moving average (alpha 0.1, carried across reps until reset) of |shoulder - hip| in
-height units over good frames):
-  elbow    angle shoulder-elbow-wrist (deg).            knee   angle hip-knee-ankle (deg).
+height units over frames with both confident (its last value is used while the hip is not visible):
+  elbow    angle shoulder-elbow-wrist (deg)                          [shoulder, elbow, wrist]
+  knee     angle hip-knee-ankle (deg)                                [hip, knee*, ankle*]   (* = leg_min_conf)
   dev      180 - angle(shoulder, hip, ankle), + when the hip lies below the shoulder-ankle line (larger image y,
-           toward the floor = sag), - above (pike).
+           toward the floor = sag), - above (pike). Ankle not confident: the shoulder-hip-knee line instead.
   kc       knee contact height: kh = knee height above the floor line / torso_len, + upward. Floor line = line
-           through the per-side EMAs (alpha 0.1, over good frames, carried across reps) of the wrist and ankle
-           points, which rest on the floor in a plank. kc = kh while the knee is bent (knee < KNEE_CONTACT_MAX_DEG),
-           else max(kh, CONTACT_OFF): with straight legs the wrist-ankle line is not the floor under the knee
-           (camera perspective, hands on raised handles), so a straight knee is judged by the pivot test
-           instead (knee_floor_contact). None while the two EMA points coincide.
+           through the per-side EMAs (alpha 0.1, carried across reps) of the wrist and ankle points, which rest on
+           the floor in a plank; None in a frame without a confident knee and ankle.
+           kc = kh, except max(kh, CONTACT_OFF) when the knee angle is measured >= KNEE_CONTACT_MAX_DEG (a straight
+           leg is not resting on its knee; camera perspective / raised handles can put it near the line).
   sup      support-line tilt (deg) = atan2(ankle_y - wrist_y, |wrist_x - ankle_x|): + when the wrists are higher
            in the image than the ankles (incline, hands on a bench), - decline (feet raised). Not median-filtered.
   gap      (elbow_y - shoulder_y) / torso_len; <= 0 means the shoulder is at or below elbow height.
-  drop     (wrist_y - shoulder_y) / torso_len.
+  drop     wrist_y - shoulder_y (height units; the shoulder's height above the wrist)   [shoulder, elbow, wrist]
 Metric definitions (sel = judged frames, see above; n = len(sel)):
   side                  'left'|'right': side whose six keypoints have the higher mean visibility over the window
                         (ties -> left); 'none' when no frame has landmarks.
-  frame_conf_frac       (# good frames in sel) / n; 0 when n == 0.
+  frame_conf_frac       j3: (# sel frames whose shoulder, elbow and wrist are confident on at least one side) / n;
+                        0 when n == 0 (the upper body only: legs outside the frame do not lower it).
   min_keypoint_conf     min over sel of the min visible-side keypoint conf (frames without landmarks = 0).
   persons_in_frame      2nd-highest per-frame person count: > 1 iff >= 2 frames of the rep report more than one person.
   min_elbow_deg_l / _r  2nd-lowest filtered elbow angle of that side over frames where its shoulder, elbow and wrist
-                        are confident.
-  top_elbow_deg         2nd-highest visible-side elbow angle over the whole window's good frames (the lockout).
-  min_knee_deg          2nd-lowest visible-side knee angle over good frames.
-  max_hip_line_dev_deg  hi = 2nd-highest and lo = 2nd-lowest dev over good frames, each judged against its own limit:
+                        are confident (the depth gate uses the better side).
+  top_elbow_deg         2nd-highest visible-side elbow angle over the whole window (the lockout); the other side's
+                        when the visible side's arm is never confident.
+  min_knee_deg          2nd-lowest visible-side knee angle (None without a confident hip, knee and ankle).
+  max_hip_line_dev_deg  hi = 2nd-highest and lo = 2nd-lowest dev, each judged against its own limit:
                         the stored value is hi if hi - hip_line_max_dev_deg >= -lo - hip_pike_max_dev_deg, else lo
                         (the side that exceeds its limit by more), so the live verdict reports hips_sag iff >= 2
                         frames sag beyond the sag limit (unless the pike violation is larger) and likewise for pike.
@@ -68,22 +74,23 @@ Metric definitions (sel = judged frames, see above; n = len(sel)):
                         reset: the pike side (2nd-lowest) counts from the first judged frame with
                         dev >= -hip_pike_max_dev_deg (hips coming down from the walk-in excluded); all judged frames if
                         there is none. The sag side always uses every judged frame.
-  knee_floor_contact    2nd-lowest kc < knee_floor_margin (>= 2 bent-knee frames within the margin of the floor) OR
-                        the knee is planted (_knee_pivot): it is near the floor line and the hips show no plank
-                        co-movement (knee height does not follow hip height, or the hips barely move). Catches knees
-                        resting on the floor at any knee angle; translation-invariant (one per-rep origin and scale).
-  shoulder_elbow_gap    2nd-lowest gap over good frames. Informational only since j2.
-  shoulder_wrist_drop   j2: (2nd-lowest drop) / (2nd-highest drop) over good frames = the shoulder's height above
-                        the wrist at the bottom as a fraction of that at the lockout (90 deg elbow ~ 0.55, 125 deg
-                        ~ 0.85); None when the 2nd-highest drop <= 0. Depth gate (depth_drop_max).
+  knee_floor_contact    2nd-lowest kc < knee_floor_margin (>= 2 frames with the knee within the margin of the floor);
+                        None when the knee is never measurable. j3: no pivot heuristic (judge: knees_down also needs
+                        a measured knee angle < knee_min_deg when there is one).
+  shoulder_elbow_gap    2nd-lowest gap. Informational only since j2.
+  shoulder_wrist_drop   (2nd-lowest drop) / (2nd-highest drop) = the shoulder's height above the wrist at the bottom
+                        as a fraction of that at the lockout (90 deg elbow ~ 0.55, 125 deg ~ 0.85); None when the
+                        2nd-highest drop <= 0. View-robust depth evidence (a front or diagonal view foreshortens the
+                        elbow angle, not the shoulder's travel toward the hands).
   rep_duration_s        t_fire - window start (previous fire, or first frame after reset).
   cadence_rpm           C5 addition: 60 * 5 / (sum of the last 5 rep durations, this one included) once 5 reps were
                         closed since reset; None before.
-  torso_ok              given by the caller (RepCounter2 prone gate) or, when None, computed with
-                        rtcoach.repcount2.body_state + gate_ok('prone') per good frame: True iff >= 80% of good frames
-                        pass (False when there are no good frames); in both cases AND -decline_max_deg <= median(sup)
-                        <= incline_max_deg when any sup exists.
-Every geometric metric is None when no good frame exists (gates.judge_rep then reports not_in_frame).
+  torso_ok              given by the caller or, when None, computed with rtcoach.repcount2.body_state +
+                        gate_ok('prone') per sel frame with a confident shoulder and hip (all sel frames with landmarks
+                        when there is none): True iff >= TORSO_OK_FRAC of them pass (False without any); in both cases
+                        AND -decline_max_deg <= median(sup) <= incline_max_deg when any sup exists.
+Every geometric metric is None when its keypoints are never confident (gates.judge_rep then skips its gate; no arm
+signal at all reports not_in_frame).
 Angles are rounded to 0.01 deg and ratios to 1e-4 (below float32 `real` storage precision, so re-judging stored
 metrics reproduces the live verdict and an exact 90.000 deg bottom is not lost to float error).
 """
@@ -100,14 +107,10 @@ from challenge.judge.gates import merged_thresholds
 SIDES = {"left": (11, 13, 15, 23, 25, 27), "right": (12, 14, 16, 24, 26, 28)}
 SH, EL, WR, HP, KN, AN = range(6)
 CADENCE_REPS = 5
-TORSO_OK_FRAC = 0.8
+TORSO_OK_FRAC = 0.6
 EVIDENCE_FRAMES = 2       # a gate is decided by the k-th most extreme frame (D-16)
 TOP_SLACK_DEG = 10.0      # rep-start rule: a "top" frame has filtered elbow >= lockout_min_deg - TOP_SLACK_DEG
 CONTACT_OFF = 1.0         # kc of a frame whose knee is not bent (above any knee_floor_margin)
-KNEE_PIVOT_SLOPE = 0.2       # knee-height / hip-height slope below which the knee does not ride with the hips
-KNEE_PIVOT_MIN_HIP = 0.2     # hip travel (smoothed range, torso lengths) needed for plank evidence; below = planted
-KNEE_PIVOT_MIN_FRAMES = 6
-KNEE_PIVOT_MAX_KF = 0.1       # ...and the knee must be low: 2nd-lowest height above the wrist-ankle floor line (torso)
 KNEE_CONTACT_MAX_DEG = 160.0  # knee angle below which a knee near the floor line counts as contact (CALIBRATION.md)
 EMA_ALPHA = 0.1
 _EPS = 1e-9
@@ -204,20 +207,17 @@ class _SideFrame:
     median-filtered values when the frame is folded into the window."""
     vis: float | None
     conf_min: float
-    good: bool
     elbow_side: float | None          # elbow angle when shoulder/elbow/wrist are confident
-    elbow: float | None = None        # the rest only for good frames
+    elbow: float | None = None        # each one only when its keypoints are confident
     knee: float | None = None
     dev: float | None = None
     kc: float | None = None
     gap: float | None = None
     drop: float | None = None
     sup: float | None = None          # support-line tilt (deg), not median-filtered (the rep uses its median)
-    yk: float | None = None           # raw image y of knee / hip / ankle and the torso length (same units), not
-    yh: float | None = None           # median-filtered: the knee's motion relative to the hip tells a knee resting on
-    ya: float | None = None           # the floor from a plank (_knee_features)
-    tor: float | None = None
-    kf: float | None = None           # raw knee height above the floor line (kh before the bent-knee rule)
+    tilt: float | None = None         # world support-line tilt (deg), not median-filtered (the rep uses its median)
+    arm: bool = False                 # shoulder, elbow and wrist confident (upper body measurable)
+    torso: bool = False               # shoulder and hip confident (torso_ok evidence)
     prone: bool = False
 
 
@@ -237,7 +237,6 @@ class _Med:
 
 
 _SIGNALS = ("elbow_side", "elbow", "knee", "dev", "kc", "gap", "drop")
-_GOOD_SIGNALS = ("elbow", "knee", "dev", "kc", "gap", "drop")
 
 
 @dataclass
@@ -274,10 +273,8 @@ class RepMetricsAccumulator:
         self._persons.append(float(r.persons))
         for s, sf in r.sides.items():
             med = self._med[s]
-            sf.elbow_side = med["elbow_side"].add(sf.elbow_side)
-            if sf.good:
-                for k in _GOOD_SIGNALS:
-                    setattr(sf, k, med[k].add(getattr(sf, k)))
+            for k in _SIGNALS:
+                setattr(sf, k, med[k].add(getattr(sf, k)))
             self._win[s].append(sf)
 
     def add_frame(self, f: FrameObs) -> None:
@@ -314,44 +311,57 @@ class RepMetricsAccumulator:
 
     # -- per frame ---------------------------------------------------------------------------------------------
     def _side_frame(self, f: FrameObs, side: str) -> _SideFrame:
+        """j3: each signal is computed from the keypoints it needs only, so a cut-off or occluded lower body leaves the
+        arm signals (elbow, drop) measurable and the leg signals None (their gates are then skipped)."""
         if f.img is None:
-            return _SideFrame(vis=None, conf_min=0.0, good=False, elbow_side=None)
+            return _SideFrame(vis=None, conf_min=0.0, elbow_side=None)
         ix = SIDES[side]
         min_conf = float(self.thr["min_conf"])
         conf = _conf(f.img, ix)
         vis = float(np.nan_to_num(np.mean(np.nan_to_num(f.img[list(ix), 3].astype(float), nan=0.0))))
         P = f.img[list(ix), :2].astype(float) * np.array([f.aspect, 1.0])
-        arm_ok = bool(np.all(conf[[SH, EL, WR]] >= min_conf))
-        good = bool(np.all(conf >= min_conf))
-        sf = _SideFrame(vis=vis, conf_min=float(conf.min()), good=good,
+        ok = conf >= min_conf
+        leg = conf >= float(self.thr["leg_min_conf"])   # knee / ankle: pose models extrapolate legs out of frame
+        arm_ok = bool(ok[SH] and ok[EL] and ok[WR])
+        sf = _SideFrame(vis=vis, conf_min=float(conf.min()),
                         elbow_side=angle_deg(P[SH], P[EL], P[WR]) if arm_ok else None)
-        if not good:
-            return sf
-        e = self._ema[side]
-        torso = float(e["torso"].add(float(np.linalg.norm(P[SH] - P[HP]))))
-        w0 = e["wr"].add(P[WR].copy())
-        a0 = e["an"].add(P[AN].copy())
-        sf.elbow = sf.elbow_side
-        sf.knee = angle_deg(P[HP], P[KN], P[AN])
-        sf.dev = hip_line_dev_deg(P[SH], P[HP], P[AN])
-        dx = abs(float(P[WR, 0] - P[AN, 0]))
-        if dx > _EPS or abs(float(P[AN, 1] - P[WR, 1])) > _EPS:
-            sf.sup = math.degrees(math.atan2(float(P[AN, 1] - P[WR, 1]), dx))
-        if torso > _EPS:
-            sf.gap = float((P[EL, 1] - P[SH, 1]) / torso)
-            sf.drop = float((P[WR, 1] - P[SH, 1]) / torso)
-            d = a0 - w0
-            L = float(np.linalg.norm(d))
-            if L > _EPS:
-                nrm = np.array([-d[1], d[0]]) / L
-                if nrm[1] > 0:
-                    nrm = -nrm                   # point up the image (away from the floor)
-                kh = float((P[KN] - w0) @ nrm) / torso
-                sf.yk, sf.yh, sf.ya, sf.tor = float(P[KN, 1]), float(P[HP, 1]), float(P[AN, 1]), torso
-                sf.kf = kh
-                bent = math.isfinite(sf.knee) and sf.knee < KNEE_CONTACT_MAX_DEG
-                sf.kc = kh if bent else max(kh, CONTACT_OFF)
+        sf.arm, sf.torso = arm_ok, bool(ok[SH] and ok[HP])
         sf.prone = _prone(f)
+        e = self._ema[side]
+        torso = None
+        if sf.torso:
+            torso = float(e["torso"].add(float(np.linalg.norm(P[SH] - P[HP]))))
+        elif e["torso"].v is not None:
+            torso = float(e["torso"].v)
+        w0 = e["wr"].add(P[WR].copy()) if ok[WR] else e["wr"].v
+        a0 = e["an"].add(P[AN].copy()) if leg[AN] else None
+        if arm_ok:
+            sf.elbow = sf.elbow_side
+            sf.drop = float(P[WR, 1] - P[SH, 1])     # shoulder height above the wrist (height units; only its ratio counts)
+        if ok[HP] and leg[KN] and leg[AN]:
+            sf.knee = angle_deg(P[HP], P[KN], P[AN])
+        if ok[SH] and ok[HP] and leg[AN]:
+            sf.dev = hip_line_dev_deg(P[SH], P[HP], P[AN])
+        elif ok[SH] and ok[HP] and leg[KN]:
+            sf.dev = hip_line_dev_deg(P[SH], P[HP], P[KN])   # ankles out of frame: the shoulder-hip-knee line
+        if ok[WR] and leg[AN]:
+            sf.tilt = _world_tilt(f.world, ix[WR], ix[AN])
+            dx = abs(float(P[WR, 0] - P[AN, 0]))
+            if dx > _EPS or abs(float(P[AN, 1] - P[WR, 1])) > _EPS:
+                sf.sup = math.degrees(math.atan2(float(P[AN, 1] - P[WR, 1]), dx))
+        if torso is not None and torso > _EPS:
+            if ok[SH] and ok[EL]:
+                sf.gap = float((P[EL, 1] - P[SH, 1]) / torso)
+            if leg[KN] and w0 is not None and a0 is not None:
+                d = a0 - w0
+                L = float(np.linalg.norm(d))
+                if L > _EPS:
+                    nrm = np.array([-d[1], d[0]]) / L
+                    if nrm[1] > 0:
+                        nrm = -nrm                   # point up the image (away from the floor)
+                    kh = float((P[KN] - w0) @ nrm) / torso
+                    knee_ok = sf.knee is not None and math.isfinite(sf.knee)
+                    sf.kc = max(kh, CONTACT_OFF) if knee_ok and sf.knee >= KNEE_CONTACT_MAX_DEG else kh
         return sf
 
     # -- per rep -----------------------------------------------------------------------------------------------
@@ -385,15 +395,17 @@ class RepMetricsAccumulator:
         F = self._win.get(side, wl)
         sel = self._select(F)
         S = [F[i] for i in sel]
-        G = [f for f in S if f.good]
         persons = _kth_high(self._persons)
         if torso_ok is None:
-            torso_ok = bool(G) and sum(f.prone for f in G) >= TORSO_OK_FRAC * len(G)
-        sups = [f.sup for f in G if f.sup is not None]
+            T = [f for f in S if f.torso] or [f for f in S if f.vis is not None]
+            torso_ok = bool(T) and sum(f.prone for f in T) >= TORSO_OK_FRAC * len(T)
+        # j3: the incline / decline limit is judged on the support line in world landmarks (metres: a front or
+        # diagonal view does not tilt it the way perspective tilts the image line); the image line without world
+        sups = [f.tilt for f in S if f.tilt is not None] or [f.sup for f in S if f.sup is not None]
         if sups:
             sup = float(np.median(sups))
             torso_ok = bool(torso_ok) and -float(self.thr["decline_max_deg"]) <= sup <= float(self.thr["incline_max_deg"])
-        devs = [f.dev for f in G if f.dev is not None]
+        devs = [f.dev for f in S if f.dev is not None]
         sag_lim, pike_lim = float(self.thr["hip_line_max_dev_deg"]), float(self.thr["hip_pike_max_dev_deg"])
         pike_devs = devs
         if self._closed == 0:
@@ -407,62 +419,39 @@ class RepMetricsAccumulator:
         dev = None
         if hi is not None and lo is not None:
             dev = hi if (hi - sag_lim) >= (-lo - pike_lim) else lo
-        kc = _kth_low([f.kc for f in G])
-        pivot = _knee_pivot(G)
-        contact = None if kc is None else bool(kc < float(self.thr["knee_floor_margin"]) or pivot)
-        d_lo, d_hi = _kth_low([f.drop for f in G]), _kth_high([f.drop for f in G])
+        kc = _kth_low([f.kc for f in S])
+        contact = None if kc is None else bool(kc < float(self.thr["knee_floor_margin"]))
+        d_lo, d_hi = _kth_low([f.drop for f in S]), _kth_high([f.drop for f in S])
         drop = d_lo / d_hi if (d_lo is not None and d_hi is not None and d_hi > _EPS) else None
+        tops = [x for x in (_kth_high([f.elbow for f in wl]), _kth_high([f.elbow for f in wr])) if x is not None]
+        top = _kth_high([f.elbow for f in F])
+        if top is None and tops:
+            top = max(tops)                          # visible side's arm never confident: the other arm's lockout
+        arm_frames = sum(1 for i in sel if wl[i].arm or wr[i].arm)
         return RepMetrics(
             min_elbow_deg_l=_kth_low([wl[i].elbow_side for i in sel]),
             min_elbow_deg_r=_kth_low([wr[i].elbow_side for i in sel]),
-            top_elbow_deg=_kth_high([f.elbow for f in F if f.good]), max_hip_line_dev_deg=dev,
-            min_knee_deg=_kth_low([f.knee for f in G]),
+            top_elbow_deg=top, max_hip_line_dev_deg=dev,
+            min_knee_deg=_kth_low([f.knee for f in S]),
             knee_floor_contact=contact,
             shoulder_wrist_drop=drop,
             min_keypoint_conf=min(f.conf_min for f in S) if (S and side != "none") else 0.0,
-            frame_conf_frac=len(G) / len(S) if S else 0.0,
+            frame_conf_frac=arm_frames / len(sel) if sel else 0.0,
             persons_in_frame=int(persons) if persons is not None else 0,
             rep_duration_s=0.0, torso_ok=bool(torso_ok), side=side, classifier_labels=labels,
-            shoulder_elbow_gap=_kth_low([f.gap for f in G]))
+            shoulder_elbow_gap=_kth_low([f.gap for f in S]))
 
 
-def _knee_features(G: list[_SideFrame]) -> dict | None:
-    """Knee evidence over the judged good frames (heights up the image, in one per-rep torso length, from the median
-    ankle: translation of the whole body in the frame does not change them).
-    slope: least-squares d(knee height) / d(hip height) after a 3-frame moving average; travel: range (max - min) of
-    the smoothed hip height, so a bottom hold does not shrink it (both None under KNEE_PIVOT_MIN_FRAMES frames);
-    low: 2nd-lowest knee height above the wrist-ankle floor line."""
-    pts = [(f.ya, f.yh, f.yk, f.tor) for f in G if f.yk is not None]
-    if not pts:
+def _world_tilt(world: np.ndarray | None, wr: int, an: int) -> float | None:
+    """Support-line tilt in world landmarks (deg; y down): + wrist higher than the ankle (incline), - lower (decline),
+    against the horizontal distance in x/z. None without world landmarks or for a degenerate / non-finite line."""
+    if world is None:
         return None
-    A = np.array(pts, dtype=float)
-    scale = max(float(np.median(A[:, 3])), _EPS)
-    o = float(np.median(A[:, 0]))
-    x, y = (o - A[:, 1]) / scale, (o - A[:, 2]) / scale
-    out = {"slope": None, "travel": None, "low": _kth_low([f.kf for f in G])}
-    if len(x) >= KNEE_PIVOT_MIN_FRAMES:
-        k = np.ones(3) / 3.0                     # 3-frame moving average: per-frame jitter would flatten the slope
-        xs, ys = np.convolve(x, k, mode="valid"), np.convolve(y, k, mode="valid")
-        out["travel"] = float(xs.max() - xs.min())
-        out["slope"] = float(np.cov(xs, ys)[0, 1] / max(float(np.var(xs, ddof=1)), _EPS))
-    return out
-
-
-def _knee_pivot(G: list[_SideFrame]) -> bool:
-    """True when the knee is planted on the floor (knee push-up), whatever the knee angle. Only a knee near the floor
-    line counts (2nd-lowest height above the wrist-ankle line < KNEE_PIVOT_MAX_KF; straight plank legs over raised
-    handles or seen from a low camera can sit near it too). Such a knee is cleared only by plank evidence: in a plank
-    the pivot is the toes and the knee rides on the ankle-hip line, so its height follows the hip height at about its
-    fraction of the leg (slope ~0.5; real clean reps 0.46-0.72 where the knee is near the line; real knee push-ups
-    -0.94..-0.73). Planted iff the slope is < KNEE_PIVOT_SLOPE, or it cannot be measured: fewer than
-    KNEE_PIVOT_MIN_FRAMES frames or hip travel < KNEE_PIVOT_MIN_HIP (stationary hips with the torso pivoting at the hip
-    give no plank evidence, so they do not pass; real clean reps travel >= 0.26)."""
-    ft = _knee_features(G)
-    if ft is None or ft["low"] is None or ft["low"] >= KNEE_PIVOT_MAX_KF:
-        return False
-    if ft["slope"] is None or ft["travel"] < KNEE_PIVOT_MIN_HIP:
-        return True
-    return ft["slope"] < KNEE_PIVOT_SLOPE
+    d = world[an] - world[wr]
+    h = math.hypot(float(d[0]), float(d[2]))
+    if not (math.isfinite(h) and math.isfinite(float(d[1]))) or (h < _EPS and abs(float(d[1])) < _EPS):
+        return None
+    return math.degrees(math.atan2(float(d[1]), h))
 
 
 def _prone(f: FrameObs) -> bool:
