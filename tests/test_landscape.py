@@ -115,7 +115,7 @@ def test_landscape_render_shape_and_idle_card_stays_portrait():
         assert _render(PushupMirror(mascot=False), np.full(src, 90, np.uint8), True).shape == (720, 1280, 3)
 
 
-def test_landscape_full_bleed_fills_the_canvas_and_holds_still():
+def test_landscape_picture_fills_its_box_whole_and_holds_still():
     pm = PushupMirror(mascot=False)
     rgb = np.zeros(SRC, np.uint8); rgb[:] = (0, 255, 255)                 # a colour nothing else on the canvas uses
     boxes = set()
@@ -125,9 +125,13 @@ def test_landscape_full_bleed_fills_the_canvas_and_holds_still():
         boxes.add(pm.boxes['picture'])
     assert len(boxes) == 1                                                # the framing never twitches
     x0, y0, x1, y1 = boxes.pop()
-    assert (x0, y0, x1, y1) == (0, 0, pmod.LW, pmod.LH)                   # a 16:9-ish picture IS the screen
+    bx0, by0, bx1, by1 = pmod.LS_PIC_BOX
+    assert (x0, x1) == (bx0, bx1)                                         # a wide picture spans its whole box...
+    assert abs((y0 + y1) / 2 - (by0 + by1) / 2) <= 1                      # ...centred vertically inside it
+    assert abs((y1 - y0) - (bx1 - bx0) * SRC[0] / SRC[1]) <= 1            # whole, shape kept: nothing cropped
     m = np.all(img == (0, 255, 255), axis=2)
-    assert m[3, 3] and m[pmod.LH - 4, 3] and m[pmod.LH // 2, pmod.LW - 4] # video out to the canvas corners
+    assert m[y0 + 2, x0 + 2] and m[y1 - 3, x1 - 3]                        # video out to its own corners
+    assert not m[y0 - 4, x0] and not m[(y0 + y1) // 2, x1 + 4]            # and not an inch beyond the box
 
 
 def test_landscape_shows_a_tall_picture_whole_like_the_self_view():
@@ -137,12 +141,13 @@ def test_landscape_shows_a_tall_picture_whole_like_the_self_view():
     rgb = np.zeros((486, 274, 3), np.uint8); rgb[:] = (0, 255, 255)
     img = _render(pm, rgb, True)
     x0, y0, x1, y1 = pm.boxes['picture']
-    assert y0 == 0 and y1 == pmod.LH                                      # full height
-    assert abs((x1 - x0) - 274 * pmod.LH / 486) <= 1                      # the plain fit: the WHOLE picture
-    assert abs((x0 + x1) / 2 - pmod.LW / 2) <= 1                          # centred
+    bx0, by0, bx1, by1 = pmod.LS_PIC_BOX
+    assert (y0, y1) == (by0, by1)                                         # a tall picture spans its box's full height
+    assert abs((x1 - x0) - 274 * (by1 - by0) / 486) <= 1                  # the plain fit: the WHOLE picture
+    assert abs((x0 + x1) / 2 - (bx0 + bx1) / 2) <= 1                      # centred in the box
     m = np.all(img == (0, 255, 255), axis=2)
-    assert m[2, x0 + 2] and m[pmod.LH - 3, x1 - 3]                        # its corners are on the canvas
-    assert np.all(img[pmod.LH // 2, :x0 - 1] != (0, 255, 255)) and np.all(img[pmod.LH // 2, x1 + 1:] != (0, 255, 255))
+    assert m[y0 + 2, x0 + 2] and m[y1 - 3, x1 - 3]                        # its corners are on the canvas
+    assert np.all(img[(y0 + y1) // 2, :x0 - 1] != (0, 255, 255)) and np.all(img[(y0 + y1) // 2, x1 + 1:] != (0, 255, 255))
 
 
 def test_landscape_render_costs_no_more_than_portrait():
@@ -213,9 +218,10 @@ def test_facetime_fill_keeps_count_status_brodie_and_picture_on_screen(landscape
     for k in ('count', 'pill', 'mascot', 'timer'):
         assert inside(boxes[k], safe), (k, boxes[k], safe)
         assert not any(overlaps(boxes[k], z) for z in keep_out), (k, boxes[k])
-    if landscape:                                                         # full-bleed: the picture COVERS the visible area
+    if landscape:    # the picture lives in the safe band WHOLE: the phone's edge trim must never cut the body again
         px = boxes['picture']
-        assert px[0] <= vis[0] and px[2] >= vis[2] and px[1] <= vis[1] and px[3] >= vis[3], (px, vis)
+        assert inside(px, safe), (px, safe)
+        assert px[2] - px[0] >= 440 and not overlaps(px, boxes['count']), (px, boxes['count'])
     else:
         assert inside(boxes['picture'], vis)
     # what the pixels say: the count (3 vs 188) and Brodie (with vs without) change only on screen

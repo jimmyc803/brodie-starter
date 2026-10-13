@@ -109,11 +109,15 @@ LS_CROP_Y = 65
 LS_SAFE_X = 260                            # a live call (2026-10-13, image of the count ticket cut at the screen edge)
                                            # showed FaceTime/the phone trimming up to ~250 px off each side of the card
                                            # (a pinched or portrait-tile fill), so every overlay stays in the central
-                                           # band that survives any of the observed crops; the video itself is full-bleed
+                                           # band that survives any of the observed crops - the caller's picture too
+                                           # (full-bleed video lost its edges, and the body with them, to that trim)
 LS_SAFE_TOP = LS_CROP_Y + 15               # 80
 LS_SAFE_BOTTOM = LH - LS_CROP_Y - 15       # 640
 LS_PIP_W, LS_PIP_H = 220, 170              # self-view keep-out: x < LS_PIP_W or x > LW - LS_PIP_W, y > LH - LS_CROP_Y - LS_PIP_H
-LS_BLEED_MAX = 1.2                         # full-bleed only when covering crops less than this past the fit; else whole
+LS_PIC_BOX = (LS_SAFE_X, 224, 748, LS_SAFE_BOTTOM)   # the caller's WHOLE picture, fitted and centred in here: a live
+                                           # call (2026-10-13) showed the phone trimming ~250 px off each side of the
+                                           # card, which cut the head and feet off a full-bleed picture - so the
+                                           # picture itself now stays in the never-trimmed band, left of the count
 LS_MASCOT_H = 180
 LS_MASCOT_CX = 870                         # bottom centre-right, inside the trimmed band (and clear of the self-view)
 LS_MASCOT_FEET = LS_SAFE_BOTTOM
@@ -766,17 +770,17 @@ class PushupMirror:
 
     # -- landscape (sideways-only: the live layout of every competition call) ----------------------------------------
     def _ls_fill(self, rgb):
-        """The source -> output affine for the picture: a near-16:9 picture covers the whole canvas edge to edge; any
-        other shape (an upright phone's tall picture) is shown WHOLE at the plain fit, centred with ink bars - the
-        caller must see their whole body with the skeleton, like their own camera preview (live feedback 2026-10-13:
-        the cover zoom cut half the body off). Returns the affine and the picture's output box clipped to the canvas."""
+        """The source -> output affine for the picture: the WHOLE picture - every pixel the caller's phone sent us,
+        any shape - fitted and centred inside LS_PIC_BOX, like their own camera preview. Full-bleed looked great in
+        renders and cut the caller's head and feet off live (2026-10-13: the phone trims ~250 px off each side of
+        the card): the picture never leaves the safe band again. Returns the affine and the picture's output box."""
+        bx0, by0, bx1, by1 = LS_PIC_BOX
         h, w = rgb.shape[:2]
-        fit, cover = min(LW / w, LH / h), max(LW / w, LH / h)
-        s = cover if cover <= LS_BLEED_MAX * fit else fit
+        s = min((bx1 - bx0) / w, (by1 - by0) / h)
         pw, ph = w * s, h * s
-        x0 = (LW - pw) / 2; y0 = (LH - ph) / 2
+        x0 = bx0 + (bx1 - bx0 - pw) / 2; y0 = by0 + (by1 - by0 - ph) / 2
         M = np.array([[s, 0.0, x0], [0.0, s, y0]], np.float64)
-        pic = (max(0, int(round(x0))), max(0, int(round(y0))), min(LW, int(round(x0 + pw))), min(LH, int(round(y0 + ph))))
+        pic = (int(round(x0)), int(round(y0)), int(round(x0 + pw)), int(round(y0 + ph)))
         return M, pic
 
     def _ls_ticket(self, img, x0, y0, x1, y1):
@@ -786,51 +790,45 @@ class PushupMirror:
         cv2.rectangle(img, (x0, y0), (x1, y1), INK, 3)
 
     def _render_landscape(self, rgb, lm, state, now):
-        """Full-bleed: the caller's picture is the whole 1280x720 canvas (ink bars only where a not-yet-turned portrait
-        picture cannot reach), everything else floating on it: the wordmark ticket top left with the timer under it,
-        the status pill / verdict stamp top centre, the count ticket top right, Brodie bottom centre-right with his
-        bubble to his left. All inside LS_SAFE_* and out of the self-view keep-outs; the picture may run under the
-        fill crop, the island and the self-view (it is only video)."""
+        """The scoreboard: the caller's WHOLE picture in LS_PIC_BOX on the left, the count ticket (the hero) to its
+        right, the wordmark + timer + status pill in the row above the picture, Brodie bottom right under the count
+        with his bubble to his left. Nothing ever covers the caller's body - only the verdict stamp flashes over the
+        picture, on purpose. Everything, picture included, inside LS_SAFE_*: live phones trim ~250 px off each side
+        of the card and may crop ~65 px top and bottom, and the rest of the canvas is just ink."""
         M, pic = self._ls_fill(rgb)
         img = np.empty((LH, LW, 3), np.uint8); img[:] = INK
         self._clip = pic; self._xlim = (LS_SAFE_X, LW - LS_SAFE_X)
         self._picture(img, rgb, M, pic)
         self.boxes['picture'] = pic
         if self._draw_lm is not None and lm is not None: self._skeleton(img, M)
-        # top left: the wordmark ticket, the timer under it
+        # the row above the picture: wordmark ticket, the timer beside it, the status pill under them
         wm = brand.pill((('BRODIE', 36, INK), ('PUSH-UP CHALLENGE', 11, PINK, 'mono')), CANVAS, radius=4, pad=(14, 8), border=3, shadow=5, gap=3)
         self._blit(img, 'wordmark', *wm, LS_SAFE_X, LS_SAFE_TOP + 2)
         chip = self._timer_chip(state)
-        self._blit(img, 'timer', *chip, LS_SAFE_X + 2, LS_SAFE_TOP + 2 + wm[1].shape[0] + 14)
-        # top right: the count ticket (the hero)
+        self._blit(img, 'timer', *chip, LS_SAFE_X + wm[1].shape[1] + 14, LS_SAFE_TOP + 10)
+        pill = self._pill_sprite(); ph, pw = pill[1].shape[:2]
+        py = LS_SAFE_TOP + 2 + wm[1].shape[0] + 12
+        self._blit(img, 'pill', *pill, LS_SAFE_X, py)
+        self._label_y0 = py + ph + 8
+        # right: the count ticket (the hero), Brodie under it
         cx0, cx1 = LW - LS_SAFE_X - LS_COUNT_W, LW - LS_SAFE_X
         self._ls_ticket(img, cx0, LS_SAFE_TOP + 2, cx1, LS_COUNT_Y1)
         cy = LS_SAFE_TOP + 16
         fit = (LS_COUNT_Y1 - 14 - (cy + 26) - 26) / 0.9
         self._count_at(img, state, now, cx0 + 18, cy, fit, LS_COUNT_PX, LS_COUNT_W - 64)
-        # top centre: the status pill / verdict stamp (between the tickets, over the picture)
-        pill = self._pill_sprite(); ph, pw = pill[1].shape[:2]
-        wm_right = LS_SAFE_X + wm[1].shape[1]
-        pcx = (wm_right + LW - LS_SAFE_X - LS_COUNT_W) // 2              # centred between the wordmark and the count ticket
-        py = LS_SAFE_TOP + 10; px = pcx - pw // 2
-        self._label_y0 = py + ph + 8
-        # Brodie stands clear of a narrow (whole, barred) picture when the ink bar has room for him
-        mcx = LS_MASCOT_CX
         if self.ls_mascot is not None:
-            half = self.ls_mascot.art_w // 2 + 6
-            mcx = min(LW - LS_SAFE_X - half, max(LS_MASCOT_CX, pic[2] + half))
-            self._mascot(img, state, now, self.ls_mascot, mcx, LS_MASCOT_FEET)
+            self._mascot(img, state, now, self.ls_mascot, LS_MASCOT_CX, LS_MASCOT_FEET)
+        # the verdict stamp flashes over the picture: the feedback lands where the caller is looking
         s = self._stamp_sprite(state, now)
         if s is not None:
             srgb, sa, op = s; h, w_ = sa.shape[:2]
-            self._blit(img, 'stamp', srgb, sa, pcx - w_ // 2, py + ph // 2 - h // 2 + 16, opacity=op)
-        else:
-            self._blit(img, 'pill', *pill, px, py)
-        if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: left of him, over the picture
+            scx, scy = (pic[0] + pic[2]) // 2, (pic[1] + pic[3]) // 2
+            self._blit(img, 'stamp', srgb, sa, scx - w_ // 2, scy - h // 2, opacity=op)
+        if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: left of him, over the ink strip
             maxw = 440
             rgb_, a = brand.bubble(self._cue_lines(state, 28, maxw - 44), 28, maxw, tail='right', radius=4)
             h, w_ = a.shape[:2]
-            x = mcx - int(0.42 * self.ls_mascot.art_w) - w_
+            x = LS_MASCOT_CX - int(0.42 * self.ls_mascot.art_w) - w_
             y = min(LS_SAFE_BOTTOM - h, LS_MASCOT_FEET - int(0.62 * LS_MASCOT_H) - int(0.62 * h))
             self._blit(img, 'bubble', rgb_, a, max(LS_SAFE_X, x), max(LS_SAFE_TOP, y))
         return img
