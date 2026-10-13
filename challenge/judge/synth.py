@@ -14,11 +14,16 @@ just behind the near side with low visibility. noise = Gaussian sigma as a fract
 isotropically in pixels (x sigma = noise / aspect in normalised units).
 
 Challenge motions (liveness tests): hand_motions = [(kind, hand, t0, dur)], kind 'tap' (the wrist travels from its
-floor position to just above-behind the shoulder, i.e. the hand on the shoulder) or 'lift' (the wrist rises 0.25 m and
+floor position to just above-behind the shoulder, i.e. the hand on the shoulder) or 'lift' (the wrist rises 0.30 m and
 reaches 0.30 m toward the head), hand 'left'|'right' (anatomical). Profile: raised-cosine ramp up over min(0.4, dur/3) s,
 hold, ramp down; the elbow follows by two-circle IK (the lower solution). A moving far-side hand becomes visible as it
 rises (visibility far_vis -> 0.95 with the motion amount), as a hand lifted above the body does. challenge_motion()
 maps a liveness cue key to the motion that answers it.
+
+pauses = [(t0, dur)]: the rep phase stops at real time t0 for dur seconds (the body holds whatever pose it is in, as
+when a person freezes mid-rep); the clip grows by the paused time and fire times shift accordingly.
+camera_shifts = [(t0, dur, dx, dy)]: the whole image moves by (dx, dy) (fractions of the frame HEIGHT, y down) with a
+raised-cosine ramp in and out (as when the phone, or a filmed laptop screen, is moved), applied after projection.
 """
 from __future__ import annotations
 
@@ -41,7 +46,7 @@ KNEE_FLOOR_Z = 0.05   # knee joint height when kneeling
 HIP_MIN_Z = 0.11      # hip joint height when the pelvis rests on the floor (sag is limited by it)
 FLOOR_Y = 0.88        # floor line in normalised image y
 TAP_OFFSET = np.array([-0.04, 0.07])    # wrist relative to the shoulder when the hand rests on it (m)
-LIFT_OFFSET = np.array([0.30, 0.25])    # wrist relative to its floor position at the top of a lift (m)
+LIFT_OFFSET = np.array([0.30, 0.30])    # wrist relative to its floor position at the top of a lift (m)
 CUE_MOTIONS = {"challenge_tap_left": ("tap", "right"), "challenge_tap_right": ("tap", "left"),
                "challenge_lift_right": ("lift", "right")}
 
@@ -139,10 +144,11 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
                   n_reps: int = 5, rep_s: float = 2.0, noise: float = 0.0, extra_person: bool = False,
                   occlude_lower_body: bool = False, side: str = "left", body: str = "average", fps: float = 10.0,
                   lead_in_s: float = 1.0, tail_s: float = 0.5, aspect: float = 16 / 9, seed: int = 0,
-                  bottom_hold_s: float = 0.0, hand_motions: list | tuple = (), far_vis: float = 0.45) -> SynthClip:
+                  bottom_hold_s: float = 0.0, hand_motions: list | tuple = (), far_vis: float = 0.45,
+                  pauses: list | tuple = (), camera_shifts: list | tuple = ()) -> SynthClip:
     """Side-view plank push-up clip at `fps`. depth / lockout = elbow angle (deg) at the bottom / top of every rep.
     fire_times = the end of each rep cycle (back at the top), when a rep counter would fire. n_reps=0 = a plank hold.
-    hand_motions / far_vis: see the module docstring."""
+    hand_motions / far_vis / pauses / camera_shifts: see the module docstring."""
     if not 0.0 <= bottom_hold_s < rep_s:
         raise ValueError("bottom_hold_s must be in [0, rep_s)")
     if side not in ("left", "right"):
@@ -150,34 +156,53 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
     for m in hand_motions:
         if len(m) != 4 or m[0] not in ("tap", "lift") or m[1] not in ("left", "right") or float(m[3]) <= 0:
             raise ValueError(f"hand motion must be (tap|lift, left|right, t0, dur>0), got {m!r}")
+    pz = sorted((float(a), float(d)) for a, d in pauses)
+    if any(d <= 0 for _, d in pz) or any(pz[i][0] + pz[i][1] > pz[i + 1][0] for i in range(len(pz) - 1)):
+        raise ValueError(f"pauses must be non-overlapping (t0, dur>0), got {pauses!r}")
+    for c in camera_shifts:
+        if len(c) != 4 or float(c[1]) <= 0:
+            raise ValueError(f"camera shift must be (t0, dur>0, dx, dy), got {c!r}")
     B = BODIES[body]
     rng = np.random.default_rng(seed)
     wrist = _wrist_for(B, knees_down, depth)
-    T = lead_in_s + n_reps * rep_s + tail_s
+    T = lead_in_s + n_reps * rep_s + tail_s + sum(d for _, d in pz)
     n_frames = int(math.floor(T * fps + 1e-9)) + 1
-    fires = [round(lead_in_s + (k + 1) * rep_s, 9) for k in range(n_reps)]
+
+    def phase_t(t: float) -> float:          # real time -> rep-phase time (paused spans removed)
+        return t - sum(min(max(t - a, 0.0), d) for a, d in pz)
+
+    def real_t(te: float) -> float:          # inverse: the real time a phase time is reached
+        t = te
+        for a, d in pz:
+            if a < t - 1e-12:
+                t += d
+        return t
+
+    fires = [round(real_t(lead_in_s + (k + 1) * rep_s), 9) for k in range(n_reps)]
     near_i = (11, 13, 15, 23, 25, 27) if side == "left" else (12, 14, 16, 24, 26, 28)
     far_i = (12, 14, 16, 24, 26, 28) if side == "left" else (11, 13, 15, 23, 25, 27)
     dirn = -1.0 if side == "left" else 1.0
     s = B["scale"]
-    poses = []
-    for i in range(n_frames):
-        t = i / fps
-        u = t - lead_in_s
+    def theta_at(te: float) -> float:
+        u = te - lead_in_s
         if u <= 0 or u >= n_reps * rep_s:
-            theta = lockout
+            return lockout
+        v = u % rep_s
+        half = (rep_s - bottom_hold_s) / 2
+        if v < half:
+            k = (1 - math.cos(math.pi * v / half)) / 2
+        elif v < half + bottom_hold_s:
+            k = 1.0
         else:
-            v = u % rep_s
-            half = (rep_s - bottom_hold_s) / 2
-            if v < half:
-                k = (1 - math.cos(math.pi * v / half)) / 2
-            elif v < half + bottom_hold_s:
-                k = 1.0
-            else:
-                k = (1 + math.cos(math.pi * (v - half - bottom_hold_s) / half)) / 2
-            theta = lockout - (lockout - depth) * k
-        poses.append((t, _pose(B, theta, knees_down, hip_offset, wrist)))
-    xs = [p[k][0] for _, p in poses for k in p]     # framing from the body alone (hand motions do not re-centre)
+            k = (1 + math.cos(math.pi * (v - half - bottom_hold_s) / half)) / 2
+        return lockout - (lockout - depth) * k
+
+    poses = [(i / fps, _pose(B, theta_at(phase_t(i / fps)), knees_down, hip_offset, wrist)) for i in range(n_frames)]
+    # framing from the body alone, as if never paused (hand motions and pauses do not re-centre the camera, so a
+    # clip's frames before a pause / motion are identical to the clip without it)
+    n_ref = int(math.floor((T - sum(d for _, d in pz)) * fps + 1e-9)) + 1
+    ref = poses if not pz else [(0.0, _pose(B, theta_at(i / fps), knees_down, hip_offset, wrist)) for i in range(n_ref)]
+    xs = [p[k][0] for _, p in ref for k in p]
     xmid = (min(xs) + max(xs)) / 2
     frames: list[FrameObs] = []
     for t, p in poses:
@@ -220,6 +245,11 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
             src = (hands["left"] if idx % 2 else hands["right"])[0] if k == "W" else p   # odd = left (MediaPipe)
             put(idx, src[k] + np.array([0.05 if k == "W" else -0.05, -0.03]), 0.8, 0.0)
         world -= (world[23] + world[24]) / 2
+        for c0, cd, cdx, cdy in camera_shifts:
+            k = _motion_amount(t, float(c0), float(cd))
+            if k > 0:
+                img[:, 0] += k * float(cdx) / aspect
+                img[:, 1] += k * float(cdy)
         if noise > 0:
             img[:, 0] += rng.normal(0, noise / aspect, 33)
             img[:, 1] += rng.normal(0, noise, 33)
@@ -231,7 +261,8 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
     meta = dict(depth=depth, lockout=lockout, knees_down=knees_down, hip_offset=hip_offset, n_reps=n_reps, rep_s=rep_s,
                 noise=noise, bottom_hold_s=bottom_hold_s, extra_person=extra_person,
                 occlude_lower_body=occlude_lower_body, side=side, body=body,
-                fps=fps, seed=seed, hand_motions=[tuple(m) for m in hand_motions], far_vis=far_vis)
+                fps=fps, seed=seed, hand_motions=[tuple(m) for m in hand_motions], far_vis=far_vis,
+                pauses=pz, camera_shifts=[tuple(c) for c in camera_shifts])
     return SynthClip(frames=frames, fire_times=fires, meta=meta)
 
 

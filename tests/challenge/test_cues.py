@@ -5,7 +5,7 @@ from facetime.audio_out import default_cues_dir
 from facetime.cues_tts import vocabulary
 
 KEYS = """knees_down too_shallow no_lockout not_in_frame hips multiple_people challenge_tap_left challenge_tap_right
-challenge_lift_right challenge_passed challenge_failed not_your_turn queued at_cap not_signed_up competition_over thirty_left
+challenge_lift_right challenge_lift_hold challenge_double_tap challenge_freeze challenge_passed challenge_failed not_your_turn queued at_cap not_signed_up competition_over thirty_left
 time_up check_texts power_hour hang_up welcome""".split()
 
 
