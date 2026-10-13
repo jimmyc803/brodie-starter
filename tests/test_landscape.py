@@ -314,6 +314,33 @@ def test_mirror_loop_keeps_one_canvas_size_for_the_whole_call(monkeypatch):
     assert captured[-1] == (1280, 720)                                    # no caller video: the idle card, pillarboxed
 
 
+def test_unlocked_landscape_phone_gets_the_plain_scoreboard_not_a_column(monkeypatch):
+    """The live failure 2026-10-13: a phone whose screen rotates got the pre-turned column (sideways to the caller in
+    landscape, and again in portrait while the gate held) because the loop coerced rot 0 -> 90. A measured rot of 0
+    must reach the renderer untouched: the full-band scoreboard, no pre-turn invented."""
+    captured = []; job = _mirror_job(monkeypatch, captured)
+    rots = []
+    orig = worker.CoachJob._mirror_frame
+    def spy(self, renderer, av, snap, st, now, fails, stats, newer=None, landscape=False, rot=0):
+        if snap is not None: rots.append((landscape, rot))
+        return orig(self, renderer, av, snap, st, now, fails, stats, newer, landscape, rot)
+    monkeypatch.setattr(worker.CoachJob, '_mirror_frame', spy)
+    job.mirror_landscape = True; job.mirror_rot = 0
+    rgb = np.full(SRC, 90, np.uint8)
+    def drive():
+        if job.mirror_live: job.mirror_in = (rgb, plank(), 1, time.monotonic())
+        return len(rots) >= 3
+    async def go():
+        t = asyncio.create_task(job.avatar_loop())
+        for _ in range(800):
+            if t.done() or drive(): break
+            await asyncio.sleep(0.005)
+        job.stop.set(); await asyncio.wait_for(t, 5)
+    asyncio.run(go())
+    assert rots and set(rots) == {(True, 0)}                              # the lock never spoke: no pre-turn
+    assert set(captured) == {(1280, 720)}
+
+
 def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     job = worker.CoachJob.__new__(worker.CoachJob); job.mirror_thresholds = lambda: None
     r = PushupMirror(mascot=False)
@@ -334,18 +361,18 @@ def test_feed_layout_mirrors_the_callers_picture_shape(capsys):
         for _ in range(n):
             job.prep_frame(raw, t); job.update_layout(raw, t); t += 0.3
     step(up)
-    assert job.mirror_landscape is False and job.mirror_rot == 90         # tall picture -> the tall card, upright
+    assert job.mirror_landscape is False and job.mirror_rot == 0          # tall picture -> the tall card, upright
     assert 'portrait, upright' in capsys.readouterr().out
-    step(side, 30)                                                        # the phone goes down sideways: wide picture
-    assert job.mirror_landscape is True and job.mirror_rot == 90          # -> the landscape card, pre-turned
-    assert 'pre-turned 90 deg' in capsys.readouterr().out
+    step(side, 30)                                                        # the screen rotates with the phone: upright wide
+    assert job.mirror_landscape is True and job.mirror_rot == 0           # picture -> the plain scoreboard, NO pre-turn
+    assert 'landscape, upright' in capsys.readouterr().out
     job.prep.rotation = 270                                               # the lock measured a turn: portrait raw, wide scene
     step(up, 30)
-    assert job.mirror_landscape is True and job.mirror_rot == 270
+    assert job.mirror_landscape is True and job.mirror_rot == 270         # only a rotation-LOCKED phone gets the pre-turn
     assert 'pre-turned 270 deg' in capsys.readouterr().out
-    job.prep.rotation = 0                                                 # rotation lost, picture still tall: tall card,
-    step(up, 5)                                                           # the last measured pre-turn held for next time
-    assert job.mirror_landscape is False and job.mirror_rot == 270
+    job.prep.rotation = 0                                                 # rotation lost, picture reads tall again: tall card,
+    step(up, 5)                                                           # the pre-turn ends with the lock
+    assert job.mirror_landscape is False and job.mirror_rot == 0
     assert capsys.readouterr().out.count('[worker]') == 1                 # the flip logs once, then no churn
 
 

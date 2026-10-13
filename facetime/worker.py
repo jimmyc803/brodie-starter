@@ -614,8 +614,8 @@ class CoachJob:
             while not self.stop.is_set():
                 speaking = self.player is not None and self.player.playing is not None
                 rf = getattr(self, 'reveal_frames', None)
-                rot = int(getattr(self, 'mirror_rot', 0) or 0) or 90           # the card's pre-turn (update_layout); never 0:
-                                                                               # a flat phone reads the column pre-turned
+                rot = int(getattr(self, 'mirror_rot', 0) or 0)                 # the card's pre-turn (update_layout); 0 = the
+                                                                               # screen rotates: the plain scoreboard reads upright
                 rv_land = (rf is not None and renderer is not None and getattr(rf, 'landscape_size', None) is not None
                            and bool(getattr(self, 'mirror_landscape', False)))       # sideways phone: landscape card
                 rv_img = rf.current_frame(rv_land) if rf is not None else None
@@ -1286,9 +1286,13 @@ class CoachJob:
     def update_layout(self, raw, now):
         """Feed thread: the live card MIRRORS the caller's picture shape (live test 2026-10-13: an upright phone showed
         the sideways card small and turned, drowning in black - a tall picture now gets the tall 16:9 card, which an
-        upright phone fit-displays as a full-width band; a wide picture keeps the landscape scoreboard, pre-turned
-        by mirror_rot so a sideways phone reads it upright). The shape is frameprep's slow content rect made upright
-        by the MEASURED rotation lock (the signal the rep judge itself depends on), landscape until a rect exists;
+        upright phone fit-displays as a full-width band; a wide picture keeps the landscape scoreboard). mirror_rot
+        is the pre-turn, and it is 0 unless the orientation LOCK measured a turn: a sideways phone whose screen
+        rotates sends an upright wide picture (rotation 0) and reads the plain scoreboard upright (live test
+        2026-10-13: pre-turning it showed the caller a sideways column in landscape, and a sideways band back in
+        portrait while the gate held); only a rotation-LOCKED sideways phone (the lock at 90/270) keeps its portrait
+        screen, so only there the pre-turned column reads upright. The shape is frameprep's slow content rect made
+        upright by the MEASURED rotation lock (the signal the rep judge itself depends on), landscape until a rect exists;
         the track itself stays 1280x720 (16:9, the bridge camera's own shape) for the whole call, no exceptions:
         live calls (2026-10-13) showed FaceTime
         dropping to a small fitted box for the rest of the call after any mid-stream size switch. Cosmetic: a failure
@@ -1304,9 +1308,10 @@ class CoachJob:
                 self.mirror_landscape = w >= h
             else:
                 self.mirror_landscape = bool(was[0])
-            self.mirror_rot = rot_now if rot_now in (90, 270) else (was[1] or 90)
+            self.mirror_rot = rot_now if rot_now in (90, 270) else 0
             if (self.mirror_landscape, self.mirror_rot) != was:
-                card = (f'landscape pre-turned {self.mirror_rot} deg' if self.mirror_landscape else 'portrait, upright')
+                card = ('portrait, upright' if not self.mirror_landscape else
+                        f'landscape pre-turned {self.mirror_rot} deg' if self.mirror_rot else 'landscape, upright')
                 print(f"[worker] caller's picture {'wide' if self.mirror_landscape else 'tall'} (rotation {rot_now} deg): "
                       f'coach-video {card} on the 16:9 track', flush=True)
         except Exception as e:
