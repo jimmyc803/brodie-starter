@@ -93,6 +93,8 @@ Optional LINE_OFFLINE_GAP_S and OUTBOUND_RATE_PER_MIN override defaults.
 HANGUP_MODE=chert_api additionally needs CHERT_FACETIME_TOKEN (an `ftk_` project key with `facetime:write`) and
 CHERT_PROJECT_ID in SSM; the worker refuses to start without them. After the reveal it POSTs Chert's end-call API (3
 attempts), and falls back to leaving the room (unverified) if that fails. Details: CONTRACTS C7.h.
+REVEAL_MODE=video (opt-in) needs WEB_BASE_URL (the site origin, for `/r/<call_id>/card`); without it, or if the card
+is not ready within 2 s, the reveal shows a local points + rank frame, and any error stays audio_only. CONTRACTS C7.v.
 A live launch must explicitly review mock/web_only mode and hangup behavior.
 Do not copy empty `.env.example` assignments to SSM: empty values are not defaults.
 

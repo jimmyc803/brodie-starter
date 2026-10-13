@@ -651,7 +651,7 @@ class CoachJob:
                                         leave=self.end, update_challenge_window=self.queue_challenge_window, sleep=self.sleep,
                                         on_config=self.queue_judge_config, drain=self.drain_feed,
                                         reveal_mode=(os.environ.get('REVEAL_MODE') or 'audio_only').strip(),
-                                        hangup_mode=hangup,
+                                        hangup_mode=hangup, reveal=self.reveal_video,
                                         chert_call_id=str(chert_id) if chert_id else None, chert_end=chert_end)
         except Exception as e:
             log.exception('competition setup failed')
@@ -660,6 +660,11 @@ class CoachJob:
         print(f'[competition] call {self.call_id} on {self.comp.line_id}: asking the dispatcher (caller id {source}, handle {"yes" if handle else "no"})', flush=True)
         self.comp_task = asyncio.create_task(self._run_competition(), name='competition')
         self.hb_task = asyncio.create_task(self._job_heartbeat(), name='job-heartbeat')
+
+    async def reveal_video(self, points, seconds):
+        """REVEAL_MODE=video (C7.v): card/fallback frame as a video track for the reveal; never raises."""
+        from challenge.worker.reveal_video import publish_reveal
+        return await publish_reveal(self.room, self.call_id, points, None, seconds)
 
     async def _run_competition(self):
         try:

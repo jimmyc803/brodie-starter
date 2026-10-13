@@ -14,8 +14,8 @@ worker never counts a rep the dispatcher would put after connected_at + call_cou
 
 Timeline (call clock, numbers from the /calls/start `config` or the competition_config defaults): welcome at 0
 (power_hour 4 s later when the dispatcher says power_hour_active); thirty_left at count_s - 30; time_up at count_s,
-counting stops (later reps are ignored, not recorded); check_texts 1.5 s later (REVEAL_MODE audio_only; the worker
-cannot publish video, so video falls back to the same cue and the worker logs that at startup); HANGUP_MODE
+counting stops (later reps are ignored, not recorded); check_texts 1.5 s later (REVEAL_MODE audio_only; REVEAL_MODE=video
+also publishes a card/fallback video track via the worker's `reveal` hook, C7.v; any failure stays audio_only); HANGUP_MODE
 unverified plays hang_up HANG_UP_LEAD_S before count_s + reveal_s; at count_s + reveal_s end() commits and the
 worker leaves the room (leave_room and unverified both leave; chert_api has no API to call: refused at startup).
 Only the latest due cue of a tick is played (a stalled loop never stacks cues).
@@ -97,8 +97,8 @@ def check_modes(hangup_mode: str, reveal_mode: str) -> list[str]:
         raise UnsupportedMode(f"REVEAL_MODE={reveal_mode!r}: expected one of {', '.join(REVEAL_MODES)}")
     notes = []
     if reveal_mode == "video":
-        notes.append("REVEAL_MODE=video: the worker cannot publish a reveal video track; it plays the audio_only "
-                     "check_texts cue instead (FALLBACK)")
+        notes.append("REVEAL_MODE=video: reveal card/fallback video track (C7.v); any failure plays the audio_only "
+                     "check_texts cue only (FALLBACK)")
     if hangup_mode == "unverified":
         notes.append("HANGUP_MODE=unverified: hang_up cue before leaving; hang-up not verified (FALLBACK)")
     return notes
@@ -174,7 +174,8 @@ class CompetitionCall:
                  alert: Callable[[str, str], Any] | None = None,
                  sleep: Callable[[float], Awaitable[Any]] | None = None,
                  commit_deadline_s: float = COMMIT_DEADLINE_S, drain_max_s: float = DRAIN_MAX_S,
-                 chert_call_id: str | None = None, chert_end: Any = None):
+                 chert_call_id: str | None = None, chert_end: Any = None,
+                 reveal: Callable[[int, float], Awaitable[Any]] | None = None):
         check_modes(hangup_mode, reveal_mode)
         self.call_id, self.line_id, self.handle = str(call_id), str(line_id), handle
         self.dispatcher = dispatcher
@@ -185,6 +186,7 @@ class CompetitionCall:
         self.count_s = float(count_s if count_s is not None else DEFAULT_COUNT_S)
         self.reveal_s = float(reveal_s if reveal_s is not None else DEFAULT_REVEAL_S)
         self.reveal_mode, self.hangup_mode = reveal_mode, hangup_mode
+        self._reveal_fn = reveal                   # REVEAL_MODE=video (C7.v): async (points, seconds) -> published?
         self.chert_call_id, self._chert_end = chert_call_id, chert_end    # HANGUP_MODE=chert_api (C7.h)
         self.chert_hangup: str | None = None       # acknowledged | failed | no_call_id once the end-call was tried
         self.path = checkpoint_path(self.call_id, checkpoint_dir)
@@ -717,6 +719,7 @@ class CompetitionCall:
             if self.lc is None or not self.lc.started:
                 self._settle_liveness(self.count_s)
             log.info("call %s: count over (%d reps so far, liveness %s)", self.call_id, len(self.reps), self.liveness_result)
+            self._start_reveal()
         due = [(t, k) for t, k in self._due if t <= rel]
         if due:
             t_last, key = due[-1]
@@ -730,6 +733,18 @@ class CompetitionCall:
             else:
                 self._say(key)
         return rel >= self.count_s + self.reveal_s
+
+    def _start_reveal(self) -> None:
+        """REVEAL_MODE=video: run the worker's reveal hook in the background; an error never touches the timeline."""
+        if self.reveal_mode != "video" or self._reveal_fn is None or self.reveal_s <= 0:
+            return
+        pts = sum(1 for r in self.final_reps() if r["valid"])
+        async def _go() -> None:
+            try:
+                await self._reveal_fn(pts, self.reveal_s)
+            except Exception as e:
+                log.warning("call %s: reveal video failed (%r); audio_only", self.call_id, e)
+        self._spawn(_go())
 
     def _challenge_active(self) -> bool:
         lc = self.lc
