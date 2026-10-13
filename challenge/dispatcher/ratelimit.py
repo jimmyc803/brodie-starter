@@ -38,7 +38,8 @@ class RateLimiter:
         self.hits: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> bool:
+    def check(self, key: str, per_min: int | None = None) -> bool:
+        limit = self.per_min if per_min is None else per_min
         with self._lock:
             t = self.now()
             q = self.hits.get(key)
@@ -48,7 +49,7 @@ class RateLimiter:
                 q = self.hits[key] = deque()
             while q and t - q[0] >= WINDOW_S:
                 q.popleft()
-            if len(q) >= self.per_min:
+            if len(q) >= limit:
                 return False
             q.append(t)
             return True
@@ -75,12 +76,29 @@ def get_limiter(request: Request) -> RateLimiter:
     return lim
 
 
+# Scopes whose traffic is funnelled through one upstream IP get their own, higher per-IP ceiling. All /web calls come from
+# Vercel's server-side functions, so the per-IP cap there only guards against a runaway origin; the real per-person
+# limit is web.py's per-verified-user budget. Override with DISPATCHER_RATE_PER_MIN_<SCOPE> (e.g. ..._WEB).
+SCOPE_DEFAULT_PER_MIN = {"web": 20_000}
+
+
+def scope_per_min(scope: str) -> int | None:
+    raw = os.environ.get(f"DISPATCHER_RATE_PER_MIN_{scope.upper()}", "").strip()
+    if raw:
+        v = int(raw)
+        if v < 1:
+            raise ValueError(f"DISPATCHER_RATE_PER_MIN_{scope.upper()} must be >= 1")
+        return v
+    return SCOPE_DEFAULT_PER_MIN.get(scope)
+
+
 def rate_limit(scope: str) -> Callable[[Request], None]:
     """FastAPI dependency factory: 429 when the caller's IP exceeds the limit within `scope`."""
+    per_min = scope_per_min(scope)
 
     def dependency(request: Request) -> None:
         lim = get_limiter(request)
-        if not lim.check(f"{scope}|{lim.client_ip(request)}"):
+        if not lim.check(f"{scope}|{lim.client_ip(request)}", per_min):
             raise HTTPException(429, "rate limited", headers={"Retry-After": str(int(WINDOW_S))})
 
     dependency.__name__ = f"rate_limit_{scope}"

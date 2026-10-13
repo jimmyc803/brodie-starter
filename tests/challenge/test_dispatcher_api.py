@@ -268,3 +268,18 @@ def test_line_offline_gap_flag_applied(db, conn):
     finally:
         st.rpc("ch_config_set", {"p_key": "line_offline_gap_s", "p_value": __import__("challenge.store", fromlist=["Json"]).Json(before),
                                  "p_actor": "test", "p_reason": "restore"})
+
+
+def test_scope_per_min_overrides(monkeypatch):
+    from challenge.dispatcher.ratelimit import RateLimiter, scope_per_min
+    monkeypatch.delenv("DISPATCHER_RATE_PER_MIN_WEB", raising=False)
+    assert scope_per_min("web") == 20_000          # /web arrives from Vercel's few egress IPs
+    assert scope_per_min("worker") is None         # everything else uses the global limit
+    monkeypatch.setenv("DISPATCHER_RATE_PER_MIN_WEB", "3")
+    assert scope_per_min("web") == 3
+    monkeypatch.setenv("DISPATCHER_RATE_PER_MIN_WEB", "0")
+    with pytest.raises(ValueError):
+        scope_per_min("web")
+    lim = RateLimiter(2, now=lambda: 0.0)
+    assert [lim.check("a", 4) for _ in range(5)] == [True] * 4 + [False]
+    assert [lim.check("b") for _ in range(3)] == [True, True, False]
