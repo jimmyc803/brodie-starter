@@ -8,9 +8,9 @@ Source of record: `.orch/DECISIONS.md` (internal log). This page explains each d
 - The rep counter registers a rep when the person is 15% back up from the bottom, so the finishing lockout is not yet visible at that moment (D-10).
 - No fixed depth, knee or hip-line gate existed; the strict judge adds them (see D-15 to D-20). Since 2026-10-13 the live judge is the lenient j3 and the liveness test is off (D-34).
 - Chert's command line had no messaging surface, so iMessage behaviour was first behind flags (D-07). Since then the Chert Messaging API was built and iMessage works live.
-- The audit said "no per-caller identity". Still true: Chert exposes only a hashed caller id (no phone or email), so attribution uses the claim window (D-06).
+- The audit said "no per-caller identity". Still true today: Chert exposes only a hashed caller id (no phone or email), so attribution uses the claim window (D-06). Chert said on 2026-10-13 that it will pass the caller's handle, with no date (D-35).
 
-## Decisions D-01 to D-34
+## Decisions D-01 to D-37
 | ID | In plain words | Why |
 |---|---|---|
 | D-01 | Work happens on a new branch `orch/20261012-1810`; the three untracked facetime files stay untouched | You asked to leave them |
@@ -46,8 +46,13 @@ Source of record: `.orch/DECISIONS.md` (internal log). This page explains each d
 | D-32 | (Parked) Liveness shipped with a 15 s hand cooldown; replays lifting every 20-35 s at rest still passed 7.5-9.5% | Ship the big improvement; admin re-judge covers the rest |
 | D-33 | (Parked, branch `orch-task/34`) Liveness needs 2 passed checks per call, the 2nd 10-60 s after the 1st; reps after the last pass count | One pass left 19.7% of replays through; two checks bring it to 1% or less per call while honest callers still pass 100% |
 | D-34 | OWNER DECISION 2026-10-13: the liveness "cheater test" is OFF and the judge is the lenient j3. `liveness_enabled` is false in the live `judge_thresholds`; the code and tests stay, and one config change turns it back on. The strict j2 calibration (clean side-view accept 86.7%, 0 cheats) and the 2-stage liveness branch are parked for reference. Live j3 values: min_conf 0.4, frame_conf 0.6, knee 120, hip 30/40, depth 120/0.92, lockout 135, incline 25 / decline 35, min rep time 0.45 s, cadence 100, no classifier veto | The owner wants a lenient, friendly public challenge. Real-clip result for j3: clean reps accepted 93.3%, worst count error 1. Cheats that rely on pretending to be live are no longer caught; use admin re-judge and void for abuse |
+| D-35 | Caller ID stays `claim_window` for launch. Chert (Gary, 2026-10-13) will pass the caller's handle, but it is not shipped and has no date; James confirmed the bridge still hands us only `call_id`. The `chert_meta` path and D-23's "calling a busy line queues you" stay written, tested and dormant; the day a real call arrives with a handle, one flag flips | Cannot ship on a promise. Nothing is left to build, so waiting costs nothing |
+| D-36 | Interim anti-griefing, as James suggested: Brodie asks the caller for their queue code at the top of the call and credits off that. NOT BUILT - recommended, needs an owner decision because it adds a spoken step to every call and leans on hearing a code correctly over FaceTime audio | Under `claim_window` a stranger who calls during someone's 90 s claim cannot take their points, but can burn their turn and dump junk reps on their score. A code names the caller without Chert |
+| D-37 | We will not use outbound FaceTime for competition calls. Chert supports it (`POST /api/v1/calls`, `direction: outbound`, docs.trychert.com/facetime/outbound) but outbound is audio only and needs our own LiveKit room and agent (BYOR) instead of the Chert-managed warm room. Any use is limited to an optional "you're up" voice nudge alongside the text | No video means no judge, so Brodie ringing people is not a way to run calls and not a way around B1 |
 
 ## Decisions you may be asked to make
 - Run the j3 real-clip check before the public push, or accept launching without it? See `BLOCKERS.md` B4.
 - Turn on `HANGUP_MODE=chert_api` after one test call? See `BLOCKERS.md` B6.
 - Turn liveness back on (D-34)? Only by a config change plus a fresh look at the parked branch.
+- Have Brodie ask for the queue code on the call (D-36)? Cheap insurance against a stranger burning someone's turn while caller ID is still missing.
+- Add an outbound "you're up" voice nudge (D-37)? Audio only, and it means standing up our own LiveKit room; the text already covers it.

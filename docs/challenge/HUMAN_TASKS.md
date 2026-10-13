@@ -97,6 +97,10 @@ token-expiry alert works.
 
 Send James these questions (answers decide the flags; until answered the safe defaults apply: D-07 in `DECISIONS.md`):
 1. Does `chert_call` (the metadata at call start) include the caller's handle/phone/email? -> `CALLER_ID_SOURCE=chert_meta` if yes, else `claim_window`.
+   ANSWERED 2026-10-13: Chert (Gary) will pass the caller's handle, but it is not shipped yet and has no date; James
+   confirmed the bridge still gives only `call_id`. So `CALLER_ID_SOURCE` stays `claim_window` and D-23 stays dormant.
+   Flip to `chert_meta` the day a real call arrives with a handle (nothing else to build; the path is already written
+   and tested). Interim, as James suggested: Brodie asks for the caller's queue code at the top of the call (D-36).
 2. Is there an iMessage API (send text, inbound webhook) on Brodie's number? Does an existing agent already handle inbound texts?
    If yes: need `CHERT_MSG_URL`, `CHERT_MSG_TOKEN`, `CHERT_WEBHOOK_SECRET` -> `MESSAGING_PROVIDER=chert`; otherwise `web_only` or `mock`.
    ANSWERED 2026-10-12: yes, Chert Messaging API (console.trychert.com/documentation, iMessage project
@@ -110,12 +114,26 @@ Send James these questions (answers decide the flags; until answered the safe de
    `HANGUP_MODE=chert_api` (default stays `unverified` until a live call proves it). Caller identity: Chert exposes only
    `from_handle_hash` (no phone/email), so `CALLER_ID_SOURCE` stays `claim_window`.
 4. How long is the line offline after a call? -> `LINE_OFFLINE_GAP_S` (default 180).
+   ANSWERED 2026-10-13 (James): "a few minutes" while Chert resets the line, and calls in that gap just ring out.
+   Our 180 s default matches; leave it unless real calls show a longer reset.
 5. Can `chert dev --agent` run 24/7 on EC2? Token expiry? Is there a production mode?
 6. Can we get more than one line? (Design already supports N lines via `LINE_ID`.)
 7. What sent the earlier unprompted text from Brodie's number? Could it collide with ours?
 8. Outbound iMessage rate limits? -> `OUTBOUND_RATE_PER_MIN`.
 9. Can the agent publish video into the call (for the 15 s reveal)? -> `REVEAL_MODE=video|audio_only`.
 10. Can we send image attachments over iMessage? -> `CARD_DELIVERY=attachment|link`.
+11. Can the line place outbound FaceTime calls (so Brodie rings the person whose turn it is)?
+    ANSWERED 2026-10-13 (Gary): yes - `POST /api/v1/calls` with `direction: "outbound"`, `mode: "customer_managed"`,
+    `destination` + `destination_type` (`phone`|`email`), docs.trychert.com/facetime/outbound. Two catches that decide
+    it for us: outbound is **audio only** (`media: {audio: true, video: false}`), so it cannot carry a judged push-up
+    call, and it needs our own LiveKit room and agent (BYOR) rather than the Chert-managed warm room we use today.
+    So it is not a replacement for calling in and not a way around B1 - at most an optional "you're up" voice nudge
+    (D-37).
+12. What happens to a second caller while the line is on a call?
+    ANSWERED 2026-10-13 (James + Gary): the line takes one call at a time; other calls are just left ringing and never
+    reach the worker. Open point: if no `call.incoming` fires for them, the "calling a busy line puts you in the queue"
+    path (D-23) can never run for a second caller even once handles arrive - ask Chert whether a ringing-but-unanswered
+    call produces a call record or webhook before relying on it.
 
 Where the answers go: SSM parameters under `/brodie/challenge/` (names above; command in RUNBOOK), then redeploy (RUNBOOK
 "Deploy and rollback"). `/health` echoes the active modes so you can confirm: `curl --fail https://YOUR-DOMAIN/health`.
