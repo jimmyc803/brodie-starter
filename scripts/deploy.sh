@@ -43,7 +43,7 @@ if [[ ! -f $release/.release-ready ]]; then
   [[ ! -e $release/data && ! -L $release/data ]] || { echo 'Release data must remain outside git' >&2; exit 1; }
   ln -s "$release_base/data" "$release/data"
   runuser -u brodie -- uv venv --python 3.12 "$release/.venv"
-  runuser -u brodie -- uv pip sync --python "$release/.venv/bin/python" "$release/requirements.txt"
+  runuser -u brodie -- uv pip sync --index-strategy unsafe-best-match --python "$release/.venv/bin/python" "$release/requirements.lock"
   runuser -u brodie -- uv pip check --python "$release/.venv/bin/python"
   touch "$release/.release-ready"
   trap - EXIT
