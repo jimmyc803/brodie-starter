@@ -11,6 +11,8 @@ JudgeRuntime per push-up Coach (judge option on) and drives it on the pipeline's
                                   optional 'torso_ok': bool (None/absent: computed from the window, see metrics.py)}
     set_challenge_window(t0, t1)  reps fired inside [t0, t1] are marked in_challenge (liveness challenge; the caller
                                   neither counts nor penalises them) and get no corrective cue.
+    update_challenge_window(t0, t1)  replace the window starting at t0 (or add it): feed LivenessChallenge.windows()
+                                  after every start()/poll(), since a FREEZE attempt's deadline shrinks.
 
 Classifier labels for a rep = labels emitted in (previous fire, this fire]; the classifier can only veto (gates.py).
 Cue: the first reject reason in C5 priority order that has a spoken cue (challenge.judge.cues.cue_for_reason) - the most
@@ -73,6 +75,18 @@ class JudgeRuntime:
         t0, t1 = float(t0), float(t1)
         if t1 < t0:
             raise ValueError(f"challenge window ends before it starts: {t0} > {t1}")
+        self.windows.append((t0, t1))
+
+    def update_challenge_window(self, t0: float, t1: float) -> None:
+        """Set the window that starts at t0 to end at t1 (adds it if none starts at t0): a liveness FREEZE attempt
+        registers its latest possible deadline and shrinks it later (LivenessChallenge.windows())."""
+        t0, t1 = float(t0), float(t1)
+        if t1 < t0:
+            raise ValueError(f"challenge window ends before it starts: {t0} > {t1}")
+        for i, (a, _) in enumerate(self.windows):
+            if a == t0:
+                self.windows[i] = (t0, t1)
+                return
         self.windows.append((t0, t1))
 
     def in_challenge(self, t: float) -> bool:

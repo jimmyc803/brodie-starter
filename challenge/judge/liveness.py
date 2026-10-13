@@ -11,45 +11,62 @@ exclusive, so one recorded motion cannot answer more than one of them:
   challenge_double_tap  two separate lift-and-return cycles (floor -> up -> floor, either hand, not overlapping) whose
                         onsets are <= liveness_double_tap_gap_s apart, the second return inside the timeout.
   challenge_freeze      (D-29) "Freeze!" then "And go!". Stop: the body holds still for liveness_freeze_s (shoulder
-                        and hip 0.5 s block means within liveness_freeze_still torso lengths, no hand off the floor,
-                        every frame valid), the window starting >= liveness_min_react_s after the cue and ending
+                        and hip 0.5 s block means within liveness_freeze_still torso lengths, every frame valid,
+                        both wrists placed and none off the floor, with at least one tracked wrist on the floor -
+                        missing wrists are no evidence), the window starting >= liveness_min_react_s after the cue and ending
                         within liveness_timeout_s of it (else 'timeout'). Go: challenge_go is cued a fresh random
                         liveness_go_delay_s after the stop is confirmed (drawn from the rng per attempt, never from
                         the clock); the shoulder must stay within liveness_resume_min torso lengths of its mean over
                         the last 1 s of the stop until liveness_go_min_react_s after go (moving earlier -> 'early',
                         the attempt ends at once), then move beyond it (3-frame mean, 2 consecutive frames) within
-                        liveness_go_react_s of go (else 'no_resume').
+                        liveness_go_react_s of go (else 'no_resume'). After the stop is confirmed, a stretch longer
+                        than liveness_max_gap_s without a valid single-person frame (left, two people, frame gap)
+                        ends the attempt as 'lost'. Every FREEZE exit before the go cue (timeout, early, camera,
+                        lost) plays challenge_go at once as a release, so nobody is left frozen.
 The legacy tap/lift-right cue keys stay in cues.CUES but are not drawn: left/right cannot be told apart reliably in
 a side view (mirror / occlusion), which made one tap answer every cue (review P1).
 
 Selection (at each check time; a type is eligible only if a replay cannot have learned to answer it):
-  nothing     unless push-ups are in progress (3-frame-median shoulder height range >= liveness_freeze_motion_min in
-              the liveness_quiet_s before the check): the challenge guards reps, and a video that is not producing
-              reps gains nothing; a still plank / static replay is never challenged (and never gets FREEZE).
-  FREEZE      whenever push-ups are in progress (continuous push-ups never pass it).
-  LIFT_HOLD, DOUBLE_TAP  only if no hand lift was seen since counting started (an unprompted lift, or one inside a
-              failed attempt): a video that lifts hands, periodically or not, never gets a hand challenge.
-  If nothing is eligible the check moves to a fresh random time liveness_postpone_s later (first cue: fire_t moves;
-  retry: the retry check moves). Eligibility never flips at a predictable moment (no expiring look-back), so a replay
-  cannot use the postponement to time its motion. A first cue postponed past the end of the call -> 'skipped' (the
-  call ended before the - postponed - fire_t); a retry postponed past the end -> 'fail' (the person was seen).
+  nothing     before reps were earned (no push-up motion - 3-frame-median shoulder height range >=
+              liveness_freeze_motion_min within liveness_quiet_s - and no on_rep() since counting started): nothing
+              to guard, and a still plank / static replay is never challenged.
+  LIFT_HOLD, DOUBLE_TAP  if no hand lift was seen since counting started (an unprompted lift, or one inside a failed
+              attempt): a video that lifts hands, periodically or not, never gets a hand challenge. These work at
+              rest (plank, kneeling): a person who stopped doing push-ups is still challenged (review P1).
+  FREEZE      while push-ups are in progress (shoulder range as above in the liveness_quiet_s before the check):
+              a still body would satisfy the stop for free, so FREEZE is never cued at rest.
+  The retry excludes the first attempt's type (unless that attempt was void) - except when that leaves nothing
+  eligible, then the same type is drawn again (fresh go delay; e.g. FREEZE after FREEZE once a lift ruled out the hand
+  types). If nothing is eligible the check moves to a fresh random time liveness_postpone_s later (first cue: fire_t
+  moves; retry: the retry check moves). Eligibility never flips at a predictable moment (no expiring look-back), so a
+  replay cannot use the postponement to time its motion.
+Terminal result (finish / poll):
+  'pass'     an attempt passed.
+  'skipped'  only when no rep was earned (no push-up motion seen, on_rep never called) and nobody was in frame in any
+             attempt - e.g. the person left before doing any push-up, or the call ended before fire_t without reps.
+  'fail'     everything else: reps were earned but no challenge passed - including a cue postponed past the end of
+             the call (at rest after a hand lift), the call ending before fire_t, ending during an open attempt or a
+             pending retry, or being out of frame / unverifiable during the attempts. Earned reps never count
+             without a pass.
 Known residual (D-30, accepted; tests: strict xfail): a replay of push-ups with long pauses (period-3 s pause,
 3 s of push-ups) still answers FREEZE+go when a pause both starts right after "Freeze!" and ends just after the
-random go cue: measured 5.5 % (period 9) and 7 % (period 10) with go delay 2-8 s (period 6: 0 %, 8: 2 %).
-Mitigated by admin re-judge of top finishers.
+random go cue: measured 6.0 % (period 10) and 8.5 % (period 12) at 200 seeds with go delay 2-8 s (period 6: 0 %,
+8: 2.0 %, 9: 4.5 %). Mitigated by admin re-judge of top finishers.
 Driving (judge frame clock, seconds; worker wiring is task 30):
     lc = LivenessChallenge(random.Random(seed), thr); fire_t = lc.schedule(call_t0)
     every counted frame: lc.on_frame(f); if lc.due(t): say(lc.start(t)) elif lc.active: st, cue = lc.poll(t); say(cue)
-    lc.windows()[-1] -> (cue, deadline) of a new attempt for JudgeRuntime.set_challenge_window;
-    lc.finish(t_end) at call end; lc.summary() -> result, unprompted_lifts, suspicious, postponed, attempts.
+    every counted rep: lc.on_rep(t) (optional; push-up motion in the frames marks reps earned too);
+    after every start()/poll(): for w in lc.windows(): runtime.update_challenge_window(*w) (deadlines can shrink);
+    lc.finish(t_end) at call end; lc.summary() -> result, earned, unprompted_lifts, suspicious, postponed, attempts.
 poll(t) -> (status, cue_key|None): 'pending' while an attempt (or the gap before the retry) is open; 'go' with challenge_go when a
-FREEZE attempt reaches its go time (also on a void attempt, so an honest person is never left frozen); 'retry' with the
+FREEZE attempt reaches its go time (also on a void attempt) or ends without a pass before it (release); 'retry' with the
 retry's cue key when the retry starts, a random liveness_retry_delay_s after the first attempt's deadline (time for an
 honest late responder to lower the hand; random so a replay cannot time it) or later if postponed; 'pass'
 (challenge_passed); 'fail' (challenge_failed); 'skipped' (None). Terminal statuses carry their cue once, later polls return (result, None).
 An attempt times out only when t > deadline (start + timeout; FREEZE: confirm_by = start + timeout for the stop, then
 go time + liveness_go_react_s); frames after the deadline never count. Attempt outcomes: pass | timeout | quiet |
-camera | early | no_resume | ended.
+camera | early | lost | no_resume | ended. windows() reports each attempt's current deadline: feed it to
+JudgeRuntime.update_challenge_window after every start()/poll().
 
 Attempt validity (an invalid attempt cannot pass; at its deadline it becomes the retry, or 'fail' if it was the retry):
   quiet (D-20 B)   a hand was off the floor (tracked wrist height > liveness_floor_leave in 2 consecutive frames, or a
@@ -68,16 +85,15 @@ floor is placed there by the pose model), 'up' when height > liveness_lift_h wit
 A state change needs 2 consecutive frames (D-16); heights in between keep the state (hysteresis). Frames (D-20 F):
 a frame is valid with exactly one person, landmarks, a baseline and a tracked ankle; an invalid frame resets the
 consecutive-evidence counters, and a timestamp gap > liveness_max_gap_s (or a hand unusable for that long) also
-resets the hand to 'unknown' (unknown -> up is never a transition). Non-increasing timestamps are ignored.
+resets the hand to 'unknown' (unknown -> up is never a transition) and drops the open attempt's evidence for that
+hand (its lift onset and floor sighting), so a lift counts only after a fresh floor -> up transition. Non-increasing timestamps are ignored.
 
 Baseline (learned outside challenge windows on one-person plank frames: a side with tracked shoulder, hip and ankle
 within 35 deg of horizontal): EMAs (alpha 0.1) of torso_len (|shoulder - hip|), the floor wrist point (tracked wrists
 on the floor) and the floor ankle point. No baseline -> nothing can be verified.
 
 Presence (D-20 D): a frame shows the person when persons >= 1 and a shoulder or hip is tracked, independent of the
-wrists. result: 'pass'; 'skipped' only when the call ended before the first cue (before fire_t, possibly postponed) or
-nobody was in frame in any frame of the attempts; otherwise 'fail' (present but unverifiable - wrists hidden, no
-ankle, no baseline - is a fail, and so is ending the call during an open challenge or a pending retry without a pass).
+wrists (attempt 'seen'); see Terminal result above for how it settles 'skipped' vs 'fail'.
 
 Unprompted motion (D-20 C): floor -> up transitions whose onset is outside every attempt window [cue, deadline] are
 counted as unprompted_lifts; suspicious = >= 3 such lifts whose onset intervals have a
@@ -152,6 +168,7 @@ class _Attempt:
     go_said: bool = False
     ref: np.ndarray | None = None     # frozen shoulder position (camera-compensated)
     resume_run: int = 0
+    last_ok_t: float | None = None    # FREEZE after confirmation: last frame with single-person torso evidence
     anchor0: np.ndarray | None = None
     cam_run: int = 0
     floor_obs: dict = field(default_factory=lambda: {"left": False, "right": False})
@@ -213,6 +230,7 @@ class LivenessChallenge:
         self._lifts: list[float] = []         # unprompted lift onsets (outside attempt windows)
         self._all_lifts: list[float] = []     # every observed lift onset
         self.postponed = 0                    # checks at which no challenge type was eligible
+        self._earned = False                  # push-up motion (or a counted rep, on_rep) seen since counting started
         self.go0, self.go1 = (float(x) for x in t["liveness_go_delay_s"])
         if not 0 < self.go0 <= self.go1:
             raise ValueError(f"bad liveness_go_delay_s: {t['liveness_go_delay_s']!r}")
@@ -243,6 +261,15 @@ class LivenessChallenge:
         self.fire_t = t + self.rng.uniform(self.p0, self.p1)
         return False
 
+    def on_rep(self, t: float) -> None:
+        """A rep was counted at t (optional: push-up motion seen in the frames marks this too). From then on the call
+        cannot end 'skipped' - reps earned never count without a passed challenge."""
+        self._earned = True
+
+    @property
+    def earned(self) -> bool:
+        return self._earned
+
     @property
     def started(self) -> bool:
         return bool(self.attempts)
@@ -265,13 +292,15 @@ class LivenessChallenge:
 
     def summary(self) -> dict:
         return dict(result=self.result, unprompted_lifts=self.unprompted_lifts, suspicious=self.suspicious,
-                    fire_t=self.fire_t, postponed=self.postponed,
+                    fire_t=self.fire_t, postponed=self.postponed, earned=self._earned,
                     attempts=[dict(cue=a.cue, start=a.start, end=a.end, outcome=a.outcome, seen=a.seen, go_t=a.go_t)
                               for a in self.attempts])
 
     def windows(self) -> list[tuple[float, float]]:
-        """(cue time, deadline) of every attempt so far, known when the attempt starts: pass each new one to
-        JudgeRuntime.set_challenge_window (reps fired inside neither count nor are penalised)."""
+        """(cue time, current deadline) of every attempt so far. A FREEZE attempt opens with its latest possible
+        deadline and shrinks it when the go cue is played or the attempt ends, so after every start()/poll() pass
+        each entry to JudgeRuntime.update_challenge_window(t0, t1) (replaces the window registered for t0; reps fired
+        inside neither count nor are penalised)."""
         return [(a.start, a.deadline) for a in self.attempts]
 
     # ------------------------------------------------------------------ challenge flow
@@ -285,15 +314,15 @@ class LivenessChallenge:
         return self._open(float(t), types)
 
     def _eligible(self, t: float, exclude: str | None) -> list[str]:
-        """Challenge types that a replay cannot answer by luck at time t (D-20 + selection rule, module docstring):
-        Nothing unless push-ups are in progress; then FREEZE, plus the hand types if no hand lift was seen since
-        counting started (unprompted, or in a failed attempt). Minus `exclude` (the retry is a different type)."""
-        if not self._moving_before(t):
+        """Challenge types that a replay cannot answer by luck at time t (module docstring, Selection): nothing before
+        reps were earned; the hand types if no unprompted hand lift was seen (outside every attempt window); FREEZE if
+        push-ups are in progress. Minus `exclude` (the retry is a different type) unless that leaves nothing."""
+        if not self._earned:
             return []
-        types = [FREEZE]
-        if not any(x <= t for x in self._all_lifts):
-            types = [LIFT_HOLD, DOUBLE_TAP] + types
-        return [c for c in types if c != exclude]
+        base = [LIFT_HOLD, DOUBLE_TAP] if not any(x <= t for x in self._all_lifts) else []
+        if self._moving_before(t):
+            base.append(FREEZE)
+        return [c for c in base if c != exclude] or base
 
     def _open(self, t: float, types: list[str]) -> str:
         cue = self.rng.choice(types)
@@ -349,29 +378,35 @@ class LivenessChallenge:
                 a.go_said, a.go_t = True, t                   # the go cue is played now
                 a.deadline = t + self.go_react
                 return "go", GO_CUE
-        if a.invalid == "early":
-            return self._attempt_over(a, t, "early", t)
+        if a.invalid in ("early", "lost") or (a.cue == FREEZE and a.invalid == "camera"):
+            return self._attempt_over(a, t, a.invalid, t)
         if t <= a.deadline:
             return "pending", None
         miss = "no_resume" if a.go_said else "timeout"
         return self._attempt_over(a, a.deadline, a.invalid or miss, t)
 
     def _attempt_over(self, a: _Attempt, end: float, outcome: str, t: float) -> tuple[str, str | None]:
+        """An attempt ended without a pass. First attempt: schedule the retry; an unfinished FREEZE (no go cue yet)
+        releases the person with the go cue so nobody is left frozen. Retry: settle fail/skipped (its cue releases)."""
         a.end, a.outcome, a.deadline = end, outcome, min(a.deadline, max(end, a.start))
         if len(self.attempts) == 1:
             self._retry_at = end + self.rng.uniform(self.r0, self.r1)
+            if a.cue == FREEZE and not a.go_said:
+                a.go_said, a.go_t = True, t                   # release: the go cue is played now
+                return "go", GO_CUE
             return "pending", None
         return self._resolve(self._no_pass_result(), t, True)
 
     def _no_pass_result(self) -> str:
-        return "fail" if any(x.seen for x in self.attempts) else "skipped"
+        """No pass: 'skipped' only if no rep was earned and nobody was in frame during any attempt."""
+        return "fail" if self._earned or any(x.seen for x in self.attempts) else "skipped"
 
     def finish(self, t_end: float) -> str:
         """Call ended at t_end: settle and return the final result (module docstring). No cue is due."""
         if self.result is not None:
             return self.result
-        if not self.attempts:
-            self.result, self.result_t, self._announced = "skipped", float(t_end), True
+        if not self.attempts:              # never cued (postponed past the end, or the call ended before fire_t)
+            self.result, self.result_t, self._announced = self._no_pass_result(), float(t_end), True
             return self.result
         a = self.attempts[-1]
         if a.passed_at is not None and self._retry_at is None:
@@ -384,13 +419,12 @@ class LivenessChallenge:
         t = float(f.t)
         if not math.isfinite(t) or (self._last_t is not None and t <= self._last_t):
             return
+        a = self._open_attempt(t)
         if self._last_t is not None and t - self._last_t > self.max_gap:
-            for h in self._hands.values():
-                h.reset_counters()
-                h.state = "unknown"
+            for name, h in self._hands.items():
+                self._hand_lost(name, h, a)
             self._anchors.clear()
         self._last_t = t
-        a = self._open_attempt(t)
         P, raw, aspect, persons = self._parse(f)
         present = persons >= 1 and any((s, k) in P for s in KP for k in ("sh", "hp"))
         if present and a is not None:
@@ -403,21 +437,26 @@ class LivenessChallenge:
             self._learn(P)
         valid = one and bool(ankles) and self._baseline_ok()
         off = self._offset() if valid else None
-        hands_down = True
+        # hands_down: both hands placed (any confidence) and none off the floor, and at least one tracked wrist seen
+        # on the floor - missing wrists are no evidence of stillness
+        hands_down, floor_seen = valid, False
         for name, h in self._hands.items():
             if h.last_valid_t is not None and t - h.last_valid_t > self.max_gap and h.state != "unknown":
-                h.state = "unknown"
-                h.reset_counters()
+                self._hand_lost(name, h, a)
             if not valid or raw[name] is None:
                 h.reset_counters()
+                hands_down = False
                 continue
             hh = self._height(raw[name], off)
             tracked = (name, "wr") in P
             if tracked and hh > self.floor_leave:
                 hands_down = False
+            elif tracked:
+                floor_seen = True
             self._update_hand(name, h, hh, tracked, t, a)
             if h.state == "up":
                 hands_down = False
+        hands_down = hands_down and floor_seen
         sh, hp = self._torso_points(P)
         sh_h = self._height(sh, off) if (valid and sh is not None) else None
         self._hist.append(_Hist(t, valid and sh is not None and hp is not None,
@@ -425,10 +464,19 @@ class LivenessChallenge:
                                 None if hp is None or off is None else hp - off, sh_h, hands_down))
         while self._hist and self._hist[0].t < t - HISTORY_S:
             self._hist.popleft()
+        if not self._earned and valid and self._moving_before(t):
+            self._earned = True
         # a void ('quiet') attempt still plays out exactly like a valid one (FREEZE: confirm, go cue), so the person
         # cannot tell it is void and is not left frozen; it just cannot pass
         if a is None or a.passed_at is not None or a.invalid not in (None, "quiet"):
             return
+        if a.cue == FREEZE and a.confirm_t is not None:
+            # confirmed stillness needs continuous single-person torso evidence until the pass
+            if self._hist[-1].valid and t - a.last_ok_t <= self.max_gap:
+                a.last_ok_t = t
+            elif t - a.last_ok_t > self.max_gap:
+                a.invalid = "lost"
+                return
         if not valid:
             a.cam_run = 0
             return
@@ -473,6 +521,14 @@ class LivenessChallenge:
                 if name == "wr":
                     raw[side] = pt if inside else None
         return P, raw, aspect, persons
+
+    def _hand_lost(self, name: str, h: _Hand, a: _Attempt | None) -> None:
+        """Tracking gap: the hand state is unknown again and the attempt's evidence for this hand is dropped, so a
+        lift counts only after a fresh floor -> up transition."""
+        h.reset_counters()
+        h.state, h.onset_t = "unknown", None
+        if a is not None:
+            a.up_onset[name], a.floor_obs[name] = None, False
 
     def _update_hand(self, name: str, h: _Hand, hh: float, tracked: bool, t: float, a: _Attempt | None) -> None:
         h.last_valid_t = t
@@ -527,7 +583,7 @@ class LivenessChallenge:
         shoulder moves away from its frozen position within liveness_go_react_s of the go cue."""
         if a.confirm_t is None:
             if t <= a.confirm_by and self._still_window(a, t):
-                a.confirm_t, a.go_t = t, t + a.go_delay
+                a.confirm_t, a.go_t, a.last_ok_t = t, t + a.go_delay, t
                 # frozen reference: the last REF_S of the confirmed window (its start may still hold the stop's tail)
                 pts = [e.sh for e in self._hist if e.t >= t - REF_S - 1e-9 and e.sh is not None]
                 a.ref = np.mean(pts, axis=0)

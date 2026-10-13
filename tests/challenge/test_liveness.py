@@ -74,14 +74,18 @@ def response(cue, t0, rr, go_t=None):
     return [], [(t0 + react, 15.0 if go_t is None else go_t + go_react - (t0 + react))]
 
 
-def honest(seed, noise, prelift=False):
-    """A person doing push-ups who answers each cue. Responses start after their cue, so earlier frames are unchanged
-    and the cue sequence can be discovered by re-running (asserted)."""
+def honest(seed, noise, prelift=False, rest=False):
+    """A person doing push-ups who answers each cue (rest: three push-ups, then a plank hold through the cues).
+    Responses start after their cue, so earlier frames are unchanged and the cue sequence can be discovered by
+    re-running (asserted)."""
     r = random.Random(seed)
     side, body = r.choice(["left", "right"]), r.choice(sorted(BODIES))
     fire, rep_s, depth = r.uniform(4, 9), r.uniform(1.4, 2.4), r.uniform(60, 85)
     kw = dict(n_reps=int((fire + 40) / rep_s), rep_s=rep_s, depth=depth, lead_in_s=1.0, side=side, body=body,
               noise=noise, seed=seed)
+    if rest:
+        fire = 1.0 + 3 * rep_s + r.uniform(2.5, 8.0)
+        kw.update(n_reps=3, tail_s=fire + 40 - (1.0 + 3 * rep_s))
     known: list = []        # (cue, start, go_t) per attempt, as found by the previous run
     fixed = 0               # attempts of `known` that the previous run produced with correct (non-placeholder) input
     for _ in range(8):
@@ -93,7 +97,10 @@ def honest(seed, noise, prelift=False):
         pauses.sort()
         pauses = [(a, min(d, nxt[0] - a - 0.1) if nxt else d) for (a, d), nxt in zip(pauses, pauses[1:] + [None])]
         lc, _ = drive(synth_pushups(hand_motions=motions, pauses=pauses, **kw), fire, seed)
-        got = [(a.cue, a.start, a.go_t if a.go_said else None) for a in lc.attempts]
+        # a go time is real only if this run answered the attempt (with the hold-until-told placeholder or an earlier
+        # go time); for an attempt new in this run it reflects no response at all, so the next run holds until told
+        got = [(a.cue, a.start, a.go_t if a.go_said and i < len(known) and known[i][:2] == (a.cue, a.start) else None)
+               for i, a in enumerate(lc.attempts)]
         # responses only act after their cue, so attempts produced from correct input must not change
         assert [g[:2] for g in got[:fixed]] == [k[:2] for k in known[:fixed]], "simulation is not causal"
         if got == known:
@@ -110,7 +117,9 @@ def honest(seed, noise, prelift=False):
 def replay(seed, family, period=0.0):
     """Recorded video ignoring the cue. Plank hold (n_reps=0) unless the family has push-ups; random phase."""
     r = random.Random(seed)
-    fire = r.uniform(4, 10)
+    # bank_*: the cue is drawn from a 105 s span like the production window (45-150 s): there the attack is a first
+    # hand lift that happens to land just after the cue, and its odds scale with ~2 s / span
+    fire = r.uniform(4, 10) if not family.startswith("bank_") else r.uniform(10, 115)
     T = fire + 25
     hand, side = r.choice(["left", "right"]), r.choice(["left", "right"])
     kw = dict(n_reps=0, lead_in_s=T, side=side, noise=0.01, seed=seed)
@@ -147,6 +156,14 @@ def replay(seed, family, period=0.0):
         kw.update(push, pauses=pz)
         if family == "lift_push_pause":
             motions.append(("lift", hand, 1.0, 1.5))
+    elif family.startswith("bank_"):             # four push-ups (reps banked by ~7.7 s), then a plank hold
+        kw.update(n_reps=4, rep_s=1.8, lead_in_s=0.5, tail_s=T - 7.7)
+        if family != "bank_still":
+            kind, dur = ("lift", 2.5) if family == "bank_lifts" else ("tap", 1.0)
+            t = 8.0 + r.uniform(0, 105.0 if period >= 105 else period)
+            while t < T:
+                motions.append((kind, hand, t, dur))
+                t += period
     elif family == "pushups":
         kw.update(push)
     elif family != "static":
@@ -166,8 +183,8 @@ def replay_rate(family, period=0.0):
 
 
 @functools.lru_cache(maxsize=None)
-def honest_results(noise, prelift=False, n=N_SEEDS):
-    return [honest(s, noise, prelift) for s in range(n)]
+def honest_results(noise, prelift=False, n=N_SEEDS, rest=False):
+    return [honest(s, noise, prelift, rest) for s in range(n)]
 
 
 def plank(motions=(), secs=14.0, **kw):
@@ -235,6 +252,13 @@ def test_honest_after_an_unprompted_lift_still_passes():
     assert all(a.cue == FREEZE for lc in res for a in lc.attempts)     # a lifted hand rules out the hand types
 
 
+def test_honest_at_rest_passes():
+    res = honest_results(0.01, rest=True)
+    rate = sum(lc.result == "pass" for lc in res) / len(res)
+    print(f"\nHONEST at rest: pass {rate:.3f}")
+    assert rate >= 0.99 and all(a.cue != FREEZE for lc in res for a in lc.attempts)
+
+
 def test_honest_is_deterministic():
     a, b = honest(3, 0.01).summary(), honest(3, 0.01).summary()
     assert a == b
@@ -248,6 +272,7 @@ def test_honest_is_deterministic():
     ("random_taps", 0), ("push_random_taps", 0),
     ("camera", 6), ("push_camera", 4), ("push_camera", 6), ("push_camera", 8),
     ("static", 0), ("pushups", 0),
+    ("bank_still", 0), ("bank_taps", 3), ("bank_lifts", 8), ("bank_lifts", 20), ("bank_lifts", 200),
 ])
 def test_replay_pass_rate_at_most_5pct(family, period):
     assert replay_rate(family, period) <= 0.05
@@ -259,15 +284,15 @@ def test_replay_pause_pattern_vs_freeze(family):
     assert replay_rate(family, 6) <= 0.05
 
 
-@pytest.mark.parametrize("period", [8, 12])
+@pytest.mark.parametrize("period", [8, 9])
 def test_replay_long_pauses_vs_freeze_go(period):
     """Adaptive variant: pauses long enough to outlast confirm + go delay (period-3 s pause, 3 s of push-ups)."""
     assert replay_rate("push_long_pause", period) <= 0.05
 
 
-@pytest.mark.xfail(strict=True, reason="D-30 accepted residual: period 9/10 long pauses beat FREEZE+go 5.5%/7% "
+@pytest.mark.xfail(strict=True, reason="D-30 accepted residual: period 10/12 long pauses beat FREEZE+go 6.0%/8.5% "
                                        "(go delay 2-8 s); mitigated by admin re-judge of top finishers")
-@pytest.mark.parametrize("period", [9, 10])
+@pytest.mark.parametrize("period", [10, 12])
 def test_replay_long_pauses_residual(period):
     assert replay_rate("push_long_pause", period) <= 0.05
 
@@ -369,6 +394,56 @@ def test_timestamp_gap_resets_evidence():
     assert lc.attempts[0].passed_at is None
 
 
+def test_tracking_gap_during_hold_drops_the_lift():
+    """Review P2: a gap mid-hold clears the attempt's lift; the hand is still up after it but never left the floor
+    again, so the hold cannot pass from the pre-gap onset."""
+    clip = plank([LIFT])
+    clip.frames[:] = [f for f in clip.frames if not 5.6 <= f.t <= 6.2]
+    lc, _ = drive(clip, 3.5, force=[LIFT_HOLD], stop_on_result=True)
+    assert lc.attempts[0].passed_at is None
+    lc, _ = drive(plank([LIFT]), 3.5, force=[LIFT_HOLD], stop_on_result=True)
+    assert lc.attempts[0].passed_at is not None                       # same clip without the gap passes
+
+
+def freeze_clip():
+    """Push-ups, stop at 4.8 s, resume 0.5 s after the go cue of the forced FREEZE at 4.2 s (seed 0)."""
+    lc, _ = drive(pushups(secs=34.0, pauses=[(4.8, 20.0)]), 4.2, force=[FREEZE], stop_on_result=True)
+    a = lc.attempts[0]
+    return a, pushups(secs=34.0, pauses=[(4.8, a.go_t + 0.5 - 4.8)])
+
+
+def test_freeze_needs_continuous_single_person_after_confirm():
+    a0, clip = freeze_clip()
+    lc, _ = drive(clip, 4.2, force=[FREEZE], stop_on_result=True)
+    assert lc.result == "pass"
+    for mutate in ("leave", "two"):
+        _, clip = freeze_clip()
+        for f in clip.frames:
+            if a0.confirm_t + 0.5 <= f.t <= a0.go_t - 0.3:
+                if mutate == "leave":
+                    f.img, f.persons = None, 0
+                else:
+                    f.persons = 2
+        lc, log = drive(clip, 4.2, force=[FREEZE], stop_on_result=True)
+        a = lc.attempts[0]
+        assert a.passed_at is None and a.outcome == "lost" and statuses(log)[1] == "go", (mutate, log)
+    _, clip = freeze_clip()
+    clip.frames[:] = [f for f in clip.frames if not a0.confirm_t + 0.5 <= f.t <= a0.confirm_t + 1.0]
+    lc, _ = drive(clip, 4.2, force=[FREEZE], stop_on_result=True)
+    assert lc.attempts[0].outcome == "lost"
+
+
+def test_freeze_without_visible_wrists_cannot_confirm():
+    """Review P2: missing wrists are no evidence that the hands are down."""
+    _, clip = freeze_clip()
+    for f in clip.frames:
+        if f.t >= 4.0:
+            f.img[[15, 16], 0] = np.nan
+    lc, _ = drive(clip, 4.2, force=[FREEZE], stop_on_result=True)
+    a = lc.attempts[0]
+    assert a.confirm_t is None and a.passed_at is None and a.outcome == "timeout"
+
+
 def test_single_frame_spikes_do_not_pass():
     clip = plank(secs=10.0, noise=0.0)
     i = next(k for k, f in enumerate(clip.frames) if f.t >= 4.5)
@@ -392,13 +467,30 @@ def test_two_people_cannot_pass():
 # ---------------------------------------------------------------- flow / results
 
 def test_no_motion_retries_different_type_then_fails():
-    lc, log = drive(pushups(secs=20.0), 4.0, seed=4)
+    lc, log = drive(pushups(secs=20.0), 4.0, force=[LIFT_HOLD])
     assert statuses(log) == ["start", "retry", "fail"], log
     assert log[1][2] != log[0][2] and log[2][2] == "challenge_failed"
     a1, a2 = lc.attempts
     assert a1.outcome == "timeout" and 8.0 + 3.0 <= a2.start <= 8.0 + 4.5 + 0.11
     assert lc.windows() == [(a1.start, a1.deadline), (a2.start, a2.deadline)]
     assert lc.poll(99.0) == ("fail", None) and lc.finish(99.0) == "fail"
+
+
+def test_freeze_exit_without_go_releases_then_retry_is_freeze_again():
+    """Review P2: a FREEZE that ends before its go cue releases the person with the go cue; with the hand types ruled
+    out (an earlier lift) the retry re-allows FREEZE instead of being impossible."""
+    clip = pushups(secs=30.0, hand_motions=[("lift", "left", 1.0, 1.5)])
+    lc, log = drive(clip, 6.0)
+    a1 = lc.attempts[0]
+    assert a1.cue == FREEZE and a1.outcome == "timeout" and a1.invalid is None      # a fair (non-void) attempt
+    assert log[:3] == [(6.0, "start", FREEZE), (log[1][0], "go", "challenge_go"), (log[2][0], "retry", FREEZE)], log
+    assert a1.confirm_by < log[1][0] <= a1.confirm_by + 0.11 and log[2][0] > log[1][0]
+    assert lc.windows()[0] == (a1.start, a1.confirm_by)
+    for kind, pauses in (("early", [(4.8, 6.0)]), ("camera", None)):
+        clip = pushups(secs=30.0, pauses=pauses or [(4.8, 20.0)],
+                       camera_shifts=[] if pauses else [(6.0, 0.5, 0.0, -0.2)])
+        lc, log = drive(clip, 4.0, force=[FREEZE])
+        assert lc.attempts[0].outcome == kind and statuses(log)[1] == "go", (kind, log)
 
 
 def test_retry_answered_passes():
@@ -417,23 +509,58 @@ def test_no_challenge_while_not_doing_pushups_and_hand_types_ruled_out_after_a_l
     assert lc.attempts[0].cue == FREEZE
 
 
-def test_skipped_when_call_ends_before_fire():
+def test_call_ending_before_fire_is_skipped_only_without_reps():
     lc = LivenessChallenge(random.Random(3))
     fire = lc.schedule(0.0)
     assert not lc.due(fire - 0.1)
     assert lc.finish(fire - 1.0) == "skipped" and lc.windows() == []
     with pytest.raises(RuntimeError):
         lc.start(fire)
+    lc = LivenessChallenge(random.Random(3))
+    fire = lc.schedule(0.0)
+    lc.on_rep(1.0)                                       # a counted rep: it can never count without a pass
+    assert lc.finish(fire - 1.0) == "fail" and lc.summary()["earned"] is True
 
 
-def test_skipped_only_when_nobody_in_frame():
+def test_left_frame_before_any_rep_is_skipped():
+    clip = pushups(secs=20.0)
+    for f in clip.frames:
+        f.img, f.persons = None, 0
+    lc, log = drive(clip, 4.0)
+    assert log == [] and lc.result == "skipped" and not lc.earned
+
+
+def test_banked_reps_then_leaving_frame_fails():
     clip = pushups(secs=20.0)
     for f in clip.frames:
         if f.t >= 3.9:
             f.img, f.persons = None, 0
     lc, log = drive(clip, 4.0)
-    assert statuses(log) == ["start"] and lc.result == "skipped"     # the retry was never possible (nobody there)
+    assert statuses(log)[0] == "start" and lc.result == "fail" and lc.earned
     assert lc.summary()["attempts"][0]["seen"] is False
+
+
+def still_after_reps(secs=60.0, motions=()):
+    """Four push-ups (done by ~7.7 s), then the body stays still (plank hold) to `secs`."""
+    return synth_pushups(n_reps=4, rep_s=1.8, lead_in_s=0.5, tail_s=secs - 7.7, hand_motions=list(motions),
+                         noise=0.004, seed=5)
+
+
+def test_banked_reps_then_holding_still_is_challenged_and_fails():
+    """Review P1: a replay banks reps, then holds still - the challenge still fires (hand types work at rest)."""
+    lc, log = drive(still_after_reps(), 20.0)
+    assert [c for _, s_, c in log if s_ in ("start", "retry")] and lc.attempts[0].cue in (LIFT_HOLD, DOUBLE_TAP)
+    assert lc.result == "fail" and all(a.cue != FREEZE for a in lc.attempts)
+    # a hand lift seen earlier rules the hand types out and FREEZE needs push-ups in progress: never cued -> fail
+    lc, log = drive(still_after_reps(motions=[("lift", "left", 9.0, 1.5)]), 20.0)
+    assert log == [] and lc.postponed >= 1 and lc.result == "fail"
+
+
+def test_honest_person_at_rest_answers_hand_challenge():
+    for cue, motions in ((LIFT_HOLD, [("lift", "right", 20.8, 2.6)]),
+                         (DOUBLE_TAP, [("lift", "left", 20.8, 0.9), ("lift", "left", 22.0, 0.9)])):
+        _, log = drive(still_after_reps(motions=motions), 20.0, force=[cue])
+        assert statuses(log) == ["start", "pass"], (cue, log)
 
 
 def test_present_but_wrists_hidden_fails():
@@ -463,7 +590,7 @@ def test_windows_feed_runtime():
     lc, _ = drive(clip, 4.0, seed=2)
     rt = JudgeRuntime()
     for w in lc.windows():
-        rt.set_challenge_window(*w)
+        rt.update_challenge_window(*w)
     for f in clip.frames:
         rt.on_frame(f)
     fires = [tf for tf in clip.fire_times]
@@ -486,3 +613,30 @@ def test_synth_motion_validation_and_causality():
     early = [(x, y) for x, y in zip(a.frames, b.frames) if x.t < 5.0]
     assert early and all(np.array_equal(x.img, y.img) for x, y in early)
     assert len(b.frames) == len(a.frames) + 20 and b.fire_times[-1] == pytest.approx(a.fire_times[-1] + 2.0)
+
+
+def test_runtime_follows_the_shrinking_freeze_window():
+    """Review P2: the FREEZE window registered at the cue (latest possible deadline) shrinks once the go cue is played;
+    the runtime must use the current window, so a rep after the real end counts again."""
+    a0, clip = freeze_clip()
+    lc = LivenessChallenge(_ForcedRandom(0, [FREEZE]), NOW)
+    lc.schedule(4.2)
+    rt = JudgeRuntime()
+    first = None
+    for f in clip.frames:
+        lc.on_frame(f)
+        if lc.due(f.t):
+            lc.start(f.t)
+        elif lc.active:
+            lc.poll(f.t)
+        for w in lc.windows():
+            rt.update_challenge_window(*w)
+        first = first or (rt.windows[0] if rt.windows else None)
+    a = lc.attempts[0]
+    assert lc.result == "pass" and first[1] > a.deadline and rt.windows == [(a.start, a.deadline)]
+    t_after = (a.deadline + first[1]) / 2
+    assert not rt.in_challenge(t_after) and rt.in_challenge(a.deadline)
+    rt.update_challenge_window(50.0, 51.0)
+    assert rt.windows[-1] == (50.0, 51.0)
+    with pytest.raises(ValueError):
+        rt.update_challenge_window(50.0, 49.0)
