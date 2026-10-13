@@ -42,6 +42,7 @@ describe("mappers", () => {
   it("maps power hour and competition", () => {
     expect(mapPowerHour({ date_et: "d", starts_at: "s", ends_at: "e" })).toEqual({ dateEt: "d", startsAt: "s", endsAt: "e" });
     const c = mapCompetition({ window_end: "x", frozen: true, brodie_number: "+1" });
+    expect(c).not.toHaveProperty("rafflePrize");
     expect(c.frozen).toBe(true);
     expect(c.ufcFighter).toBeNull();
     expect(c.firstPrize).toBe("$100");
