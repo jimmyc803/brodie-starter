@@ -240,10 +240,16 @@ def build_parser():
                                                                                                         'open = always allowed to speak, nothing is ever cut (the default with --perception off; env FLOOR)')
     ap.add_argument('--vision', action='store_true', default=truthy(os.environ.get('VISION')), help='with --voice gemini: tee the caller\'s video into the model session at --vision-fps (env VISION=1)')
     ap.add_argument('--vision-fps', type=float, default=float(os.environ.get('VISION_FPS', '1') or 1), help='frames per second handed to the model with --vision (default 1, at most 2; JPEG per frame)')
-    ap.add_argument('--avatar', dest='avatar', action='store_true', default=truthy(os.environ.get('AVATAR', '1')), help="publish Brodie's face as a video track "
-                    '"coach-video" (facetime/avatar.py) so the FaceTime caller sees him; mouth moves while a cue plays (default on; env AVATAR=0 turns it off)')
+    ap.add_argument('--avatar', dest='avatar', action='store_true', default=truthy(os.environ.get('AVATAR', '1')), help='publish a "coach-video" track so the '
+                    "FaceTime caller sees Brodie: the push-up mirror (--mirror) or his plain face (facetime/avatar.py); mouth moves while a cue plays "
+                    '(default on; env AVATAR=0 turns it off)')
     ap.add_argument('--no-avatar', dest='avatar', action='store_false', help='publish no video track')
-    ap.add_argument('--avatar-fps', type=float, default=float(os.environ.get('AVATAR_FPS', '10') or 10), help='avatar frames per second (default 10)')
+    ap.add_argument('--avatar-fps', type=float, default=float(os.environ.get('AVATAR_FPS', '12') or 12), help='coach-video frames per second (default 12)')
+    mirror_env = os.environ.get('MIRROR')
+    ap.add_argument('--mirror', dest='mirror', action='store_true', default=(None if mirror_env in (None, '') else truthy(mirror_env)),
+                    help="coach-video = the push-up mirror (facetime/pushup_mirror.py): the caller's own video with the judge's form skeleton, the "
+                         'camera-angle status, the valid count and the rep verdicts (default: on in competition mode; env MIRROR=1/0)')
+    ap.add_argument('--no-mirror', dest='mirror', action='store_false', help="coach-video = Brodie's plain face")
     ap.add_argument('-h', '--help', action='store_true', help='show this help and exit')
     return ap
 
@@ -405,6 +411,8 @@ class CoachJob:
                                                                   # stops once sealed: drain_feed() then knows no rep can follow
         self.hb_task = None
         self.avatar_task = None
+        self.mirror_in = None; self.mirror_live = False           # newest (rgb, landmarks, seq, t_mono) for the push-up mirror (feed thread writes)
+        self.mirror_state = None                                  # facetime.pushup_mirror.MirrorState (loop thread)
 
     # ---- lifecycle ----
     async def run(self):
@@ -484,27 +492,127 @@ class CoachJob:
         except Exception: why = str(args[0]) if args else 'unknown'
         print(f'[worker] room disconnected ({why}): leaving', flush=True); self.end(f'room disconnected ({why})')
 
+    def mirror_wanted(self):
+        m = getattr(self.a, 'mirror', None)
+        return bool(getattr(self, 'competition', False)) if m is None else bool(m)
+
+    def mirror_thresholds(self):
+        """The live judge thresholds (the pipeline judge's, else its configured ones over the defaults): the mirror's
+        green == passes this judge."""
+        pipe = getattr(self, 'pipe', None)
+        j = getattr(pipe, 'judge', None)
+        if j is not None and getattr(j, 'thr', None): return j.thr
+        from challenge.judge.gates import merged_thresholds
+        return merged_thresholds(getattr(pipe, 'judge_thr', None))
+
+    def mirror_rep(self, valid, reasons, in_challenge):
+        """Loop thread: a judged rep for the on-screen count and stamp. Only reps the scoring counts add to the count
+        (valid and not inside a liveness challenge; challenge.scoring.rep_points); challenge reps show nothing."""
+        if in_challenge: return
+        try:
+            st = self.mirror_state
+            if st is None:
+                from facetime.pushup_mirror import MirrorState
+                st = self.mirror_state = MirrorState()
+            st.rep(bool(valid), list(reasons or []), now=time.monotonic(), counts=True)
+        except Exception:
+            log.exception('mirror rep update failed')                # the video is cosmetic: never the event path
+
+    def _mirror_tick_state(self, now):
+        """Loop thread: the cue playing, the count timer; returns a snapshot the render thread can read safely."""
+        import dataclasses
+        from facetime.pushup_mirror import MirrorState
+        st = self.mirror_state
+        if st is None: st = self.mirror_state = MirrorState()
+        rec = self.player.playing if self.player is not None else None
+        st.speaking = rec is not None
+        if isinstance(rec, dict) and rec.get('intent') != 'probe' and rec.get('text'):
+            if rec.get('text') != st.cue or now - st.cue_t > 1.0: st.say(rec['text'], now=now)
+        comp = getattr(self, 'comp', None); t0 = getattr(comp, 't0', None)
+        st.time_left_s = None
+        if t0 is not None and getattr(comp, 'count_s', None):
+            st.time_left_s = max(0.0, float(t0) + float(comp.count_s) - time.time())
+        return dataclasses.replace(st, verdict_reasons=list(st.verdict_reasons))
+
     async def avatar_loop(self):
-        """Brodie's face (facetime/avatar.py) as the "coach-video" track; Chert's bridge shows it to the FaceTime caller. The mouth moves
-        while a cue plays. Rendered off the loop (PIL, a few ms a frame); any failure is logged and leaves the call alone."""
+        """The "coach-video" track; Chert's bridge shows it to the FaceTime caller. With the mirror (mirror_wanted()): the
+        caller's newest frame with the judge's form skeleton, camera status, valid count and verdicts (an idle card
+        until frames arrive, or when they stop for 2 s); otherwise Brodie's plain face. Rendered off the loop. A mirror
+        failure never touches the call: logged, that frame is the plain face, and after 10 failures in a row the mirror
+        is off for the call."""
         try:
             from facetime.avatar import Avatar
-            av = await asyncio.to_thread(Avatar); fps = max(1.0, float(getattr(self.a, 'avatar_fps', 10.0) or 10.0))
-            source = rtc.VideoSource(av.W, av.H)
+            av = await asyncio.to_thread(Avatar); fps = max(1.0, float(getattr(self.a, 'avatar_fps', 12.0) or 12.0))
+            renderer = None
+            if self.mirror_wanted():
+                try:
+                    from facetime.pushup_mirror import PushupMirror
+                    renderer = await asyncio.to_thread(PushupMirror)
+                except Exception as e:
+                    log.exception('push-up mirror unavailable'); print(f'[worker] push-up mirror unavailable ({e!r}): plain avatar', flush=True)
+            if renderer is not None:
+                from facetime.pushup_mirror import W as VW, H as VH
+                self.mirror_live = True; kind = 'push-up mirror'; bitrate = 1_500_000
+            else:
+                VW, VH = av.W, av.H; kind = 'avatar'; bitrate = 600_000
+            source = rtc.VideoSource(VW, VH)
             track = rtc.LocalVideoTrack.create_video_track('coach-video', source)
             await self.room.local_participant.publish_track(track, rtc.TrackPublishOptions(
-                source=rtc.TrackSource.SOURCE_CAMERA, simulcast=False, video_encoding=rtc.VideoEncoding(max_framerate=int(fps), max_bitrate=600_000)))
-            print(f'[worker] published video track coach-video {av.W}x{av.H} at {fps:g} fps (avatar)', flush=True)
+                source=rtc.TrackSource.SOURCE_CAMERA, simulcast=False, video_encoding=rtc.VideoEncoding(max_framerate=int(round(fps)), max_bitrate=bitrate)))
+            print(f'[worker] published video track coach-video {VW}x{VH} at {fps:g} fps ({kind})', flush=True)
             period = 1.0 / fps; loop = asyncio.get_running_loop(); next_t = loop.time()
+            fails = [0, 0]                                                 # in a row, total
+            stats = dict(n=0, ms=0.0, t=time.monotonic())
             while not self.stop.is_set():
                 speaking = self.player is not None and self.player.playing is not None
-                buf = await asyncio.to_thread(av.frame_bytes, speaking=speaking)
-                source.capture_frame(rtc.VideoFrame(av.W, av.H, rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420))
+                if renderer is not None:
+                    now = time.monotonic(); st = self._mirror_tick_state(now)
+                    snap = self.mirror_in
+                    if snap is not None and now - snap[3] > 2.0: snap = None; self.mirror_in = None      # frames stopped: idle card
+                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats)
+                    if fails[0] >= 10:
+                        print(f'[worker] push-up mirror failed {fails[0]} frames in a row: plain avatar for the rest of the call', flush=True)
+                        renderer = None; self.mirror_live = False; self.mirror_in = None
+                    if stats['n'] and now - stats['t'] >= 60.0:
+                        print(f"[worker] mirror render {stats['ms'] / stats['n']:.1f} ms/frame over {stats['n']} frames, {fails[1]} failures", flush=True)
+                        stats.update(n=0, ms=0.0, t=now)
+                else:
+                    size = (VW, VH)
+                    frame = await asyncio.to_thread(self._avatar_frame, av, speaking, size)
+                source.capture_frame(frame)
                 next_t += period; await asyncio.sleep(max(0.0, next_t - loop.time()))
         except asyncio.CancelledError:
             pass
         except Exception as e:
             print(f'[worker] avatar stopped: {e!r}', flush=True)
+        finally:
+            self.mirror_live = False; self.mirror_in = None
+
+    @staticmethod
+    def _avatar_frame(av, speaking, size):
+        """Brodie's plain face as an I420 frame of `size` (the mirror's size after a fallback)."""
+        buf = av.frame_bytes(speaking=speaking)
+        if size != (av.W, av.H):
+            import numpy as np, cv2
+            img = cv2.resize(np.frombuffer(buf, np.uint8).reshape(av.H, av.W, 3), size, interpolation=cv2.INTER_LINEAR)
+            buf = img.tobytes()
+        return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420)
+
+    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats):
+        """Render thread: one mirror frame (I420); on any error the plain face for this frame."""
+        from facetime.pushup_mirror import W as VW, H as VH
+        t0 = time.perf_counter()
+        try:
+            if snap is None: img = renderer.render(None, None, self.mirror_thresholds(), st, now=now)
+            else: img = renderer.render(snap[0], snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2])
+            fails[0] = 0
+            stats['n'] += 1; stats['ms'] += (time.perf_counter() - t0) * 1000
+            return rtc.VideoFrame(VW, VH, rtc.VideoBufferType.RGB24, img.tobytes()).convert(rtc.VideoBufferType.I420)
+        except Exception as e:
+            fails[0] += 1; fails[1] += 1
+            if fails[1] == 1 or fails[1] % 50 == 0:
+                log.exception('push-up mirror render failed'); print(f'[worker] push-up mirror render failed ({fails[1]} so far): {e!r}', flush=True)
+            return self._avatar_frame(av, st.speaking, (VW, VH))
 
     async def _leave_grace(self):
         await asyncio.sleep(max(0.0, self.a.leave_grace_s))
@@ -930,6 +1038,8 @@ class CoachJob:
                 finally:
                     self.feed_busy = False
             self.processed += 1; self.last_proc_wall = time.time()
+            if self.mirror_live:                                  # newest frame + its pose for the mirror (only the newest is kept)
+                self.mirror_in = (rgb, getattr(self.pipe, 'last_landmarks', None), seq, time.monotonic())
             if self.comp is not None and time.monotonic() - getattr(self, 'diag_t', 0.0) >= 1.0:
                 self.diag_t = time.monotonic()
                 try: print(f'[posediag] {pose_diag(rgb, getattr(self.pipe, "last_landmarks", None))}', flush=True)
@@ -966,8 +1076,13 @@ class CoachJob:
             if t == 'session' and (ev.get('state') == 'done' or ev.get('done')):        # plan finished, caller still here: save + show the card
                 asyncio.create_task(self.recap.finish(self.room, show=self.room_connected()), name='session-finish')
         if t == 'rep' and self.comp is not None:                # also during shutdown: the controller judges by timestamp
-            try: self.comp.on_rep(ev, t=self.wall_of(ev['t']))
+            stored = None
+            try: stored = self.comp.on_rep(ev, t=self.wall_of(ev['t']))
             except Exception: log.exception('competition on_rep failed for rep %s', ev.get('n'))
+            if stored is not None and getattr(self, 'mirror_live', False):    # what the controller recorded (None = outside the count)
+                self.mirror_rep(stored.get('valid') is True, stored.get('reject_reasons'), stored.get('in_challenge'))
+        elif t == 'rep' and getattr(self, 'mirror_live', False):            # no competition: the judge's verdict, or every rep without a judge
+            self.mirror_rep(ev.get('valid', True) is True, ev.get('reject_reasons'), ev.get('in_challenge'))
         if t == 'rep':
             c = ev.get('confidence') or {}
             print(f"[event] rep {ev['exercise']} {ev['n']} (agree {c.get('agree')}, amp {c.get('amp')}) t={ev['t']:.2f}", flush=True)
