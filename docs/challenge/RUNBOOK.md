@@ -1,9 +1,38 @@
 # Brodie challenge operations
 
-Target: Ubuntu 24.04 amd64 in us-east-1, Python 3.12, Node 24, Chert CLI
+Target: Ubuntu 24.04 amd64 in us-east-2 (see Live environment), Python 3.12, Node 24, Chert CLI
 0.1.0-beta.4. Use c7i.xlarge first. Benchmark a real three-minute call for
 frame throughput, processing latency and memory before considering g4dn; GPU
 instances also need a separately validated driver/CUDA installation.
+
+## Live environment (as deployed 2026-10-12)
+
+| Piece | Value |
+|---|---|
+| Site | https://brodie-pushups.vercel.app (Vercel project `brodie-pushups`, team wantdms-projects; `pushup-web/vercel.json` pins Next.js) |
+| Dispatcher | https://3.13.177.157.sslip.io (`/health` public) |
+| EC2 | `i-0d098dcf3948886ce`, m7i-flex.large, us-east-2, AWS profile `beatmuse`, EIP 3.13.177.157, SSH `ssh brodie-ec2` (key `~/.ssh/brodie_challenge`, SG allows one operator /32) |
+| Plan limits | AWS free plan ($100 credits): only free-tier instance types (max 2 vCPU). Budget `brodie-challenge` emails at $40 actual / $80 forecast. When credits run out the account pauses, it is not billed. |
+| Supabase | project `beat-muse` (tqfilmqvbhrywjstmyhu), linked in `supabase/`; all `db/migrations` applied and recorded in `public.schema_migrations` |
+| Server DB login | role `brodie_ops` via the session pooler `aws-0-us-east-1.pooler.supabase.com:5432` (the direct host is IPv6-only). SELECT on public + BYPASSRLS for pg_dump, INSERT on schema_migrations, no DDL. |
+| Code transport | bare repo `/srv/brodie.git` on the instance; push with `git push brodie-ec2:/srv/brodie.git <branch>:refs/heads/release`, then `sudo -u brodie git -C /opt/brodie pull --ff-only` |
+| Assets not in git | `data/cues_audio_gemini`, `data/models`, `models/` (pose .task files): `rsync -az --rsync-path="sudo rsync" <dir> brodie-ec2:/opt/brodie/...` then `chown -R brodie:brodie`. deploy.sh symlinks `data/` and `models/` into each release. |
+
+**Migrations:** the server role cannot run DDL. Apply a new migration from the operator machine
+(`supabase db query --linked -f db/migrations/<file>.sql`), then record it:
+`insert into schema_migrations(name, sha256) values ('<file>', '<sha256 of file bytes>')`. Deploy only verifies
+recorded checksums. Several migration files contain their own `begin;`/`commit;`, so never wrap them in an outer
+transaction expecting a rollback.
+
+**Agent name:** the challenge registers as LiveKit agent `brodie-challenge` (SSM `AGENT_NAME`), never the team's
+`team-beatmuse-agent`, so it cannot take coach calls. `brodie-worker` and `chert-agent` stay disabled until the
+challenge worker controller is deployed and `chert login` is done on the instance.
+
+**Email:** the site signs people in with Supabase email codes. Supabase's built-in mailer allows only a few emails
+an hour, so web join (`NEXT_PUBLIC_WEB_JOIN`) stays off until custom SMTP is configured (Supabase dashboard >
+Auth > SMTP). SES sender `stanleyyangideas@gmail.com` is pending verification and in the SES sandbox.
+
+**Gemini TTS:** render cues against Google directly; the `GEMINI_BASE_URL` hackathon relay is gone (404).
 
 ## Provision
 
