@@ -1,11 +1,9 @@
-"""Task 25: dispatcher admin API (broadcast / rejudge / raffle), /internal/alert and the shared rate limiter, vs PgStore."""
+"""Task 25: dispatcher admin API (broadcast / rejudge), /internal/alert and the shared rate limiter, vs PgStore."""
 from __future__ import annotations
 
 import hashlib
-import importlib.util
-import json
+import logging
 from datetime import datetime, timedelta
-from pathlib import Path
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -13,16 +11,18 @@ import pytest
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
-from challenge.dispatcher.admin import STOP_HINT, raffle_index
+from challenge.config import Config
+from challenge.dispatcher.admin import STOP_HINT
 from challenge.dispatcher.app import create_app
 from challenge.dispatcher.flags import Flags
 from challenge.dispatcher.ratelimit import RateLimiter
+from challenge.messaging.outbox import Outbox
+from challenge.messaging.providers import MockProvider
 from challenge.store import PgStore
 from tests.challenge.test_dispatcher_api import FakeOutbox, mkuser, rep
 
 ET = ZoneInfo("America/New_York")
 T0 = datetime(2026, 10, 13, 10, 0, tzinfo=ET)
-ROOT = Path(__file__).resolve().parents[2]
 ADMIN = "boss@example.com"
 TOK = {"X-Brodie-Token": "tok"}
 
@@ -32,13 +32,6 @@ def hdr(email=ADMIN, reason=None):
     if reason is not None:
         h["X-Admin-Reason"] = quote(reason)
     return h
-
-
-def _load(name):
-    spec = importlib.util.spec_from_file_location(f"t25_{name}", ROOT / "scripts" / f"{name}.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
 
 
 @pytest.fixture
@@ -79,7 +72,7 @@ def test_admin_auth_matrix(env):
     assert c.post("/admin/broadcast", headers=dict(hdr(reason="r"), **{"X-Brodie-Token": "nope"}), json=body).status_code == 401
     assert c.post("/admin/broadcast", headers=TOK, json=body).status_code == 403  # no email
     assert c.post("/admin/broadcast", headers=hdr("eve@example.com", "r"), json=body).status_code == 403
-    for path, b in (("/admin/broadcast", body), ("/admin/rejudge", {"apply": True}), ("/admin/raffle", {"seed": "s"})):
+    for path, b in (("/admin/broadcast", body), ("/admin/rejudge", {"apply": True})):
         r = c.post(path, headers=hdr(), json=b)
         assert r.status_code == 400 and "Reason" in r.text, (path, r.text)
         assert c.post(path, headers=hdr(reason="   "), json=b).status_code == 400
@@ -88,8 +81,11 @@ def test_admin_auth_matrix(env):
     # read-only variants need no reason; email match is case-insensitive
     assert c.post("/admin/broadcast", headers=hdr(" BOSS@example.COM "), json={"body": "hi", "dry_run": True}).status_code == 200
     assert c.post("/admin/rejudge", headers=hdr(), json={"apply": False}).status_code == 200
-    assert c.post("/admin/raffle", headers=hdr(), json={"seed": "s", "dry_run": True}).status_code == 200
-    assert c.post("/admin/raffle", headers=hdr(reason="draw day"), json={"seed": "s"}).status_code == 200
+    # control characters in the decoded reason are rejected (log / audit injection)
+    for bad in ("a\r\nb", "a\x00b", "line\n"):
+        r = c.post("/admin/broadcast", headers=hdr(reason=bad), json=body)
+        assert r.status_code == 400 and "control" in r.text, bad
+    assert conn.execute("select count(*) from messages").fetchone()[0] == 0
     # allowlist is checked in the DB on every request
     conn.execute("delete from admin_allowlist")
     assert c.post("/admin/rejudge", headers=hdr(), json={"apply": False}).status_code == 403
@@ -150,60 +146,69 @@ def test_broadcast_respects_quiet_hours_and_validates(env):
     assert t["sample_body"].count("STOP to opt out") == 1
 
 
-# ------------------------------------------------------------------ raffle
+def _outbox(store, conn, monkeypatch, t):
+    monkeypatch.delenv("OUTBOUND_RATE_PER_MIN", raising=False)
+    conn.execute("update competition_config set value='20' where key='outbound_rate_per_min'")
+    provider = MockProvider()
+    ob = Outbox(store, Config(store, ttl_s=0), provider, clock=lambda: t["now"])
+    ob._at, ob._tokens = t["now"], 20.0  # warmed smoother
+    return ob, provider
 
-def test_raffle_threshold_deterministic_and_matches_cli(env, capsys):
+
+def test_broadcast_send_time_optout_ban_and_quiet_hours(env, monkeypatch):
     c, conn, st, _ = env
-    u99, h99 = mkuser(conn)
-    u100, h100 = mkuser(conn)
-    u150, h150 = mkuser(conn)
-    uban, hban = mkuser(conn)
-    give_reps(c, conn, h99, 99, "r-99", n_invalid=5)
-    give_reps(c, conn, h100, 100, "r-100")
-    give_reps(c, conn, h150, 150, "r-150")
-    give_reps(c, conn, hban, 120, "r-ban")
-    conn.execute("update clients set banned_at=%s where id=%s", (T0, uban))
-
-    seed = "powerball 2026-10-18: 04 12 33 41 59 / 07"
-    d1 = c.post("/admin/raffle", headers=hdr(), json={"seed": seed, "dry_run": True}).json()
-    ids = sorted([u100, u150])
-    assert d1["eligible_count"] == 2 and d1["min_valid_reps"] == 100
-    assert d1["eligible_hash"] == hashlib.sha256(",".join(ids).encode()).hexdigest()
-    idx = int(hashlib.sha256((seed + ":" + ",".join(ids)).encode()).hexdigest(), 16) % 2
-    assert d1["index"] == idx == raffle_index(seed, ids)
-    assert d1["winner"]["user_id"] == ids[idx]
-    names = dict(conn.execute("select id::text, display_name from clients").fetchall())
-    assert d1["winner"]["display_name"] == names[ids[idx]]
-    assert conn.execute("select count(*) from audit_log where action='raffle'").fetchone()[0] == 0
-
-    d2 = c.post("/admin/raffle", headers=hdr(reason="final draw"), json={"seed": seed}).json()
-    assert {k: d2[k] for k in d1 if k != "dry_run"} == {k: d1[k] for k in d1 if k != "dry_run"}
-    a = conn.execute("select actor, target, reason, after from audit_log where action='raffle'").fetchall()
-    assert len(a) == 1 and a[0][:3] == (ADMIN, seed, "final draw")
-    assert a[0][3]["eligible_hash"] == d1["eligible_hash"] and a[0][3]["winner"]["user_id"] == ids[idx]
-    assert a[0][3]["eligible_user_ids"] == ids and a[0][3]["seed"] == seed
-
-    cli = _load("raffle")
-    assert cli.main(["--seed", seed, "--dry-run"], store=st) == 0
-    out = json.loads(capsys.readouterr().out)
-    assert {k: out[k] for k in d1} == d1
-    assert cli.main(["--seed", seed], store=st) == 2  # logged draw needs actor + reason
-    assert cli.main(["--seed", seed, "--actor", "Ops@Example.com", "--reason", "cli draw"], store=st) == 0
-    assert json.loads(capsys.readouterr().out)["winner"] == d1["winner"]
-    assert conn.execute("select actor from audit_log where action='raffle' order by id desc limit 1").fetchone()[0] == "ops@example.com"
-
-    # boundary: one more valid rep makes the 99 user eligible; a different seed is a different (still valid) draw
-    give_reps(c, conn, h99, 1, "r-99b")
-    d3 = c.post("/admin/raffle", headers=hdr(), json={"seed": seed, "dry_run": True}).json()
-    assert d3["eligible_count"] == 3 and d3["winner"]["user_id"] in {u99, u100, u150}
-    assert c.post("/admin/raffle", headers=hdr(reason="r"), json={"seed": "  "}).status_code == 400
+    keep, hk = mkuser(conn)
+    stop, _ = mkuser(conn)
+    ban, _ = mkuser(conn)
+    r = c.post("/admin/broadcast", headers=hdr(reason="hype"), json={"body": "Go!", "dry_run": False}).json()
+    assert r["enqueued"] == 3
+    assert all(x[0] == {"_proactive": True} for x in conn.execute("select ctx from messages").fetchall())
+    # after enqueue: one user texts STOP, one is banned -> the outbox suppresses their rows at send time
+    st.rpc("ch_set_opt", {"p_user_id": stop, "p_opted_out": True, "p_now": T0})
+    st.rpc("ch_admin_ban", {"p_user_id": ban, "p_reason": "cheat", "p_actor": ADMIN})
+    t = {"now": T0 + timedelta(minutes=1)}
+    ob, provider = _outbox(st, conn, monkeypatch, t)
+    for _ in range(3):
+        ob.run_once(t["now"])
+    status = dict(conn.execute("select user_id::text, status from messages").fetchall())
+    assert status == {keep: "sent", stop: "suppressed", ban: "suppressed"}
+    assert [m["handle"] for m in provider.sent] == [hk]
 
 
-def test_raffle_no_eligible(env):
+def test_broadcast_enqueued_at_1am_waits_until_9(env, monkeypatch):
+    c, conn, st, now = env
+    _, h = mkuser(conn)
+    now["t"] = datetime(2026, 10, 14, 1, 0, tzinfo=ET)
+    assert c.post("/admin/broadcast", headers=hdr(reason="r"), json={"body": "Night", "dry_run": False}).json()["enqueued"] == 1
+    assert conn.execute("select not_before from messages").fetchone()[0] == datetime(2026, 10, 14, 9, 0, tzinfo=ET)
+    t = {"now": now["t"] + timedelta(minutes=5)}
+    ob, provider = _outbox(st, conn, monkeypatch, t)
+    ob.run_once(t["now"])
+    t["now"] = datetime(2026, 10, 14, 8, 59, tzinfo=ET)
+    ob.run_once(t["now"])
+    assert provider.sent == [] and conn.execute("select status from messages").fetchone()[0] == "queued"
+    t["now"] = datetime(2026, 10, 14, 9, 0, tzinfo=ET)
+    ob._at, ob._tokens = t["now"], 20.0
+    assert ob.run_once(t["now"]) == 1 and provider.sent[0]["handle"] == h
+    # even a row that became due early (e.g. not_before rewritten) is held by the send-time quiet-hours check
+    conn.execute("update messages set status='queued', not_before=%s, sent_at=null", (now["t"],))
+    conn.execute("update messages set dedupe_key='x2', provider_message_id=null")
+    t["now"] = datetime(2026, 10, 14, 2, 0, tzinfo=ET)
+    ob._at, ob._tokens = t["now"], 20.0
+    assert ob.run_once(t["now"]) == 0 and len(provider.sent) == 1
+
+
+def test_broadcast_link_template_needs_site_url(env):
     c, conn, *_ = env
-    r = c.post("/admin/raffle", headers=hdr(reason="r"), json={"seed": "x"}).json()
-    assert r["eligible_count"] == 0 and r["winner"] is None and r["index"] is None
-    assert conn.execute("select count(*) from audit_log where action='raffle'").fetchone()[0] == 1
+    mkuser(conn)
+    conn.execute("update competition_config set value='null'::jsonb where key='site_url'")
+    r = c.post("/admin/broadcast", headers=hdr(), json={"template": "final_results", "dry_run": True,
+                                                         "ctx": {"points": 1, "rank": 1}})
+    assert r.status_code == 400 and "config_missing:site_url" in r.text
+    conn.execute("update competition_config set value='\"https://x.test\"'::jsonb where key='site_url'")
+    ok = c.post("/admin/broadcast", headers=hdr(), json={"template": "final_results", "dry_run": True,
+                                                          "ctx": {"points": 1, "rank": 1}}).json()
+    assert "https://x.test" in ok["sample_body"] and "None" not in ok["sample_body"]
 
 
 # ------------------------------------------------------------------ rejudge
@@ -235,7 +240,8 @@ def test_rejudge_dry_run_and_apply(env):
 
 # ------------------------------------------------------------------ /internal/alert
 
-def test_internal_alert_dedupe_and_handles(env, monkeypatch):
+def test_internal_alert_dedupe_and_handles(env, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG)
     c, conn, _, now = env
     body = {"kind": "worker_down", "message": "no heartbeat"}
     assert c.post("/internal/alert", json=body).status_code == 401
@@ -260,6 +266,8 @@ def test_internal_alert_dedupe_and_handles(env, monkeypatch):
     assert r["recipients"] == 1 and r["enqueued"] == 1
     assert conn.execute("select handle from messages order by id desc limit 1").fetchone()[0] == "+15550000009"
     assert c.post("/internal/alert", headers=TOK, json={"message": "no kind"}).status_code == 400
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "worker_down" in logged and "no heartbeat" not in logged and "disk" not in logged
 
 
 # ------------------------------------------------------------------ rate limiter
@@ -268,7 +276,7 @@ def test_limiter_429_scoped_and_proxy_aware(db):
     app = create_app(PgStore(db), FakeOutbox(), clock=lambda: T0, flags=Flags(), token="tok", rate_per_min=2)
     c = TestClient(app)
     assert [c.get("/health").status_code for _ in range(3)] == [200, 200, 429]
-    assert [c.post("/admin/raffle", json={"seed": "s"}).status_code for _ in range(3)] == [401, 401, 429]
+    assert [c.post("/admin/rejudge", json={}).status_code for _ in range(3)] == [401, 401, 429]
     assert [c.post("/internal/alert", json={"kind": "k", "message": "m"}).status_code for _ in range(3)] == [401, 401, 429]
     # a /health flood does not starve the worker scope
     assert c.post("/calls/start", json={"call_id": "a", "line_id": "l"}).status_code == 401

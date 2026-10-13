@@ -43,7 +43,7 @@ TEMPLATES: dict[str, str] = {
 PROACTIVE_TEMPLATES = frozenset({
     "welcome", "youre_up", "missed_slot", "queue_update", "post_call", "rank_drop",
     "streak_risk", "ph_announce", "ph_warn", "ph_start", "daily_recap",
-    "ending_soon", "final_results",
+    "ending_soon", "final_results", "broadcast",  # broadcast: admin body, never rendered
 })
 LINK_FIELDS = {
     "welcome": "site_url", "join_confirm_prompt": "rules_url", "top": "site_url",

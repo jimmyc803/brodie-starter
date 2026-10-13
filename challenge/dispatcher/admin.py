@@ -6,13 +6,9 @@ Auth for /admin/*: X-Brodie-Token (constant-time) AND X-Admin-Email on admin_all
 request) AND, for mutations, a non-empty X-Admin-Reason (URL-encoded by the site, decoded here).
 /internal/alert: X-Brodie-Token only (Caddy also 404s /internal/* from outside). Recipients = config
 team_alert_handles (env ADMIN_ALERT_HANDLES overrides when set); quiet hours bypassed; deduped per kind per 10 min.
-
-Raffle (SPEC §2): eligible = registered, non-banned users with >= raffle_min_valid_reps valid reps, sorted by user_id;
-winner index = int(sha256(seed + ':' + ','.join(ids)), 16) % n. scripts/raffle.py uses the same functions.
 """
 from __future__ import annotations
 
-import hashlib
 import hmac
 import logging
 import os
@@ -26,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from challenge.dispatcher.ratelimit import rate_limit
 from challenge.judge.gates import DEFAULT_THRESHOLDS, JUDGE_VERSION, merged_thresholds
-from challenge.messaging.templates import TEMPLATES, render
+from challenge.messaging.templates import LINK_FIELDS, TEMPLATES, render
 from challenge.store import Store, StoreError
 from challenge.timeutil import next_quiet_end
 from scripts import rejudge as rj
@@ -37,6 +33,7 @@ STOP_HINT = " Text STOP to opt out."
 BROADCAST_MAX = 1000
 REASON_MAX = 500
 ALERT_DEDUPE_S = 600
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _ALERT_KIND = re.compile(r"^[A-Za-z0-9_.:@/-]{1,64}$")
 
 
@@ -86,10 +83,12 @@ def admin_reason(x_admin_reason: str | None = Header(default=None)) -> str | Non
     if x_admin_reason is None:
         return None
     try:
-        r = unquote(x_admin_reason, errors="strict").strip()
+        r = unquote(x_admin_reason, errors="strict")
     except UnicodeDecodeError as e:
         raise HTTPException(400, "bad X-Admin-Reason encoding") from e
-    return r or None
+    if _CTRL.search(r):  # no CR/LF/NUL or other control chars (log/audit injection)
+        raise HTTPException(400, "X-Admin-Reason contains control characters")
+    return r.strip() or None
 
 
 def require_reason(reason: str | None) -> str:
@@ -103,64 +102,6 @@ def require_reason(reason: str | None) -> str:
 def _config(store: Store) -> dict[str, Any]:
     cfg = _rpc(store, "ch_config_get", {})
     return cfg if isinstance(cfg, dict) else {}
-
-
-# ------------------------------------------------------------------ raffle (shared with scripts/raffle.py)
-
-def raffle_index(seed: str, ids: list[str]) -> int:
-    if not ids:
-        raise ValueError("no eligible users")
-    return int(hashlib.sha256((seed + ":" + ",".join(ids)).encode()).hexdigest(), 16) % len(ids)
-
-
-def raffle_eligible(store: Store) -> tuple[int, list[dict[str, Any]]]:
-    """(min_valid_reps, eligible sorted by user_id). Raises StoreError."""
-    res = store.rpc("ch_raffle_eligible", {}) or {}
-    eligible = sorted(({"user_id": str(e["user_id"]), "display_name": e.get("display_name"),
-                        "valid_reps": int(e.get("valid_reps") or 0)} for e in res.get("eligible") or []),
-                      key=lambda e: e["user_id"])
-    return int(res.get("min_valid_reps")), eligible
-
-
-def raffle_draw(seed: str, eligible: list[dict[str, Any]], min_valid_reps: int) -> dict[str, Any]:
-    """Pure, deterministic draw over an eligible list (already sorted by user_id)."""
-    ids = [e["user_id"] for e in eligible]
-    joined = ",".join(ids)
-    out: dict[str, Any] = {"seed": seed, "min_valid_reps": min_valid_reps, "eligible_count": len(ids),
-                           "eligible_hash": hashlib.sha256(joined.encode()).hexdigest(), "index": None, "winner": None}
-    if ids:
-        i = raffle_index(seed, ids)
-        w = eligible[i]
-        out["index"] = i
-        out["winner"] = {"user_id": w["user_id"], "display_name": w["display_name"], "valid_reps": w["valid_reps"]}
-    return out
-
-
-def validate_seed(seed: str) -> str:
-    if not isinstance(seed, str) or not seed.strip():
-        raise ValueError("seed required")
-    if len(seed) > 200:
-        raise ValueError("seed too long (max 200)")
-    return seed
-
-
-def run_raffle(store: Store, seed: str, *, dry_run: bool, actor: str | None, reason: str | None,
-               now: datetime) -> dict[str, Any]:
-    """Compute eligibility + winner; unless dry_run, write one audit_log row ('raffle') with the seed, the eligible
-    user_ids and their hash, and the winner. Raises ValueError (bad input) / StoreError."""
-    seed = validate_seed(seed)
-    if not dry_run and not (actor and actor.strip() and reason and reason.strip()):
-        raise ValueError("actor and reason required")
-    min_reps, eligible = raffle_eligible(store)
-    out = raffle_draw(seed, eligible, min_reps)
-    out["dry_run"] = dry_run
-    if not dry_run:
-        after = {k: out[k] for k in ("seed", "min_valid_reps", "eligible_count", "eligible_hash", "index", "winner")}
-        after["eligible_user_ids"] = [e["user_id"] for e in eligible]
-        res = store.rpc("ch_admin_audit", {"p_actor": actor, "p_action": "raffle", "p_target": seed,
-                                           "p_before": None, "p_after": after, "p_reason": reason, "p_now": now})
-        out["audit_id"] = res.get("id") if isinstance(res, dict) else None
-    return out
 
 
 # ------------------------------------------------------------------ /admin router
@@ -181,8 +122,17 @@ def _broadcast_text(b: BroadcastIn, cfg: dict[str, Any]) -> str:
     if b.template is not None:
         if b.template not in TEMPLATES:
             raise HTTPException(400, "unknown template")
+        ctx = dict(b.ctx)
+        link = LINK_FIELDS.get(b.template)
+        if link == "site_url" and not ctx.get("site_url"):
+            site = cfg.get("site_url")
+            if not isinstance(site, str) or not site.strip():
+                raise HTTPException(400, "config_missing:site_url")
+            ctx["site_url"] = site.strip()
+        if link and (not isinstance(ctx.get(link), str) or not ctx[link].strip()):
+            raise HTTPException(400, f"ctx_missing:{link}")
         try:
-            text = render(b.template, {"site_url": cfg.get("site_url"), **b.ctx}, bool(cfg.get("swearing")))
+            text = render(b.template, ctx, bool(cfg.get("swearing")))
         except (KeyError, ValueError, IndexError) as e:
             raise HTTPException(400, f"template render failed: {e}") from e
     else:
@@ -280,30 +230,6 @@ def rejudge(b: RejudgeIn, request: Request, actor: str = Depends(admin_actor),
     return out
 
 
-class RaffleIn(BaseModel):
-    seed: str
-    dry_run: bool = False
-
-
-@router.post("/raffle")
-def raffle(b: RaffleIn, request: Request, actor: str = Depends(admin_actor),
-           reason: str | None = Depends(admin_reason)) -> dict:
-    if not b.dry_run:
-        reason = require_reason(reason)
-    try:
-        validate_seed(b.seed)
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
-    try:
-        out = run_raffle(_store(request), b.seed, dry_run=b.dry_run, actor=actor, reason=reason, now=_now(request))
-    except StoreError as e:
-        logger.error("raffle failed: %s", e)
-        raise HTTPException(503, "store unavailable") from e
-    logger.info("raffle by %s seed=%r eligible=%s winner=%s", actor, b.seed, out["eligible_count"],
-                (out["winner"] or {}).get("user_id"))
-    return out
-
-
 # ------------------------------------------------------------------ /internal router
 
 internal_router = APIRouter(prefix="/internal", dependencies=[Depends(rate_limit("internal"))])
@@ -336,7 +262,7 @@ def internal_alert(a: AlertIn, request: Request) -> dict:
     store = _store(request)
     handles = alert_handles(_config(store))
     if not handles:  # non-2xx so alert.sh falls back to email
-        logger.error("alert %s dropped: no team_alert_handles configured: %s", kind, a.message)
+        logger.error("alert %s dropped: no team_alert_handles configured", kind)
         raise HTTPException(503, "no alert handles configured")
     now = _now(request)
     bucket = int(now.timestamp() // ALERT_DEDUPE_S)
@@ -347,5 +273,5 @@ def internal_alert(a: AlertIn, request: Request) -> dict:
             "p_handle": h, "p_user_id": None, "p_template": "alert", "p_body": body, "p_media_url": None,
             "p_dedupe_key": f"alert:{kind}:{bucket}:{h}", "p_not_before": now, "p_now": now, "p_ctx": None})
         enqueued += 0 if res.get("duplicate") else 1
-    logger.warning("alert %s: %s (%d/%d enqueued)", kind, a.message, enqueued, len(handles))
+    logger.warning("alert %s: %d/%d enqueued", kind, enqueued, len(handles))
     return {"ok": True, "recipients": len(handles), "enqueued": enqueued, "deduped": enqueued == 0}
