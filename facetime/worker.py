@@ -1264,22 +1264,30 @@ class CoachJob:
             return raw
 
     def update_layout(self, raw, now):
-        """Feed thread: competition calls are sideways-only (owner decision 2026-10-13): the live mirror is ALWAYS the
-        landscape card, pre-turned by self.mirror_rot on the constant 720x1280 track (_mirror_frame; FaceTime fills
-        the never-rotating phone screen with it, and the sideways phone reads it upright). mirror_rot follows the
-        caller's MEASURED picture rotation (frameprep's orientation lock, the signal the rep judge itself depends
-        on), 90 until measured; the picture's shape is deliberately not a signal, and the track size never changes
-        mid-call: live calls (2026-10-13) showed FaceTime dropping to a small fitted box for the rest of the call
-        after any mid-stream size switch. Cosmetic: a failure is logged and the layout stays as it was."""
+        """Feed thread: the live card MIRRORS the caller's picture shape (live test 2026-10-13: an upright phone showed
+        the sideways card small and turned, drowning in black - a tall picture now gets the tall card, upright on the
+        portrait track, so an upright phone's screen fills; a wide picture keeps the landscape scoreboard, pre-turned
+        by mirror_rot so a sideways phone reads it upright). The shape is frameprep's slow content rect made upright
+        by the MEASURED rotation lock (the signal the rep judge itself depends on), landscape until a rect exists;
+        the track itself stays 720x1280 for the whole call, no exceptions: live calls (2026-10-13) showed FaceTime
+        dropping to a small fitted box for the rest of the call after any mid-stream size switch. Cosmetic: a failure
+        is logged and the layout stays as it was."""
         try:
-            was_rot = getattr(self, 'mirror_rot', 0)
+            was = (getattr(self, 'mirror_landscape', True), getattr(self, 'mirror_rot', 0))
             prep = getattr(self, 'prep', None)
             rot_now = int(getattr(prep, 'rotation', 0) or 0)
-            self.mirror_landscape = True                               # sideways-only (owner decision 2026-10-13)
-            self.mirror_rot = rot_now if rot_now in (90, 270) else (was_rot or 90)
-            if self.mirror_rot != was_rot:
-                print(f"[worker] caller's picture rotation {rot_now} deg: coach-video landscape "
-                      f'pre-turned {self.mirror_rot} deg on the portrait track', flush=True)
+            rect = getattr(getattr(prep, 'content', None), 'rect', None)
+            if rect is not None:
+                w, h = rect[2] - rect[0], rect[3] - rect[1]
+                if rot_now in (90, 270): w, h = h, w                   # the shape of the picture once turned upright
+                self.mirror_landscape = w >= h
+            else:
+                self.mirror_landscape = bool(was[0])
+            self.mirror_rot = rot_now if rot_now in (90, 270) else (was[1] or 90)
+            if (self.mirror_landscape, self.mirror_rot) != was:
+                card = (f'landscape pre-turned {self.mirror_rot} deg' if self.mirror_landscape else 'portrait, upright')
+                print(f"[worker] caller's picture {'wide' if self.mirror_landscape else 'tall'} (rotation {rot_now} deg): "
+                      f'coach-video {card} on the portrait track', flush=True)
         except Exception as e:
             self.layout_fails = getattr(self, 'layout_fails', 0) + 1
             if self.layout_fails == 1 or self.layout_fails % 100 == 0:

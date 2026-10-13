@@ -295,27 +295,29 @@ def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     assert (f.width, f.height) == (1280, 720)
 
 
-def test_feed_layout_is_always_landscape_and_follows_the_measured_rotation(capsys):
+def test_feed_layout_mirrors_the_callers_picture_shape(capsys):
     job = worker.CoachJob.__new__(worker.CoachJob)
     job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
     up, side = bridge(PORTRAIT_PIC), bridge(LANDSCAPE_PIC)
     t = 0.0
-    def step(raw):
+    def step(raw, n=1):
         nonlocal t
-        job.prep_frame(raw, t); job.update_layout(raw, t); t += 0.1
+        for _ in range(n):
+            job.prep_frame(raw, t); job.update_layout(raw, t); t += 0.3
     step(up)
-    assert job.mirror_landscape is True and job.mirror_rot == 90          # sideways-only, from the first frame
-    assert 'pre-turned 90 deg on the portrait track' in capsys.readouterr().out
-    for _ in range(30): step(side)
-    assert job.mirror_landscape is True and job.mirror_rot == 90          # the picture's shape changes nothing
-    job.prep.rotation = 270                                               # the lock measured the other turn
-    step(up)
+    assert job.mirror_landscape is False and job.mirror_rot == 90         # tall picture -> the tall card, upright
+    assert 'portrait, upright' in capsys.readouterr().out
+    step(side, 30)                                                        # the phone goes down sideways: wide picture
+    assert job.mirror_landscape is True and job.mirror_rot == 90          # -> the landscape card, pre-turned
+    assert 'pre-turned 90 deg' in capsys.readouterr().out
+    job.prep.rotation = 270                                               # the lock measured a turn: portrait raw, wide scene
+    step(up, 30)
     assert job.mirror_landscape is True and job.mirror_rot == 270
-    assert 'pre-turned 270 deg on the portrait track' in capsys.readouterr().out
-    job.prep.rotation = 0                                                 # lost again: the last measured turn holds
-    for _ in range(5): step(up)
-    assert job.mirror_landscape is True and job.mirror_rot == 270
-    assert capsys.readouterr().out == ''                                  # no churn in the log
+    assert 'pre-turned 270 deg' in capsys.readouterr().out
+    job.prep.rotation = 0                                                 # rotation lost, picture still tall: tall card,
+    step(up, 5)                                                           # the last measured pre-turn held for next time
+    assert job.mirror_landscape is False and job.mirror_rot == 270
+    assert capsys.readouterr().out.count('[worker]') == 1                 # the flip logs once, then no churn
 
 
 def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys):
