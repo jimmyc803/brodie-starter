@@ -102,7 +102,7 @@ export default async function SetupPage() {
       <CtaBand
         joinHref={smsLink(comp?.brodieNumber ?? null)}
         title="Set? Get in line."
-        body="Text JOIN to sign up, then text QUEUE or just FaceTime Brodie when you're ready to rep."
+        body="Text JOIN to sign up, then QUEUE when you're ready to rep."
       />
     </div>
   );

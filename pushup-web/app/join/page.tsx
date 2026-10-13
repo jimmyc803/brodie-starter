@@ -16,8 +16,8 @@ export const metadata: Metadata = {
 const STEPS = [
   ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board after JOIN."],
   ["Confirm", "Reply to confirm you're 18+ and accept the rules."],
-  ["Text QUEUE or just FaceTime", "Either one gets you in line, and we text you your spot. If the line's open when you FaceTime, you're on right away."],
-  ["Rep out", "When we text you're up, call back within 90 seconds and do strict push-ups on camera."],
+  ["Text QUEUE", "Get in line. We text you your spot, then again when it's your turn."],
+  ["FaceTime and rep", "When we text you're up, FaceTime Brodie within 90 seconds and do strict push-ups on camera."],
 ] as const;
 
 /** Illustrative Messages thread. Decorative: the steps below carry the same information. */

@@ -124,10 +124,10 @@ export default async function RulesPage() {
         <Bullets
           items={[
             "Each call lasts 3:15. You get 3:00 to do reps (setup happens inside it), then a 15 second reveal.",
-            "Two ways to get in line: text QUEUE, or just FaceTime Brodie (if the line is busy you're queued automatically). Either way we text you your spot. Fewest counted calls today goes first; ties are first-come, first-served.",
+            "Text QUEUE to get in line and we text you your spot. Fewest counted calls today goes first; ties are first-come, first-served.",
             "When you're up you have 90 seconds to FaceTime in, or you lose your spot.",
-            "Line empty and idle? Walk right in.",
-            "Calling while someone else is up ends that call with nothing recorded, but you keep (or get) your spot in line.",
+            "Line empty? Text QUEUE and you're up within seconds.",
+            "Only the person who was texted \"you're up\" can start a call. Any other call is ended and nothing is recorded.",
             "Alt accounts give no advantage: reps stay with the account that did them.",
             "Up to 5 counted calls per person per day (ET). A call counts if you were connected 30+ seconds or did at least one rep.",
           ]}

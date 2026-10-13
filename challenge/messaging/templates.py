@@ -6,7 +6,7 @@ and opt-out enforcement belong to the outbox, not this pure renderer.
 
 
 TEMPLATES: dict[str, str] = {
-    "welcome": "You're in, {display_name}! Let's stack clean reps. Text QUEUE or just FaceTime Brodie to get in line. STATUS for your stats.",
+    "welcome": "You're in, {display_name}! Let's stack clean reps. Text QUEUE to get in line, STATUS for your stats.",
     "join_confirm_prompt": "Clean push-ups earn points; power hour reps earn 2×. Daily call cap applies. One person, one account; 18+, US, iPhone. Reply YES to confirm you're 18+, in the US, and agree to the rules.",
     "join_bad_name": "Let's pick a clean name: 3–20 letters, numbers, or underscores. Text JOIN your_name.",
     "join_taken": "That name's already on the board. Pick another and text JOIN your_name. Your spot is waiting!",
