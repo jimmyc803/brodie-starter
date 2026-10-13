@@ -420,16 +420,39 @@ def test_locked_sideways_phone_gets_the_card_pre_turned_on_the_portrait_track():
     cropped / zoomed, and any mid-stream track-size switch dropped FaceTime to a small fitted box for good)."""
     job = worker.CoachJob.__new__(worker.CoachJob); job.mirror_thresholds = lambda: None
     card = np.zeros((720, 1280, 3), np.uint8); card[:, :640] = (200, 40, 40); card[:, 640:] = (40, 40, 200)
+    pm = PushupMirror(mascot=False)
     class R:
+        lock_pad = pm.lock_pad
         def render(self, *a, **k): return card
     snap = (np.full(SRC, 90, np.uint8), None, 1, 0.0)
     for rot in (90, 270):
         f = job._mirror_frame(R(), None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=rot)
         assert (f.width, f.height) == (1280, 720)
-        want = worker.CoachJob._fit_track(unrotate(card.copy(), rot), (1280, 720))
+        want = worker.CoachJob._fit_track(unrotate(pm.lock_pad(card, crop=True), rot), (1280, 720))
         got = np.frombuffer(f.convert(worker.rtc.VideoBufferType.RGB24).data, np.uint8).reshape(720, 1280, 3)
-        assert np.abs(got.astype(int) - want.astype(int)).mean() < 8.0    # the pre-turned column, pillarboxed, unstretched
+        assert np.abs(got.astype(int) - want.astype(int)).mean() < 8.0    # the shrunk card pre-turned, pillarboxed, unstretched
     f = job._mirror_frame(R(), None, snap, MirrorState(), 0.0, [0, 0], dict(n=0, ms=0.0), landscape=True, rot=0)
     assert (f.width, f.height) == (1280, 720)                             # no lock (screen rotates): the plain scoreboard
+
+
+def test_lock_pad_shrinks_the_whole_card_into_the_crop_window():
+    """Live 2026-10-13 (screenshot): a rotation-locked sideways phone kept only the middle ~52 % of the pre-turned
+    card's long axis, cutting the count and timer off its ends. lock_pad fits the whole card into LOCK_BOX, and the
+    padding is dotted felt, never flat ink a content crop could strip back off."""
+    pm = PushupMirror(mascot=False)
+    card = np.full((720, 1280, 3), 255, np.uint8)
+    out = pm.lock_pad(card)
+    assert out.shape == (720, 1280, 3)
+    ys, xs = np.nonzero(np.all(out == 255, axis=2))
+    bx0, by0, bx1, by1 = pmod.LOCK_BOX
+    assert bx0 <= xs.min() and xs.max() < bx1                             # the long axis inside the surviving window
+    assert by0 <= ys.min() and ys.max() < by1
+    assert xs.max() - xs.min() + 1 >= (bx1 - bx0) - 2                     # as big as that window allows
+    assert out[:, :bx0 - 10].std() > 0 and out[:, bx1 + 10:].std() > 0    # textured padding: no flat bars to strip
+    assert out[:40].std() > 0 and out[-40:].std() > 0
+    out2 = pm.lock_pad(card, crop=True)                                   # the scoreboard path sheds the card's own
+    ys2, xs2 = np.nonzero(np.all(out2 == 255, axis=2))                    # internal LS_SAFE margins first...
+    assert ys2.max() - ys2.min() > ys.max() - ys.min()                    # ...so the content comes out bigger
+    assert bx0 <= xs2.min() and xs2.max() < bx1 and by0 <= ys2.min() and ys2.max() < by1
 
 

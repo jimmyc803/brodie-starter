@@ -620,7 +620,10 @@ class CoachJob:
                            and bool(getattr(self, 'mirror_landscape', False)))       # sideways phone: landscape card
                 rv_img = rf.current_frame(rv_land) if rf is not None else None
                 if rv_img is not None:                                         # reveal (C7.v): the whole card, never the mirror
-                    if rv_land and rot: rv_img = rv_img.rotate(rot, expand=True)     # locked phone: landscape card pre-turned
+                    if rv_land and rot:                                        # locked phone: the card shrunk (lock_pad), pre-turned
+                        import numpy as np
+                        from PIL import Image
+                        rv_img = Image.fromarray(renderer.lock_pad(np.asarray(rv_img.convert('RGB')))).rotate(rot, expand=True)
                     frame = await asyncio.to_thread(self._reveal_frame, rv_img, (VW, VH))
                     source.capture_frame(frame)
                     next_t = loop.time() + 1.0 / IDLE_CARD_FPS
@@ -697,7 +700,9 @@ class CoachJob:
         else the tall upright-phone card. rot (with landscape): the caller's phone is sideways AND portrait-locked
         (frameprep's orientation lock turns the caller's picture by `rot` deg CW). The screen never rotates on such a
         phone, so a plain landscape card gets mangled (live calls 2026-10-13: shown turned and cropped / zoomed).
-        Instead the scoreboard is pre-turned by the inverse of `rot` and rides the 16:9 track as a pillarboxed
+        Instead the scoreboard is shrunk whole into the middle of a felt frame (lock_pad: live 2026-10-13, a
+        screenshot showed that phone's crop keeping only the middle ~52 % of the pre-turned card, cutting the count
+        and timer off its ends), pre-turned by the inverse of `rot`, and rides the 16:9 track as a pillarboxed
         column: the physical turn of the phone makes it read upright. The track size never changes mid-call."""
         from facetime.pushup_mirror import LW, LH
         from facetime.frameprep import unrotate
@@ -712,8 +717,8 @@ class CoachJob:
                     if up is not None and up.shape == rgb.shape: rgb = up
                 img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2],
                                       layout=('scoreboard' if landscape else 'tall'))
-                if landscape and rot: img = unrotate(img, rot)
-            img = self._fit_track(img, (VW, VH))
+                if landscape and rot: img = unrotate(renderer.lock_pad(img, crop=True), rot)   # locked phone: the whole card shrunk
+            img = self._fit_track(img, (VW, VH))                                     # into the window its crop leaves
             fails[0] = 0
             stats['n'] += 1; stats['ms'] += (time.perf_counter() - t0) * 1000
             ih, iw = img.shape[:2]

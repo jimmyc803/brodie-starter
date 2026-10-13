@@ -142,6 +142,14 @@ T_COUNT_W = 264
 T_COUNT_Y1 = 700
 T_MASCOT_CX = 1070                         # right panel: Brodie, his bubble above him
 T_MASCOT_FEET = 706
+# Rotation-locked sideways phone (lock_pad): live 2026-10-13 (screenshot): the pre-turned scoreboard column reached
+# the caller STRIPPED of its pillarbox bars and zoom-filled, showing only the middle ~52 % of the card's long axis -
+# the count ticket, timer and wordmark at the two ends were cut off. So for that phone the WHOLE card is shrunk into
+# the middle window that survives the crop (LOCK_BOX, card coords along the 1280 axis), and the padding around it is
+# the same dotted felt as the cards' base canvas: a flat ink border reads as letterboxing to a content crop, which
+# would shave the frame back down to the card and undo the shrink; the dots pin the content rect to the full frame.
+LOCK_BOX = (330, 90, 950, 630)             # the card, whole, fitted and centred here; felt everywhere else
+FELT_DOT = 14                              # the felt's halftone dot: INK lifted this much, a 2x2 dot every 16 px
 CORE = [i for i in range(0, 17)] + [23, 24, 25, 26]       # head, arms, hips, knees
 FULL = CORE + [27, 28, 29, 30, 31, 32]                   # + ankles, heels, toes
 
@@ -397,6 +405,7 @@ class PushupMirror:
             self.mascot = Mascot(MASCOT_H); self.idle_mascot = Mascot(IDLE_MASCOT_H); self.ls_mascot = Mascot(LS_MASCOT_H)
             self.mascot.warm(); self.idle_mascot.warm(reactions=False); self.ls_mascot.warm()
         self._idle = None; self._react_t = None; self._paper = None; self._head = None; self.vid_y1 = VID_Y0 + PANEL_MAX
+        self._felt_img = None
         self.boxes = {}                                              # the last frame's element boxes (x0, y0, x1, y1), output px
         self._clip = (0, VID_Y0, W, self.vid_y1); self._xlim = (SAFE_X, W - SAFE_X); self._label_y0 = PILL_Y + 80
         self.thr = merged_thresholds(None)
@@ -816,6 +825,36 @@ class PushupMirror:
     def _ls_fill(self, rgb):
         return self._fit_box(rgb, LS_PIC_BOX)
 
+    def _felt(self):
+        """The 16:9 cards' base canvas: INK with a faint halftone dot grid (built once). Never flat ink - see the
+        LOCK_BOX comment: a flat border reads as letterboxing to a content crop along the way and gets stripped."""
+        if self._felt_img is None:
+            bg = np.empty((LH, LW, 3), np.uint8); bg[:] = INK
+            d = tuple(min(255, c + FELT_DOT) for c in INK)
+            for oy, ox in ((3, 3), (11, 11)):
+                for dy in (0, 1):
+                    for dx in (0, 1):
+                        bg[oy + dy::16, ox + dx::16] = d
+            self._felt_img = bg
+        return self._felt_img
+
+    def lock_pad(self, card, crop=False):
+        """The rotation-locked sideways phone's shrink (see the LOCK_BOX comment): the WHOLE card fitted and centred
+        in LOCK_BOX on a full-frame felt, so the middle window the caller's crop leaves still holds every panel.
+        crop: the card is the scoreboard, whose contract keeps everything inside the LS_SAFE band - that band (plus
+        a hair for shadows) is cut out first, so the shrink spends the window on content, not on the scoreboard's
+        own internal margins. Leave it off for a card with unknown margins (the reveal's)."""
+        if crop:
+            card = card[max(0, LS_SAFE_TOP - 24):LS_SAFE_BOTTOM + 24, max(0, LS_SAFE_X - 24):LW - LS_SAFE_X + 24]
+        bx0, by0, bx1, by1 = LOCK_BOX
+        h, w = card.shape[:2]
+        s = min((bx1 - bx0) / w, (by1 - by0) / h)
+        nw, nh = max(1, int(round(w * s))), max(1, int(round(h * s)))
+        out = self._felt().copy()
+        x0, y0 = (LW - nw) // 2, (LH - nh) // 2
+        out[y0:y0 + nh, x0:x0 + nw] = cv2.resize(card, (nw, nh), interpolation=cv2.INTER_AREA)
+        return out
+
     def _ls_ticket(self, img, x0, y0, x1, y1):
         """A paper ticket (hard ink shadow, ink border) for overlays that must read over any video."""
         cv2.rectangle(img, (x0 + 5, y0 + 6), (x1 + 5, y1 + 6), INK, -1)
@@ -829,7 +868,7 @@ class PushupMirror:
         picture, on purpose. Everything, picture included, inside LS_SAFE_*: live phones trim ~250 px off each side
         of the card and may crop ~65 px top and bottom, and the rest of the canvas is just ink."""
         M, pic = self._ls_fill(rgb)
-        img = np.empty((LH, LW, 3), np.uint8); img[:] = INK
+        img = self._felt().copy()
         self._clip = pic; self._xlim = (LS_SAFE_X, LW - LS_SAFE_X)
         self._picture(img, rgb, M, pic)
         self.boxes['picture'] = pic
@@ -872,7 +911,7 @@ class PushupMirror:
         An upright phone FIT-displays the 16:9 band whole (nothing trimmed), so the margins are slim; only the
         verdict stamp flashes over the picture, on purpose, like the scoreboard's."""
         M, pic = self._fit_box(rgb, T_PIC_BOX)
-        img = np.empty((LH, LW, 3), np.uint8); img[:] = INK
+        img = self._felt().copy()
         self._clip = pic; self._xlim = (T_X, LW - T_X)
         self._picture(img, rgb, M, pic)
         self.boxes['picture'] = pic
