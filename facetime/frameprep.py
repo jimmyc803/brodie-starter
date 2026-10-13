@@ -3,6 +3,8 @@
     prep = FramePrep()                       # one per call; probe pose built lazily (rtcoach.pose.Pose, IMAGE mode)
     up = prep(rgb, now)                      # HxWx3 uint8: the content rect of rgb, rotated by prep.rotation (a new array)
     prep.observe(rgb, lm, now)               # lm: the pose of `up` (or None); may re-check the orientation (<= 1/s)
+    phone_sideways(prep, rgb)                # True / False / None: is the caller's phone held sideways (coach-video layout)
+    OrientationGate().update(sideways, now)  # ... with hysteresis: True = landscape
     prep.apply(rgb)                          # the same crop + rotation for another frame (no state change; None on a
                                              # resolution mismatch), e.g. the mirror's newer frames between poses
 
@@ -251,3 +253,61 @@ class FramePrep:
         if self._pose is not None:
             try: self._pose.close()
             finally: self._pose = None
+
+
+# -- the caller's physical phone orientation (for the coach-video layout) ------------------------------------------------
+ORIENT_SUSTAIN_S = 2.0      # the other orientation must be seen this long, without a contrary sample, before a switch
+ORIENT_HOLD_S = 3.0         # ... and never sooner than this after the last switch (no flapping)
+ORIENT_RATIO = 1.15         # a content box is landscape / portrait when one side is this much longer (else: no evidence)
+
+
+def phone_sideways(prep, raw):
+    """Feed thread, after prep(raw, now): is the caller's phone held sideways? True / False, or None (no evidence yet).
+
+    Sideways = FramePrep turned the picture (a portrait-locked phone held sideways sends its picture on its side) OR the
+    caller's picture is landscape-shaped. Upright = no turn and a portrait picture. The picture's shape is the per-edge
+    median of ContentRect's last WINDOW_S of samples (fresher than its slow committed rect), without the whole-frame
+    fallback samples a black frame gives, unless that is all there is and the frame is lit (a picture that fills the
+    bridge frame). A black frame or a near-square box is no evidence."""
+    if prep is None: return None
+    if getattr(prep, 'rotation', 0): return True
+    content = getattr(prep, 'content', None)
+    shape = getattr(content, 'shape', None)
+    hist = list(getattr(content, 'hist', ()) or ())
+    if shape is None or not hist: return None
+    h, w = shape; full = (0, 0, w, h)
+    boxes = [b for _, b in hist if tuple(b) != full]
+    if not boxes:
+        if raw is None or raw.shape[:2] != (h, w): return None
+        if float((raw[::8, ::8].max(axis=2) > LIT).mean()) < LIT_FRAC: return None     # a black frame: nothing to go by
+        boxes = [full]
+    x0, y0, x1, y1 = np.median(np.array(boxes, float), axis=0)
+    bw, bh = x1 - x0, y1 - y0
+    if bw > ORIENT_RATIO * bh: return True
+    if bh > ORIENT_RATIO * bw: return False
+    return None
+
+
+class OrientationGate:
+    """The coach-video layout's orientation with hysteresis: portrait until the first decision; a switch needs the other
+    orientation's evidence for sustain_s with no contrary sample in between (None = no evidence: neither confirms nor
+    cancels), and hold_s since the last switch."""
+
+    GAP_S = 1.0
+
+    def __init__(self, sustain_s=ORIENT_SUSTAIN_S, hold_s=ORIENT_HOLD_S):
+        self.sustain_s, self.hold_s = sustain_s, hold_s
+        self.landscape = False; self.pending_t = None; self.switch_t = None; self.n_switches = 0; self.last_t = None
+
+    def update(self, sideways, now):
+        """sideways: True / False / None at time `now` (monotonic s). Returns the layout: True = landscape. A gap of more
+        than GAP_S without samples (no caller frames) restarts a pending switch: it must be seen again, continuously."""
+        gap = self.last_t is not None and now - self.last_t > self.GAP_S
+        self.last_t = now
+        if sideways is None: return self.landscape
+        if bool(sideways) == self.landscape:
+            self.pending_t = None; return self.landscape
+        if self.pending_t is None or gap: self.pending_t = now
+        if now - self.pending_t >= self.sustain_s and (self.switch_t is None or now - self.switch_t >= self.hold_s):
+            self.landscape = not self.landscape; self.pending_t = None; self.switch_t = now; self.n_switches += 1
+        return self.landscape

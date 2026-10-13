@@ -578,7 +578,8 @@ class CoachJob:
                     if snap is not None and now - snap[3] > 2.0: snap = None; self.mirror_in = None      # frames stopped: idle card
                     lat = getattr(self, 'latest', None)                            # a caller frame newer than the pose's: show it
                     newer = lat[0] if (snap is not None and lat is not None and lat[4] > snap[2]) else None
-                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats, newer)
+                    landscape = snap is not None and bool(getattr(self, 'mirror_landscape', False))   # idle card: portrait
+                    frame = await asyncio.to_thread(self._mirror_frame, renderer, av, snap, st, now, fails, stats, newer, landscape)
                     if fails[0] >= 10:
                         print(f'[worker] push-up mirror failed {fails[0]} frames in a row: plain avatar for the rest of the call', flush=True)
                         renderer = None; self.mirror_live = False; self.mirror_in = None
@@ -611,10 +612,13 @@ class CoachJob:
             buf = img.tobytes()
         return rtc.VideoFrame(size[0], size[1], rtc.VideoBufferType.RGB24, buf).convert(rtc.VideoBufferType.I420)
 
-    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats, newer=None):
+    def _mirror_frame(self, renderer, av, snap, st, now, fails, stats, newer=None, landscape=False):
         """Render thread: one mirror frame (I420); on any error the plain face for this frame. newer: a caller VideoFrame
-        that arrived after snap's (the pose's) frame: shown with snap's skeleton when the feed's crop + rotation fit it."""
-        from facetime.pushup_mirror import W as VW, H as VH
+        that arrived after snap's (the pose's) frame: shown with snap's skeleton when the feed's crop + rotation fit it.
+        landscape: the caller's phone is sideways -> a 1280x720 frame on the same track (the size changes mid-stream: the
+        native VideoSource passes any frame size through and WebRTC reconfigures the encoder, no republish)."""
+        from facetime.pushup_mirror import W as VW, H as VH, LW, LH
+        if landscape: VW, VH = LW, LH
         t0 = time.perf_counter()
         try:
             if snap is None: img = renderer.render(None, None, self.mirror_thresholds(), st, now=now)
@@ -623,10 +627,11 @@ class CoachJob:
                 if newer is not None and prep is not None:
                     up = prep.apply(frame_to_rgb(newer))
                     if up is not None and up.shape == rgb.shape: rgb = up
-                img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2])
+                img = renderer.render(rgb, snap[1], self.mirror_thresholds(), st, now=now, seq=snap[2], **({'landscape': True} if landscape else {}))
             fails[0] = 0
             stats['n'] += 1; stats['ms'] += (time.perf_counter() - t0) * 1000
-            return rtc.VideoFrame(VW, VH, rtc.VideoBufferType.RGB24, img.tobytes()).convert(rtc.VideoBufferType.I420)
+            ih, iw = img.shape[:2]
+            return rtc.VideoFrame(iw, ih, rtc.VideoBufferType.RGB24, img.tobytes()).convert(rtc.VideoBufferType.I420)
         except Exception as e:
             fails[0] += 1; fails[1] += 1
             if fails[1] == 1 or fails[1] % 50 == 0:
@@ -1064,6 +1069,7 @@ class CoachJob:
             lm = getattr(self.pipe, 'last_landmarks', None)
             self.check_orientation(raw, lm, t_mono)
             if self.mirror_live:                                  # newest frame + its pose for the mirror (only the newest is kept)
+                self.update_layout(raw, t_mono)
                 self.mirror_in = (rgb, lm, seq, time.monotonic())
             if self.comp is not None and time.monotonic() - getattr(self, 'diag_t', 0.0) >= 1.0:
                 self.diag_t = time.monotonic()
@@ -1085,6 +1091,24 @@ class CoachJob:
             if self.prep_fails == 1 or self.prep_fails % 100 == 0:
                 log.exception('frame prep failed'); print(f'[worker] frame prep failed ({self.prep_fails} so far): {e!r}; raw frame used', flush=True)
             return raw
+
+    def update_layout(self, raw, now):
+        """Feed thread: the coach-video's orientation follows the caller's physical phone (frameprep.phone_sideways through
+        an OrientationGate: ~2 s sustained, no flapping) -> self.mirror_landscape, read by the avatar loop. Cosmetic: a
+        failure is logged and the layout stays as it was."""
+        try:
+            from facetime.frameprep import OrientationGate, phone_sideways
+            gate = getattr(self, 'orient_gate', None)
+            if gate is None: gate = self.orient_gate = OrientationGate()
+            was = gate.landscape
+            self.mirror_landscape = gate.update(phone_sideways(getattr(self, 'prep', None), raw), now)
+            if self.mirror_landscape != was:
+                print(f"[worker] caller's phone {'sideways' if self.mirror_landscape else 'upright'}: coach-video "
+                      f"{'landscape' if self.mirror_landscape else 'portrait'}", flush=True)
+        except Exception as e:
+            self.layout_fails = getattr(self, 'layout_fails', 0) + 1
+            if self.layout_fails == 1 or self.layout_fails % 100 == 0:
+                log.exception('layout update failed'); print(f'[worker] layout update failed ({self.layout_fails} so far): {e!r}', flush=True)
 
     def check_orientation(self, raw, lm, now=None):
         """Feed thread, after the pose: the orientation lock (FramePrep.observe; probes <= 1/s only while no plank is seen).

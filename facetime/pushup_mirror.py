@@ -4,6 +4,7 @@
     st = MirrorState()                                    # what the call knows: valid count, last verdict, cue, timer
     st.rep(valid=True, reasons=[], now=t)                 # a judged rep -> count + "GOOD REP +1" / "NO REP" stamp
     img = pm.render(rgb, landmarks, thr, st, now=t)       # (1280, 720, 3) uint8 RGB; rgb=None -> the idle card
+    img = pm.render(rgb, landmarks, thr, st, now=t, landscape=True)   # (720, 1280, 3): the caller's phone is sideways
 
 rgb is the frame the pose ran on (any size; never modified, never kept beyond the next call); landmarks the pipeline's
 (33, 5) normalised x, y, z, visibility, presence (FramePipeline.last_landmarks) for that frame, or None. thr = the live
@@ -32,6 +33,14 @@ over the video only while he talks. Look and tokens: the website (pushup-web/app
 overprint, yellow tickets, ink borders, hard shadows, Anton + Space Mono) via facetime/brand.py sprites. Everything
 respects mirror.SAFE_X / SAFE_TOP / SAFE_BOTTOM (FaceTime Fill crops the sides, the island covers the top, the
 self-view the bottom left).
+
+Landscape (render(..., landscape=True); the worker's choice when the caller's phone is held sideways, see
+frameprep.phone_sideways / OrientationGate): a 1280x720 canvas, because FaceTime turns our track upright on the sideways
+phone and fills its landscape screen with it (a portrait canvas there shows only a ~3x zoomed strip). The caller's whole
+picture, upright, fitted large on an ink panel on the left (no zoom, no pan, whatever follow is), the status pill / stamp
+at its top centre; on paper in a right column the BRODIE wordmark + timer, the overprinted count, Brodie small at the
+bottom left of the column with his bubble over the picture's corner. Safe area: the LS_* constants (fill crop ~65 px top
+and bottom, the island on a short edge, the self-view in a bottom corner). The idle card is always portrait.
 
 Framing (Framer): live (follow=False, the default) the caller's whole picture, never zoomed or moved. With follow=True: the person's keypoint box (head to knees = "core"; with the feet = "full") is collected per pose over
 the last WINDOW_S seconds and reduced per edge to its 10th / 90th percentile, so a rep or a jittery landmark does not
@@ -70,11 +79,11 @@ PANEL_ASPECT = PANEL_W / PANEL_MAX
 PILL_X, PILL_Y = SAFE_X - 6, VID_Y0 + 22   # camera status pill (top left of the video)
 MASCOT_H = 250                             # Brodie, bottom right: his head pops MASCOT_POP px over the video's bottom edge,
 MASCOT_POP = 46                            # his feet no lower than MASCOT_FEET (the self-view line)
-MASCOT_CX = W - SAFE_X - 70
+MASCOT_CX = W - SAFE_X - 118              # (his art + shadow end inside the side margin, so FaceTime's fill crop never cuts him)
 MASCOT_FEET = SAFE_BOTTOM - 8
 COUNT_X = SAFE_X - 4                       # the count: eyebrow at vid_y1 + 22, the numerals under it
 COUNT_PX = (120, 260)                      # the numerals fill the score zone's height, in steps of 10
-COUNT_MAX_W = 330                          # ... and never run into Brodie
+COUNT_MAX_W = 310                          # ... and never run into Brodie
 FLASH_S = 1.5; STAMP_S = 0.55; FADE_S = 0.3
 CUE_MIN_S = 1.2                            # a cue bubble shows at least this long (then only while he talks)
 S_MAX = 2.0                                # never zoom the source more than this (output px per source px; sharper)
@@ -83,6 +92,27 @@ SUSTAIN_S = 0.8                            # ... must want a move this long befo
 EASE_S = 1.0                               # ... which then takes this long
 SAFE_IN = 0.05                             # the inner safe area: the crop shrunk by this fraction per side
 LOCK_SAMPLES = 3                           # poses before the first framing (a cut; the zoom then never changes)
+# Landscape (render(..., landscape=True)): the caller holds the phone sideways, so FaceTime shows our track upright on a
+# landscape screen and fills it. A 1280x720 (16:9) track on a ~19.5:9 iPhone screen keeps the full width and loses
+# LS_CROP_Y = (720 - 1280 * 9 / 19.5) / 2 ~ 65 px top and bottom. The camera island sits mid-way along one short edge
+# (left or right, by the way the phone is turned; rounded corners there too) -> LS_SAFE_X on both sides. FaceTime's
+# self-view tile sits in a bottom corner of the visible area (~120 x 90 pt + inset on a ~900 x 420 pt screen) ->
+# LS_PIP_W x LS_PIP_H keep-out boxes in both bottom corners. All text and key UI (count, status pill, stamp, Brodie,
+# timer) stay inside LS_SAFE_X..LW - LS_SAFE_X, LS_SAFE_TOP..LS_SAFE_BOTTOM and out of the keep-outs; the caller's
+# picture stays inside the visible band (it may run under the island's edge and the self-view: it is only video).
+LW, LH = 1280, 720
+LS_CROP_Y = 65
+LS_SAFE_X = 72
+LS_SAFE_TOP = LS_CROP_Y + 15               # 80
+LS_SAFE_BOTTOM = LH - LS_CROP_Y - 15       # 640
+LS_PIP_W, LS_PIP_H = 220, 170              # self-view keep-out: x < LS_PIP_W or x > LW - LS_PIP_W, y > LH - LS_CROP_Y - LS_PIP_H
+LS_PANEL_X1 = 852                          # the ink video panel: x 0..LS_PANEL_X1, full height
+LS_PIC_BOX = (24, LS_SAFE_TOP, LS_PANEL_X1 - 16, LS_SAFE_BOTTOM)   # the picture, whole and upright, fitted (no zoom, no pan)
+LS_COL_X0, LS_COL_X1 = LS_PANEL_X1 + 16, LW - LS_SAFE_X             # the right column: header, count, Brodie
+LS_MASCOT_H = 180
+LS_MASCOT_CX = LS_COL_X0 + 92              # bottom left of the column (his art + shadow end before the self-view keep-out)
+LS_MASCOT_FEET = LS_SAFE_BOTTOM
+LS_COUNT_PX = (110, 220)
 CORE = [i for i in range(0, 17)] + [23, 24, 25, 26]       # head, arms, hips, knees
 FULL = CORE + [27, 28, 29, 30, 31, 32]                   # + ankles, heels, toes
 
@@ -332,12 +362,15 @@ class PushupMirror:
     def __init__(self, mascot=True, follow=False):
         self.follow = follow                                         # True: the person-following crop (Framer)
         """mascot: True = Brodie (facetime/mascot.py, his common expressions pre-composed here), False = none."""
-        self.mascot = self.idle_mascot = None
+        self.mascot = self.idle_mascot = self.ls_mascot = None
         if mascot:
             from facetime.mascot import Mascot
-            self.mascot = Mascot(MASCOT_H); self.idle_mascot = Mascot(IDLE_MASCOT_H)
-            self.mascot.warm(); self.idle_mascot.warm(reactions=False)
+            self.mascot = Mascot(MASCOT_H); self.idle_mascot = Mascot(IDLE_MASCOT_H); self.ls_mascot = Mascot(LS_MASCOT_H)
+            self.mascot.warm(); self.idle_mascot.warm(reactions=False); self.ls_mascot.warm()
         self._idle = None; self._react_t = None; self._paper = None; self._head = None; self.vid_y1 = VID_Y0 + PANEL_MAX
+        self._ls_base = None                                         # landscape: (picture box, cached static canvas)
+        self.boxes = {}                                              # the last frame's element boxes (x0, y0, x1, y1), output px
+        self._clip = (0, VID_Y0, W, self.vid_y1); self._xlim = (SAFE_X, W - SAFE_X); self._label_y0 = PILL_Y + 80
         self.thr = merged_thresholds(None)
         self.reset()
 
@@ -408,13 +441,15 @@ class PushupMirror:
         self.depth_frac = float(np.clip((ref - f.elbow) / (ref - depth), 0.0, 1.0))
 
     # -- render -------------------------------------------------------------------------------------------------
-    def render(self, rgb, lm, thr=None, state=None, now=None, seq=None):
+    def render(self, rgb, lm, thr=None, state=None, now=None, seq=None, landscape=False):
         """seq: the pose update's id (the pose runs slower than the render): the per-pose analysis (status, medians,
         framing) runs once per seq. None: once per new (rgb, landmarks) object pair. rgb may be a newer frame of the
-        same size than the one the landmarks came from (the skeleton then lags it by a frame)."""
+        same size than the one the landmarks came from (the skeleton then lags it by a frame). landscape: the caller's
+        phone is sideways -> a (LH, LW, 3) = (720, 1280, 3) canvas (the idle card stays portrait)."""
         now = time.monotonic() if now is None else now
         state = state if state is not None else MirrorState()
         self.thr = merged_thresholds(thr)
+        self.boxes = {}
         if rgb is None:
             return self.idle_card(now, state)
         rgb = np.asarray(rgb)
@@ -429,9 +464,13 @@ class PushupMirror:
             self._last_lm = lm; self._last_seq = seq
         self._last_rgb = rgb; self._last_shape = rgb.shape
         self.framer.update(now)
+        if landscape: return self._render_landscape(rgb, lm, state, now)
         M, self.vid_y1 = self.framer.matrix()
+        self._clip = (0, VID_Y0, W, self.vid_y1); self._xlim = (SAFE_X, W - SAFE_X); self._label_y0 = PILL_Y + 80
         img = self._base()
         self._picture(img, rgb, M)
+        h, w = rgb.shape[:2]; c = M @ np.array([[0, 0, 1], [w, h, 1]], float).T
+        self.boxes['picture'] = (max(0, int(c[0, 0])), max(VID_Y0, int(c[1, 0])), min(W, int(math.ceil(c[0, 1]))), min(self.vid_y1, int(math.ceil(c[1, 1]))))
         if self._draw_lm is not None and lm is not None: self._skeleton(img, M)
         self._header(img, state, now)
         self._count(img, state, now)
@@ -448,16 +487,18 @@ class PushupMirror:
         img[:HEAD_H] = self._head; img[HEAD_H:y1] = INK; img[y1:y1 + 5] = INK
         return img
 
-    def _picture(self, img, rgb, M):
-        """The framed video into the panel (ink where the picture does not reach), with the source -> output affine M."""
-        s = M[0, 0]; y1p = self.vid_y1; ph = y1p - VID_Y0
+    def _picture(self, img, rgb, M, rect=None):
+        """The framed video into the panel (ink where the picture does not reach), with the source -> output affine M.
+        rect: the output box (x0, y0, x1, y1) it may cover (default: the portrait panel)."""
+        s = M[0, 0]
+        X0, Y0, X1, Y1 = rect if rect is not None else (0, VID_Y0, PANEL_W, self.vid_y1)
         h, w = rgb.shape[:2]
         # the source rows / columns the panel needs (+ a margin for the filter taps)
-        x0 = max(0, int(math.floor(-M[0, 2] / s)) - 3); x1 = min(w, int(math.ceil((PANEL_W - M[0, 2]) / s)) + 3)
-        y0 = max(0, int(math.floor((VID_Y0 - M[1, 2]) / s)) - 3); y1 = min(h, int(math.ceil((y1p - M[1, 2]) / s)) + 3)
+        x0 = max(0, int(math.floor((X0 - M[0, 2]) / s)) - 3); x1 = min(w, int(math.ceil((X1 - M[0, 2]) / s)) + 3)
+        y0 = max(0, int(math.floor((Y0 - M[1, 2]) / s)) - 3); y1 = min(h, int(math.ceil((Y1 - M[1, 2]) / s)) + 3)
         if x1 - x0 < 2 or y1 - y0 < 2: return
         src = rgb[y0:y1, x0:x1]
-        A = M.copy(); A[0, 2] += s * x0; A[1, 2] += s * y0 - VID_Y0       # roi px -> panel px
+        A = M.copy(); A[0, 2] += s * x0 - X0; A[1, 2] += s * y0 - Y0      # roi px -> panel px
         if s < 0.95:                                                  # downscale: area-average first, then place sub-pixel
             nw, nh = max(2, int(round(src.shape[1] * s))), max(2, int(round(src.shape[0] * s)))
             fx, fy = nw / src.shape[1], nh / src.shape[0]
@@ -469,8 +510,13 @@ class PushupMirror:
                 blur = cv2.GaussianBlur(src, (0, 0), 1.0)
                 src = cv2.addWeighted(src, 1.6, blur, -0.6, 0)
             flags = cv2.INTER_CUBIC
-        panel = img[VID_Y0:y1p]
-        cv2.warpAffine(src, A, (PANEL_W, ph), dst=panel, flags=flags, borderMode=cv2.BORDER_TRANSPARENT)
+        panel = img[Y0:Y1, X0:X1]
+        if panel.flags['C_CONTIGUOUS']:
+            cv2.warpAffine(src, A, (X1 - X0, Y1 - Y0), dst=panel, flags=flags, borderMode=cv2.BORDER_TRANSPARENT)
+        else:                                                         # a column band (landscape): OpenCV needs contiguous dst
+            out = np.ascontiguousarray(panel)
+            cv2.warpAffine(src, A, (X1 - X0, Y1 - Y0), dst=out, flags=flags, borderMode=cv2.BORDER_TRANSPARENT)
+            panel[:] = out
 
     @staticmethod
     def _make_paper():
@@ -532,14 +578,14 @@ class PushupMirror:
         sh, el, wr, hp, kn, an = SIDES[side]
         osh, oel, owr, ohp, okn, oan = SIDES[other]
         ok = lambda *ix: all(c[i] >= 0.35 for i in ix)
-        clip = img[VID_Y0:self.vid_y1]                             # the skeleton stays on the video
-        off = VID_Y0 * S
-        Q = [(x, y - off) for x, y in P]
+        cx0, cy0, cx1, cy1 = self._clip
+        clip = img[cy0:cy1, cx0:cx1]                               # the skeleton stays on the video
+        Q = [(x - cx0 * S, y - cy0 * S) for x, y in P]
         for a, b in ((osh, oel), (oel, owr), (osh, ohp), (ohp, okn), (okn, oan)):     # the far side: thin and faint
             if ok(a, b): cv2.line(clip, Q[a], Q[b], FAINT, 3, AA, 2)
         body, legs, arm, hip_lab, knee_lab = self._colors()
         if hip_lab and ok(sh, an):                                # where the hips should be: the shoulder-ankle line
-            self._dashed(clip, (Pi[sh][0], Pi[sh][1] - VID_Y0), (Pi[an][0], Pi[an][1] - VID_Y0), WHITE)
+            self._dashed(clip, (Pi[sh][0] - cx0, Pi[sh][1] - cy0), (Pi[an][0] - cx0, Pi[an][1] - cy0), WHITE)
         thigh = BAD if BAD in (body, legs) else (GOOD if GOOD in (body, legs) else WHITE)
         bones = [(sh, hp, body), (hp, kn, thigh), (kn, an, legs), (sh, el, arm), (el, wr, arm)]
         ear = 7 if side == 'left' else 8; toe = 31 if side == 'left' else 32
@@ -571,7 +617,8 @@ class PushupMirror:
         """The elbow-depth indicator: a translucent wedge between upper arm and forearm (green at lockout or depth); a
         DEEP tick chip once depth was reached on this rep."""
         r = 40
-        if not (VID_Y0 + r < e[1] < self.vid_y1 - r): return
+        px0, py0, px1, py1 = self._clip
+        if not (py0 + r < e[1] < py1 - r and px0 + r < e[0] < px1 - r): return
         a1 = math.degrees(math.atan2(s[1] - e[1], s[0] - e[0])); a2 = math.degrees(math.atan2(w[1] - e[1], w[0] - e[0]))
         d = (a2 - a1 + 540) % 360 - 180
         x0, y0, n = e[0] - r - 2, e[1] - r - 2, 2 * r + 4
@@ -586,64 +633,80 @@ class PushupMirror:
         rgb, a = brand.pill((('DEEP', 22, INK),), GOOD, icon='check', radius=4, pad=(10, 4), border=2, shadow=3)
         h, w_ = a.shape[:2]
         tx = int(e[0] + math.cos(mid) * (r + 30) - w_ / 2); ty = int(e[1] + math.sin(mid) * (r + 26) - h / 2)
-        tx = int(np.clip(tx, SAFE_X, W - SAFE_X - w_)); ty = int(np.clip(ty, VID_Y0 + 4, self.vid_y1 - h - 4))
+        tx = int(np.clip(tx, self._xlim[0], self._xlim[1] - w_)); ty = int(np.clip(ty, py0 + 4, py1 - h - 4))
         brand.blit(img, rgb, a, tx, ty)
 
     def _label(self, img, s, at, below):
         rgb, a = brand.pill(((s, 26, WHITE),), SITE_BAD, radius=4, pad=(12, 5), border=3, shadow=4)
         h, w_ = a.shape[:2]
-        x0 = int(np.clip(at[0] - w_ / 2, SAFE_X, W - SAFE_X - w_))
+        x0 = int(np.clip(at[0] - w_ / 2, self._xlim[0], self._xlim[1] - w_))
         y0 = at[1] + 30 if below else at[1] - 30 - h
-        y0 = int(np.clip(y0, PILL_Y + 80, self.vid_y1 - h - 8))
+        y0 = int(np.clip(y0, self._label_y0, self._clip[3] - h - 8))
         brand.blit(img, rgb, a, x0, y0)
 
     # -- chrome ---------------------------------------------------------------------------------------------------
-    def _header(self, img, state, now):
-        """The header's right side: the timer ticket (yellow; red in the last 10 s) or the site's LIVE chip."""
+    @staticmethod
+    def _timer_chip(state):
+        """The timer ticket (yellow; red in the last 10 s) or the site's LIVE chip: a sprite."""
         if state.time_left_s is not None:
             sl = max(0, int(math.ceil(state.time_left_s)))
             chip = brand.pill(((f'{sl // 60}:{sl % 60:02d}', 40, INK), ('LEFT', 12, INK, 'mono')), SITE_BAD if sl <= 10 else YELLOW,
                               radius=4, pad=(14, 6), border=3, shadow=0, gap=4, align='center')
-            chip = brand.transform(*chip, 1.0, 2.0)
-        else:
-            chip = brand.pill((('LIVE', 20, INK, 'mono'),), CANVAS, icon='dot', icon_fill=LIVE, icon_px=18, radius=2,
-                              pad=(14, 9), border=3, shadow=0)
+            return brand.transform(*chip, 1.0, 2.0)
+        return brand.pill((('LIVE', 20, INK, 'mono'),), CANVAS, icon='dot', icon_fill=LIVE, icon_px=18, radius=2,
+                          pad=(14, 9), border=3, shadow=0)
+
+    def _blit(self, img, name, rgb, a, x, y, opacity=1.0):
+        """brand.blit + the element's box in self.boxes (the layout tests read them)."""
+        brand.blit(img, rgb, a, x, y, opacity=opacity)
+        h, w_ = a.shape[:2]; self.boxes[name] = (int(x), int(y), int(x) + w_, int(y) + h)
+
+    def _header(self, img, state, now):
+        """The header's right side: the timer ticket or the LIVE chip."""
+        chip = self._timer_chip(state)
         h, w_ = chip[1].shape[:2]
-        brand.blit(img, *chip, W - SAFE_X - w_ + 4, HEAD_H - 20 - h)
+        self._blit(img, 'timer', *chip, W - SAFE_X - w_ + 4, HEAD_H - 20 - h)
 
     def _count(self, img, state, now):
-        """The valid-rep count: the site's overprint numerals (pink, blue misregistration) under a mono eyebrow; a
-        valid rep pops it and stamps a +1."""
+        """The valid-rep count under the video (portrait)."""
         cy = self.vid_y1 + 24
+        self._count_at(img, state, now, COUNT_X, cy, (MASCOT_FEET - cy - 36) / 0.9, COUNT_PX, COUNT_MAX_W)
+
+    def _count_at(self, img, state, now, x, cy, fit_px, px_range, max_w):
+        """The valid-rep count: the site's overprint numerals (pink, blue misregistration) under a mono eyebrow at (x, cy);
+        numerals of fit_px clamped to px_range (steps of 10), narrower than max_w; a valid rep pops it and stamps a +1."""
         rgb, a = brand.text('VALID REPS', 15, INK2, face='mono')
-        brand.blit(img, rgb, a, COUNT_X + 4, cy)
+        brand.blit(img, rgb, a, x + 4, cy)
         since = now - state.verdict_t
         pop = state.verdict_ok is True and 0 <= since < 0.6
-        px = int(min(COUNT_PX[1], max(COUNT_PX[0], (MASCOT_FEET - cy - 36) / 0.9)) // 10 * 10)
-        while px > COUNT_PX[0] and brand.text_size(str(state.count), px)[0] > COUNT_MAX_W: px -= 10
+        px = int(min(px_range[1], max(px_range[0], fit_px)) // 10 * 10)
+        while px > px_range[0] and brand.text_size(str(state.count), px)[0] > max_w: px -= 10
         rgb, a = brand.text(str(state.count), px, PINK, offset=(px / 24, px / 28), offset_color=BLUE)
         y = cy + 26
         if pop:
             k = _smooth(1 - since / 0.6)
             rgb, a = brand.transform(rgb, a, 1.0 + 0.14 * k, 0.0)
             y -= int(0.07 * k * a.shape[0])
-        brand.blit(img, rgb, a, COUNT_X, y)
+        self._blit(img, 'count', rgb, a, x, y)
         if pop:
             plus = brand.pill((('+1', 34, INK),), YELLOW, radius=4, pad=(10, 2), border=3, shadow=4)
             plus = brand.transform(*plus, 1.0, -6.0)
-            brand.blit(img, *plus, COUNT_X + a.shape[1] + 8, y + 10 - int(20 * min(1.0, since / 0.6)), opacity=min(1.0, (0.6 - since) / 0.2))
+            brand.blit(img, *plus, x + a.shape[1] + 8, y + 10 - int(20 * min(1.0, since / 0.6)), opacity=min(1.0, (0.6 - since) / 0.2))
 
-    def _status_pill(self, img):
+    def _pill_sprite(self):
         st = self.status.shown or ST_NONE
         title, sub = STATUS_TEXT[st]; good = st == ST_GOOD
         lines = ((title, 30, INK),) + (((sub, 12, INK2, 'mono'),) if sub else ())
-        rgb, a = brand.pill(lines, SURFACE if good else YELLOW, icon='dot', icon_fill=GOOD if good else (LIVE if st == ST_NONE else YELLOW),
-                            icon_px=16, radius=4, pad=(14, 8), border=3, shadow=5, gap=5)
-        brand.blit(img, rgb, a, PILL_X, PILL_Y)
+        return brand.pill(lines, SURFACE if good else YELLOW, icon='dot', icon_fill=GOOD if good else (LIVE if st == ST_NONE else YELLOW),
+                          icon_px=16, radius=4, pad=(14, 8), border=3, shadow=5, gap=5)
 
-    def _verdict(self, img, state, now):
+    def _status_pill(self, img):
+        self._blit(img, 'pill', *self._pill_sprite(), PILL_X, PILL_Y)
+
+    def _stamp_sprite(self, state, now):
+        """The verdict stamp now: (rgb, alpha, opacity), or None outside its flash."""
         since = now - state.verdict_t
-        if state.verdict_ok is None or not (0 <= since < FLASH_S): return False
+        if state.verdict_ok is None or not (0 <= since < FLASH_S): return None
         head, detail = verdict_lines(state.verdict_ok, state.verdict_reasons)
         good = state.verdict_ok
         lines = ((head, 54, WHITE),) + (((detail, 15, WHITE, 'mono'),) if detail else ())
@@ -652,31 +715,118 @@ class PushupMirror:
         scale = 1.6 - 0.64 * (u / 0.7) if u < 0.7 else 0.96 + 0.04 * ((u - 0.7) / 0.3)
         rgb, a = brand.transform(rgb, a, scale, 6.0 if good else -6.0)
         op = min(1.0, (FLASH_S - since) / FADE_S) * min(1.0, since / 0.08 + 0.2)
-        h, w_ = a.shape[:2]
-        brand.blit(img, rgb, a, (W - w_) // 2, PILL_Y + 40 - h // 2 + 16, opacity=op)
+        return rgb, a, op
+
+    def _verdict(self, img, state, now):
+        s = self._stamp_sprite(state, now)
+        if s is None: return False
+        rgb, a, op = s; h, w_ = a.shape[:2]
+        self._blit(img, 'stamp', rgb, a, (W - w_) // 2, PILL_Y + 40 - h // 2 + 16, opacity=op)
         return True
+
+    @staticmethod
+    def _cue_lines(state, px, max_w):
+        lines = brand.wrap(str(state.cue).upper(), px, max_w)
+        if len(lines) > 3: lines = lines[:3]; lines[2] = lines[2] + '...'
+        return tuple(lines)
+
+    @staticmethod
+    def _cue_on(state, now):
+        return bool(state.cue) and (state.speaking or 0 <= now - state.cue_t <= CUE_MIN_S)
 
     def _caption(self, img, state, now):
         """The current cue as Brodie's speech bubble above him (over the bottom of the video), its tail at his head;
         only while he talks (at least CUE_MIN_S)."""
-        if not state.cue or not (state.speaking or 0 <= now - state.cue_t <= CUE_MIN_S): return
+        if not self._cue_on(state, now): return
         maxw = W - 2 * SAFE_X + 12
-        lines = brand.wrap(str(state.cue).upper(), 30, maxw - 44)
-        if len(lines) > 3: lines = lines[:3]; lines[2] = lines[2] + '...'
-        rgb, a = brand.bubble(tuple(lines), 30, maxw, tail='down', radius=4, tail_at=0.8)
+        rgb, a = brand.bubble(self._cue_lines(state, 30, maxw - 44), 30, maxw, tail='down', radius=4, tail_at=0.8)
         h, w_ = a.shape[:2]
         x = min(W - SAFE_X - w_ + 12, MASCOT_CX - int(0.8 * w_))
-        brand.blit(img, rgb, a, max(SAFE_X - 6, x), self._mascot_feet() - MASCOT_H - h + 2)
+        self._blit(img, 'bubble', rgb, a, max(SAFE_X - 6, x), self._mascot_feet() - MASCOT_H - h + 2)
 
-    def _mascot(self, img, state, now):
+    def _mascot(self, img, state, now, m=None, cx=MASCOT_CX, feet=None):
+        """Brodie (m: which mascot, default the portrait one) centred on cx, feet on feet; both mascots react to a verdict."""
         if self.mascot is None: return
         if state.verdict_t != self._react_t and state.verdict_ok is not None:
             self._react_t = state.verdict_t
-            self.mascot.react('good' if state.verdict_ok else 'bad', state.verdict_t)
-        self.mascot.draw(img, MASCOT_CX, self._mascot_feet(), now, speaking=state.speaking)
+            for mm in (self.mascot, self.ls_mascot):
+                if mm is not None: mm.react('good' if state.verdict_ok else 'bad', state.verdict_t)
+        m = m or self.mascot; feet = self._mascot_feet() if feet is None else feet
+        m.draw(img, cx, feet, now, speaking=state.speaking)
+        hw = m.art_w / 2; self.boxes['mascot'] = (int(cx - hw), int(feet - m.height), int(math.ceil(cx + hw)), int(feet))
 
     def _mascot_feet(self):
         return min(MASCOT_FEET, self.vid_y1 + MASCOT_H - MASCOT_POP)
+
+    # -- landscape (the caller's phone held sideways) ----------------------------------------------------------------
+    def _ls_fit(self, rgb):
+        """The source -> output affine that fits the whole picture, upright, into LS_PIC_BOX (centred; no zoom past the
+        box, no pan), and the picture's output box."""
+        h, w = rgb.shape[:2]; bx0, by0, bx1, by1 = LS_PIC_BOX
+        s = min((bx1 - bx0) / w, (by1 - by0) / h)
+        pw, ph = int(round(w * s)), int(round(h * s))
+        x0 = bx0 + (bx1 - bx0 - pw) // 2; y0 = by0 + (by1 - by0 - ph) // 2
+        M = np.array([[s, 0.0, float(x0)], [0.0, s, float(y0)]], np.float64)
+        return M, (x0, y0, x0 + pw, y0 + ph)
+
+    def _ls_make_base(self, pic):
+        """The static landscape canvas for a picture box: paper (the site's bleeds + halftone), the ink video panel with a
+        pink rule, the column's wordmark + eyebrow and an ink rule under them."""
+        img = np.empty((LH, LW, 3), np.uint8); img[:] = CANVAS
+        z = np.empty((LH, LW - LS_PANEL_X1, 3), np.float32); z[:] = CANVAS
+        yy, xx = np.mgrid[0:LH, 0:LW - LS_PANEL_X1].astype(np.float32)
+        for cx, cy, rx, ry, col, k in ((LW - LS_PANEL_X1 + 60, -20, 560, 520, PINK, 0.16), (-60, LH + 40, 520, 460, BLUE, 0.09)):
+            d = np.sqrt(((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2)
+            al = (np.clip(1 - d / 0.62, 0, 1) * k)[..., None]; z = z * (1 - al) + np.array(col, np.float32) * al
+        dots = np.zeros(z.shape[:2], np.uint8)
+        for y in range(5, LH, 10):
+            for x in range(((y // 10) % 2) * 5, z.shape[1], 10): cv2.circle(dots, (x, y), 1, 255, -1, AA)
+        dd = dots[..., None].astype(np.float32) / 255.0 * 0.07
+        img[:, LS_PANEL_X1:] = np.clip(z * (1 - dd) + np.array(INK, np.float32) * dd, 0, 255).astype(np.uint8)
+        img[:, :LS_PANEL_X1] = INK
+        img[:, LS_PANEL_X1:LS_PANEL_X1 + 5] = PINK
+        rgb, a = brand.text('BRODIE', 56, INK, offset=(2.5, 2.0), offset_color=PINK)
+        brand.blit(img, rgb, a, LS_COL_X0 - 2, LS_SAFE_TOP + 4)
+        ey = LS_SAFE_TOP + 8 + a.shape[0]
+        rgb, a = brand.text('PUSH-UP CHALLENGE', 13, PINK, face='mono')
+        brand.blit(img, rgb, a, LS_COL_X0, ey + 4)
+        self._ls_rule_y = ey + 4 + a.shape[0] + 12
+        img[self._ls_rule_y:self._ls_rule_y + 4, LS_COL_X0:LS_COL_X1] = INK
+        return img
+
+    def _render_landscape(self, rgb, lm, state, now):
+        M, pic = self._ls_fit(rgb)
+        if self._ls_base is None or self._ls_base[0] != pic: self._ls_base = (pic, self._ls_make_base(pic))
+        img = self._ls_base[1].copy()
+        self._clip = pic; self._xlim = (pic[0] + 8, pic[2] - 8)
+        self._picture(img, rgb, M, pic)
+        self.boxes['picture'] = pic
+        # the status pill / stamp: top centre of the picture (away from every corner)
+        pill = self._pill_sprite(); ph, pw = pill[1].shape[:2]
+        py = max(LS_SAFE_TOP, pic[1] + 14); px = (pic[0] + pic[2]) // 2 - pw // 2
+        self._label_y0 = py + ph + 8
+        if self._draw_lm is not None and lm is not None: self._skeleton(img, M)
+        # the column: timer at the top right, the count under the rule, Brodie bottom left
+        chip = self._timer_chip(state); h, w_ = chip[1].shape[:2]
+        self._blit(img, 'timer', *chip, LS_COL_X1 - w_, LS_SAFE_TOP + 4)
+        cy = self._ls_rule_y + 16
+        fit = (LS_MASCOT_FEET - LS_MASCOT_H - 10 - cy - 26) / 0.9
+        self._count_at(img, state, now, LS_COL_X0 - 4, cy, fit, LS_COUNT_PX, LS_COL_X1 - LS_COL_X0 - 20)
+        if self.ls_mascot is not None: self._mascot(img, state, now, self.ls_mascot, LS_MASCOT_CX, LS_MASCOT_FEET)
+        s = self._stamp_sprite(state, now)
+        if s is not None:
+            srgb, sa, op = s; h, w_ = sa.shape[:2]
+            self._blit(img, 'stamp', srgb, sa, (pic[0] + pic[2]) // 2 - w_ // 2, py + ph // 2 - h // 2 + 16, opacity=op)
+        else:
+            self._blit(img, 'pill', *pill, px, py)
+        if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: left of him, over the picture's corner
+            maxw = 440
+            rgb_, a = brand.bubble(self._cue_lines(state, 28, maxw - 44), 28, maxw, tail='right', radius=4)
+            h, w_ = a.shape[:2]
+            x = LS_MASCOT_CX - int(0.42 * self.ls_mascot.art_w) - w_
+            y = min(LS_SAFE_BOTTOM - h, LS_MASCOT_FEET - int(0.62 * LS_MASCOT_H) - int(0.62 * h))
+            self._blit(img, 'bubble', rgb_, a, max(LS_SAFE_X, x), max(LS_SAFE_TOP, y))
+        return img
 
     # -- idle card ------------------------------------------------------------------------------------------------
     def idle_card(self, now, state=None):
