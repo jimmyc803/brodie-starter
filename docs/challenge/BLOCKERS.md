@@ -1,15 +1,24 @@
-# Blockers (current as of the branch this file was committed on)
+# Blockers (current as of 2026-10-13)
 
-Each blocker has an owner and the exact step that clears it. Detailed steps are in `HUMAN_TASKS.md` (section numbers in brackets).
+Only what still blocks or limits the launch. Each item has an owner and the step that clears it. Detailed steps are in `HUMAN_TASKS.md` (section numbers in brackets).
 
 | # | Blocker | Owner | What is stuck | Unblock step |
 |---|---|---|---|---|
-| B1 | AWS credentials / account | You + friend with the AWS Organization | No EC2, SSM, S3 backups, CloudWatch or SES; infra scripts are written and linted only | Create the member account, enable IAM Identity Center, run `aws configure sso`, then `bash infra/provision.sh` [HUMAN_TASKS 1]. Also confirm credit sharing covers the account |
-| B2 | Chert answers + EC2 login | You + James (Chert) | Flags stay on safe fallbacks: `CALLER_ID_SOURCE=claim_window`, `MESSAGING_PROVIDER=mock`, `HANGUP_MODE=unverified`, `REVEAL_MODE=audio_only`, `CARD_DELIVERY=link` (D-07). No real iMessage; texts are not delivered | Send James the 10 questions, run the discovery test, set the flags in SSM, redeploy [HUMAN_TASKS 2, 13] |
-| B3 | Judge ship gate INCOMPLETE (D-19) | Volunteers who record clips | Ghost second-person false rejects (9% of reps on front stock clips; 0/14 on side-view) cannot be tuned without real side-view footage. Scoring must not launch unless the gate passes or you explicitly accept the risk | Record the clip set, then `PYTHONPATH=src:. .venv/bin/python -m judge_eval.run --bench` must exit 0 [HUMAN_TASKS 10] |
-| B4 | Live Supabase apply pending final migrations | You (Supabase owner) | Migrations in `db/migrations/` have been tested only on a local Postgres 17 with Supabase shims (D-08); the `beat-muse` project has not been migrated with the final set | Back up first, then apply the files in name order [HUMAN_TASKS 3a]; run `psql "$SUPABASE_DB_URL" -c "select count(*) from competition_config"` to confirm seeded config |
-| B5 | Vercel deploy of `pushup-web/` | You | Site not public; admin login untested against real Supabase Auth | Create the Vercel project with Root Directory `pushup-web`, set env vars, deploy [HUMAN_TASKS 4]; set the Supabase email template and URLs [HUMAN_TASKS 3b-3c] |
-| B6 | Domain or sslip.io approval | You | Caddy cannot get a certificate until DNS or sslip.io is approved | [HUMAN_TASKS 5] |
-| B7 | Admin emails, alert handles, Brodie's number, prizes | You | `admin_allowlist` empty (nobody can use /admin), `team_alert_handles` empty, `brodie_number` null | [HUMAN_TASKS 6-9] |
-| B8 | Work not yet merged into this branch | Orchestrator | Tasks 12 (liveness), 22-25 (outbox/commands wiring, jobs, simulation, dispatcher admin endpoints), 30 (worker controller), 32 (reconciler), 33, 44, 46 had no commits when this file was written. RUNBOOK mentions `/admin/rejudge` dispatcher endpoint and the `brodie-reconciler` timer, which depend on them | Check `PROGRESS.md` for the latest status; do not go live until those are merged and the launch checklist passes |
-| B9 | Cue audio for new challenge phrases | You | `data/` is gitignored; challenge cue audio must be rendered and copied to EC2 | [HUMAN_TASKS 11] |
+| B1 | Inbound FaceTime to the line stopped (OPEN INCIDENT) | You + Chert (James) / the Mac owner | No inbound call detected on the Mac behind the line since 04:23 on 2026-10-13; Chert shows no call records. Nobody can call in. Upstream, not our code. Also holds `HANGUP_MODE=chert_api` (cannot test a call) | Ask Chert and check the Mac (signed in to FaceTime, awake, line enabled); then place one test call and confirm it reaches the worker [HUMAN_TASKS 14] |
+| B2 | Web sign-in cannot scale (Supabase Auth email) | You | The built-in Supabase email sends about 2 per hour. Custom SMTP via SES is pending verification and still in the SES sandbox | Finish SES verification (leave the sandbox), then set custom SMTP in Supabase [HUMAN_TASKS 3d]. Until then people join by iMessage text (`JOIN <name>`) |
+| B3 | Tester data still in the database | You | Test calls and accounts would show on the public board | Void or remove tester rows through the audited admin RPCs before the public push [LAUNCH_CHECKLIST T-24h] |
+| B4 | Real-clip gate under j3 | You (owner) | The gate (`judge_eval/check_real_clips.py`) fails without clips; it has been re-baselined for j3 (`91c9c93`) but needs the footage on this machine | Run it with the clips [HUMAN_TASKS 10], or record in `DECISIONS.md` that you accept launching without it |
+| B5 | Top-3 verification call and prize logistics | You | 1st place plus a top-3 group call with a UFC fighter (no raffle, D-22); not yet arranged | [HUMAN_TASKS 9]; do the verification call before payout |
+| B6 | `HANGUP_MODE=chert_api` decision | You | Built and tested, not enabled; flipping it needs one live test call | After B1 clears: one test call, then set the flag if it ends cleanly [HUMAN_TASKS 2] |
+
+## Resolved (kept for the record)
+| Was | Resolution |
+|---|---|
+| AWS account and credentials | EC2 `i-0d098dcf3948886ce` provisioned in us-east-2, profile `beatmuse` |
+| Chert login and answers; iMessage not delivered | `MESSAGING_PROVIDER=chert`, iMessage verified end to end; caller ID stays `claim_window` because Chert exposes only `from_handle_hash` |
+| Judge ship gate INCOMPLETE (D-19) | Replaced by the lenient j3 judge with liveness off (D-34); j3 clean accept 93.3% on the real-clip set |
+| Supabase migrations not applied | Applied manually with `supabase --linked`; config via `supabase db query --linked` |
+| Vercel deploy, domain | Live at https://brodie-pushups.vercel.app; dispatcher on https://3.13.177.157.sslip.io |
+| Admin emails, alert handles | `team_alert_handles` set (one entry, the owner's number) |
+| Unmerged work (12, 22-25, 30, 32, 33, 44, 46) | Merged; live release `4c08082`. Task 39 (video reveal rework) is still in progress but does not block (`REVEAL_MODE=audio_only`) |
+| Cue audio for new phrases | Bank v2 rendered; rsync to EC2 step in [HUMAN_TASKS 11] if the cue text changes again |

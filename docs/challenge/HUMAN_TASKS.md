@@ -5,7 +5,24 @@ Every item has: who, exact steps, where the value goes, and what it unblocks. Ru
 AWS SSM Parameter Store (EC2) or Vercel/Supabase dashboards. Numbered items map to SPEC section 13.
 
 Quick index: 1 AWS, 2 Chert login + James, 3 Supabase, 4 Vercel, 5 domain, 6 admins, 7 alert handles, 8 Brodie's number,
-9 prizes, 10 judge clips, 11 cue audio, 12 testers, 13 Phase-2 test results.
+9 prizes, 10 judge clips, 11 cue audio, 12 testers, 13 Phase-2 test results, 14 FaceTime outage.
+
+## Status on 2026-10-13 (the system is live)
+| # | Item | Status |
+|---|---|---|
+| 1 | AWS | Done. EC2 `i-0d098dcf3948886ce` (m7i-flex.large, us-east-2), profile `beatmuse`, free plan with $100 credits. The `brodie` SSO profile and `brodie-challenge` account steps below are the original plan and were NOT used |
+| 2 | Chert login, iMessage | Done. `MESSAGING_PROVIDER=chert`, project `2c765f80-02fb-4b0c-91ac-723ffece9006`, line (628) 246-3964, verified end to end. Open: decide `HANGUP_MODE=chert_api` after one test call |
+| 3a-c | Supabase migrations, template, URLs | Done (migrations applied by hand; see 3a) |
+| 3d | Custom SMTP | OPEN. Built-in email sends about 2 per hour; SES still in the sandbox. Until it is verified people join by iMessage text |
+| 4, 5 | Vercel, sslip.io | Done: https://brodie-pushups.vercel.app and https://3.13.177.157.sslip.io |
+| 7 | Alert handles | Done (one entry, the owner's number) |
+| 9 | Prizes | 1st place plus top-3 group call with a UFC fighter (no raffle). OPEN: top-3 verification call and logistics |
+| 10 | Judge clips | OPEN (optional): run the j3 real-clip gate or accept launching without it |
+| 11 | Cue audio | Bank v2 rendered; re-render and rsync if the cue text changes |
+| 12 | Live testers | Blocked by the FaceTime outage (14); remove tester data before the public push |
+| 14 | Inbound FaceTime outage | OPEN, upstream (Chert or the Mac owner) |
+
+Note: in the AWS commands in this file, use `--profile beatmuse` and region `us-east-2`.
 
 ---
 
@@ -60,7 +77,7 @@ Values go to: environment variables for `provision.sh` (same names as in `.env.e
 
 F. You: SES sender: SES console (us-east-1) > Verified identities > verify `SES_FROM_EMAIL` and, while in the SES sandbox, `ALERT_EMAIL`.
 
-Done when: `aws sts get-caller-identity --profile brodie` works and `bash infra/provision.sh` finishes.
+Done when: `aws sts get-caller-identity --profile beatmuse` works and `bash infra/provision.sh` finishes.
 
 ---
 
@@ -111,6 +128,8 @@ Test items 1, 3, 4 yourself with `docs/challenge/HUMAN_TASKS_discover.md` (see s
 Who: the Supabase project owner. Project: `beat-muse`. Unblocks: website login, realtime, all data.
 
 ### 3a. Apply migrations (needs `SUPABASE_DB_URL`)
+Live note: migrations are applied by hand with `supabase --linked` as the project owner. The deploy role `brodie_ops` cannot write `competition_config`, so config changes go through `supabase db query --linked` (for example `select ch_config_set(...)`).
+
 Migrations in `db/migrations/*.sql` run in name order. Deploys do this automatically (`scripts/deploy.sh`); for the very
 first apply from your laptop use the Supabase SQL editor (paste each file in order) or psql:
 ```
@@ -139,7 +158,7 @@ Authentication > URL Configuration:
 - Redirect URLs: add `https://brodie-pushups.vercel.app/**` (and your custom domain with `/**`; add `http://localhost:3000/**` only for local testing).
 
 ### 3d. SMTP note
-The built-in Supabase mailer is rate limited (a few emails per hour) and only suitable for testing. For launch, configure
+OPEN as of 2026-10-13: the built-in Supabase mailer sends about 2 emails per hour, so web sign-in cannot scale. SES SMTP is pending verification and the account is still in the SES sandbox; until it is out of the sandbox people join by iMessage text (`JOIN <name>`). For launch, configure
 custom SMTP: Authentication > Emails > SMTP Settings (e.g. an SES SMTP user from section 1F, or Resend/Postmark), set a
 verified sender address. Test by requesting an admin code and confirming it arrives within a minute.
 
@@ -273,7 +292,14 @@ Run the gate (prints per-clip table, aggregate and verdict; exit 0 = passed, 1 =
 ```
 PYTHONPATH=src:. .venv/bin/python -m judge_eval.run --bench
 ```
-Pass criteria: 0 accepted reps across cheat clips, at least 90% of clean reps accepted, per-clip clean count error at most 1.
+Live judge is j3 lenient with liveness off (D-34). The gate is the real-clip check; it FAILS (does not skip) without clips, and its
+expectations were re-baselined for j3 in `91c9c93` (clean 93% accepted / count error at most 1, off-angle reps accepted, knees and two people never accepted):
+```
+JUDGE_EVAL_CLIPS=/path/to/clips JUDGE_EVAL_LABELS=/path/to/labels PYTHONPATH=src:. .venv/bin/python -m pytest judge_eval/check_real_clips.py
+```
+If you change thresholds on purpose, update the pinned expectations in that file deliberately. The older bench criteria below describe the strict j2 gate.
+
+Pass criteria (strict bench): 0 accepted reps across cheat clips, at least 90% of clean reps accepted, per-clip clean count error at most 1.
 Without video, `--synthetic` runs the built-in synthetic categories. Specific known problem (D-19): ghost second-person false
 rejects on front-view clips; side-view footage with two people is needed to tune. Send the results JSON from
 `judge_eval/results/` to the team; threshold changes go through `scripts/rejudge.py` (dry run first).
@@ -285,7 +311,7 @@ rejects on front-view clips; side-view footage with two people is needed to tune
 Who: anyone with the team Gemini token. Unblocks: spoken live feedback ("Knees up", "Time!" etc.).
 ```
 export GEMINI_API_KEY='...team token...'
-export GEMINI_BASE_URL='https://james-72765--rtcoach-gemini.modal.run'
+# GEMINI_BASE_URL in .env.local points to a dead relay: do NOT set it, and `unset GEMINI_BASE_URL` before rendering
 PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini --dry-run   # list strings to render, no API call
 PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --backend gemini             # render missing clips into data/cues_audio_gemini
 PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --bank v2                    # the default voice: Puck + coach direction, mastered, verified by ear, best of 2 takes -> data/cues_audio_v2
@@ -295,6 +321,9 @@ PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --bank v2                
 ```
 scp -i "$HOME/.ssh/id_ed25519" -r data/cues_audio_gemini ubuntu@"$PUBLIC_IP":/tmp/cues_audio_gemini
 ```
+The v2 bank (the one live) is `data/cues_audio_v2`; render it with `env -u GEMINI_BASE_URL PYTHONPATH=src:. .venv/bin/python -m facetime.cues_tts --bank v2`,
+then copy it to the host: `rsync -av -e "ssh -i $HOME/.ssh/id_ed25519" data/cues_audio_v2/ ubuntu@3.13.177.157:/tmp/cues_audio_v2/`, move it to
+`/opt/brodie/data/cues_audio_v2` (owner `brodie`), set `CUE_AUDIO_DIR=/opt/brodie/data/cues_audio_v2` in SSM and restart the worker. The same steps apply to the older gemini bank:
 then on the host move it to `/opt/brodie/data/cues_audio_gemini` (owner `brodie`), set `CUE_AUDIO_DIR=/opt/brodie/data/cues_audio_gemini`
 in SSM, and restart the worker (RUNBOOK "Restart, logs and line recovery").
 
@@ -321,3 +350,14 @@ results table into the section below, then set `HANGUP_MODE`, `LINE_OFFLINE_GAP_
 | C: chert_call has caller handle? | | | |
 | C: participant identity format | | | |
 | dispatch lag (job -> connected) | | | |
+
+---
+
+## 14. Inbound FaceTime outage (OPEN since 2026-10-13 04:23)
+
+Who: you, with Chert (James) and whoever owns the Mac behind the line. Unblocks: all calls, live testers, `HANGUP_MODE=chert_api`.
+Symptom: no inbound FaceTime detected on the Mac since 04:23 on 2026-10-13, and Chert shows no call records. This is upstream, not our code.
+1. Ask Chert whether the line is healthy; check the Mac (awake, signed in to FaceTime and iMessage, line enabled).
+2. Place one test call from a phone. Confirm it reaches the worker (EC2: `sudo journalctl -u chert-agent -u brodie-worker --since '-5 min' --no-pager`).
+3. Only then try `HANGUP_MODE=chert_api`: set it in SSM, redeploy, make one test call and confirm it hangs up cleanly at the end. If not, set it back to `unverified`.
+4. Remove tester data before the public push (see LAUNCH_CHECKLIST T-24h).
