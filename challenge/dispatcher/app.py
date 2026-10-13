@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from challenge.config import Config
-from challenge.dispatcher import admin, postcall
+from challenge.dispatcher import admin, postcall, web
 from challenge.dispatcher.flags import Flags
 from challenge.dispatcher.postcall import Outbox, StoreOutbox
 from challenge.dispatcher.jobs import Jobs, run_loop
@@ -48,7 +48,8 @@ class EventIn(BaseModel):
 def create_app(store: Store | None = None, outbox: Outbox | None = None,
                clock: Callable[[], datetime] | None = None, flags: Flags | None = None,
                token: str | None = None, rate_per_min: int | None = None,
-               jobs: Jobs | None = None) -> FastAPI:
+               jobs: Jobs | None = None,
+               web_verifier: web.JwtVerifier | None = None, web_join: bool | None = None) -> FastAPI:
     require_secret()
     clock = clock or (lambda: datetime.now(timezone.utc))
     flags = flags or Flags.from_env()
@@ -163,6 +164,9 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
     app.include_router(__import__("challenge.dispatcher.webhooks", fromlist=["create_router"]).create_router(get_store, get_outbox, clock))
     app.include_router(admin.router)
     app.include_router(admin.internal_router)
+    app.include_router(web.create_router(
+        get_store, clock, enabled=web.web_enabled(flags.MESSAGING_PROVIDER) if web_join is None else web_join,
+        verifier=web_verifier or web.JwtVerifier.from_env(), caller_id_source=flags.CALLER_ID_SOURCE))
     return app
 
 

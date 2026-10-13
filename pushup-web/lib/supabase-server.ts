@@ -157,9 +157,14 @@ function toSession(body: unknown): AuthSession {
   };
 }
 
-/** Send an email OTP / magic link. create_user lets a newly allowlisted admin sign in the first time. */
-export async function authSendOtp(email: string, fetchImpl: FetchLike = fetch): Promise<void> {
-  const res = await fetchImpl(`${supabaseUrl()}/auth/v1/otp`, {
+/**
+ * Send an email OTP / magic link. create_user lets a first-time user (or newly allowlisted admin) sign in.
+ * `redirectTo` becomes {{ .RedirectTo }} in the email template (must be in the project's allowed redirect URLs), so one
+ * template serves every realm: `{{ .RedirectTo }}?token_hash={{ .TokenHash }}&type=email` plus the {{ .Token }} code.
+ */
+export async function authSendOtp(email: string, fetchImpl: FetchLike = fetch, redirectTo?: string): Promise<void> {
+  const qs = redirectTo ? `?redirect_to=${encodeURIComponent(redirectTo)}` : "";
+  const res = await fetchImpl(`${supabaseUrl()}/auth/v1/otp${qs}`, {
     method: "POST",
     headers: authHeaders(),
     body: JSON.stringify({ email, create_user: true }),

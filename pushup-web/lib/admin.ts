@@ -1,93 +1,38 @@
 import "server-only";
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { createAuthRealm } from "./auth-session";
+import { DispatcherError, dispatcherFetch } from "./dispatcher";
 import {
   SupabaseError,
   authGetUserEmail,
   serviceInsert,
   serviceSelect,
-  type AuthSession,
   type FetchLike,
 } from "./supabase-server";
 
-// ------------------------------------------------------------------ session cookies
+// ------------------------------------------------------------------ session cookies + login nonce (shared realm code)
 
-export const ACCESS_COOKIE = "brodie_admin_at";
-export const REFRESH_COOKIE = "brodie_admin_rt";
-const REFRESH_MAX_AGE_S = 60 * 60 * 24 * 7;
+/** Admin auth realm: cookies scoped to /admin; nonce HMAC context distinct from the competitor (/me) realm. */
+export const ADMIN_REALM = createAuthRealm({
+  accessCookie: "brodie_admin_at",
+  refreshCookie: "brodie_admin_rt",
+  nonceCookie: "brodie_admin_login",
+  path: "/admin",
+  nonceContext: "brodie-admin-login-nonce-v1",
+  label: "admin",
+});
 
-export function cookieOptions(maxAge: number) {
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax" as const,
-    path: "/admin",
-    maxAge,
-  };
-}
-
-export function sessionCookies(s: AuthSession, nowS = Math.floor(Date.now() / 1000)) {
-  return [
-    { name: ACCESS_COOKIE, value: s.accessToken, options: cookieOptions(Math.max(60, s.expiresAt - nowS)) },
-    { name: REFRESH_COOKIE, value: s.refreshToken, options: cookieOptions(REFRESH_MAX_AGE_S) },
-  ];
-}
-
-// ------------------------------------------------------------------ login nonce (binds a login to the browser that asked)
-
-export const LOGIN_NONCE_COOKIE = "brodie_admin_login";
-export const LOGIN_NONCE_TTL_S = 15 * 60;
-
-/** HMAC key derived from a server-only secret; rotating the service key invalidates pending logins (fine). */
-function nonceKey(): Buffer {
-  const k = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!k) throw new SupabaseError("SUPABASE_SERVICE_ROLE_KEY is not set", 500, "config");
-  return createHmac("sha256", k).update("brodie-admin-login-nonce-v1").digest();
-}
-
-function signNonce(payload: string): string {
-  return createHmac("sha256", nonceKey()).update(payload).digest("base64url");
-}
-
-/**
- * Cookie set when a sign-in code is requested: base64url({e: email, n: random nonce, x: expiry}).HMAC.
- * Only a browser that requested the code for that email can complete the sign-in (blocks login CSRF).
- */
-export function issueLoginNonce(email: string, nowS = Math.floor(Date.now() / 1000)) {
-  const payload = Buffer.from(
-    JSON.stringify({ e: email.trim().toLowerCase(), n: randomBytes(32).toString("base64url"), x: nowS + LOGIN_NONCE_TTL_S }),
-  ).toString("base64url");
-  return {
-    name: LOGIN_NONCE_COOKIE,
-    value: `${payload}.${signNonce(payload)}`,
-    options: cookieOptions(LOGIN_NONCE_TTL_S),
-  };
-}
-
-/** Email bound by a valid, unexpired login-nonce cookie, or null (missing, tampered, expired). */
-export function loginNonceEmail(value: string | undefined, nowS = Math.floor(Date.now() / 1000)): string | null {
-  if (!value) return null;
-  const [payload, sig, extra] = value.split(".");
-  if (!payload || !sig || extra !== undefined) return null;
-  const want = Buffer.from(signNonce(payload));
-  const got = Buffer.from(sig);
-  if (want.length !== got.length || !timingSafeEqual(want, got)) return null;
-  try {
-    const p = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { e?: unknown; n?: unknown; x?: unknown };
-    if (typeof p.e !== "string" || typeof p.n !== "string" || typeof p.x !== "number" || p.x <= nowS) return null;
-    return p.e;
-  } catch {
-    return null;
-  }
-}
-
-/** True iff the nonce cookie is valid and bound to `email` (case-insensitive). */
-export function loginNonceMatches(value: string | undefined, email: string, nowS?: number): boolean {
-  const bound = loginNonceEmail(value, nowS);
-  return bound !== null && bound === email.trim().toLowerCase();
-}
+export const ACCESS_COOKIE = ADMIN_REALM.config.accessCookie;
+export const REFRESH_COOKIE = ADMIN_REALM.config.refreshCookie;
+export const LOGIN_NONCE_COOKIE = ADMIN_REALM.config.nonceCookie;
+export { LOGIN_NONCE_TTL_S } from "./auth-session";
+export const cookieOptions = ADMIN_REALM.cookieOptions;
+export const sessionCookies = ADMIN_REALM.sessionCookies;
+export const issueLoginNonce = ADMIN_REALM.issueLoginNonce;
+export const loginNonceEmail = ADMIN_REALM.loginNonceEmail;
+export const loginNonceMatches = ADMIN_REALM.loginNonceMatches;
 
 // ------------------------------------------------------------------ input validation
 
@@ -304,22 +249,7 @@ export async function writeAudit(
 
 // ------------------------------------------------------------------ dispatcher admin endpoints
 
-export class DispatcherError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-    this.name = "DispatcherError";
-  }
-}
-
-function dispatcherBase(): { url: string; token: string } {
-  const url = process.env.DISPATCHER_URL;
-  const token = process.env.DISPATCHER_TOKEN;
-  if (!url || !token) throw new DispatcherError("DISPATCHER_URL / DISPATCHER_TOKEN not set", 500);
-  return { url: url.replace(/\/+$/, ""), token };
-}
+export { DispatcherError } from "./dispatcher";
 
 /** Call a dispatcher endpoint as the verified admin (X-Brodie-Token + X-Admin-Email per CONTRACTS §C4). */
 export async function dispatcherRequest<T = unknown>(
@@ -328,38 +258,12 @@ export async function dispatcherRequest<T = unknown>(
   opts: { email?: string; body?: unknown; reason?: string; timeoutMs?: number } = {},
   fetchImpl: FetchLike = fetch,
 ): Promise<T> {
-  const { url, token } = dispatcherBase();
-  const headers: Record<string, string> = { "X-Brodie-Token": token, Accept: "application/json" };
+  const token = process.env.DISPATCHER_TOKEN;
+  if (!token) throw new DispatcherError("DISPATCHER_URL / DISPATCHER_TOKEN not set", 500);
+  const headers: Record<string, string> = { "X-Brodie-Token": token };
   if (opts.email) headers["X-Admin-Email"] = opts.email;
   if (opts.reason) headers["X-Admin-Reason"] = encodeURIComponent(opts.reason);
-  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-  let res: Response;
-  try {
-    res = await fetchImpl(`${url}${path}`, {
-      method,
-      headers,
-      body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
-      cache: "no-store",
-      signal: AbortSignal.timeout(opts.timeoutMs ?? 30_000),
-    });
-  } catch (e) {
-    throw new DispatcherError(e instanceof Error ? e.message : "request failed", 504);
-  }
-  const text = await res.text();
-  let body: unknown = null;
-  if (text) {
-    try {
-      body = JSON.parse(text) as unknown;
-    } catch {
-      body = text;
-    }
-  }
-  if (!res.ok) {
-    const detail =
-      body && typeof body === "object" && "detail" in body ? JSON.stringify((body as { detail: unknown }).detail) : "";
-    throw new DispatcherError(detail || (typeof body === "string" && body ? body.slice(0, 300) : `HTTP ${res.status}`), res.status);
-  }
-  return body as T;
+  return dispatcherFetch<T>(method, path, { headers, body: opts.body, timeoutMs: opts.timeoutMs }, fetchImpl);
 }
 
 // ------------------------------------------------------------------ time (America/New_York day logic)

@@ -1,0 +1,338 @@
+"use client";
+
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useActionState, useCallback, useEffect, useRef, useState } from "react";
+import type { RealtimeChannel, SupabaseClient } from "@supabase/supabase-js";
+import { FlameIcon, PhoneIcon, ArrowRightIcon } from "@/components/ui/icons";
+import { createMaxWaitDebounce } from "@/lib/throttle";
+import {
+  ME_IDLE,
+  claimSecondsLeft,
+  facetimeLink,
+  formatClock,
+  formatEtaRange,
+  mePhase,
+  ordinalRank,
+  type Me,
+  type MeActionState,
+  type RegisteredMe,
+} from "@/lib/me-view";
+import { queueAction, setTexts } from "./actions";
+
+const POLL_MS = 3_000;
+
+type Snapshot = { me: RegisteredMe; at: number; seq: number };
+
+/**
+ * Live /me: polls /me/status every 3 s (paused while the tab is hidden), refetches on every site_pulse realtime event,
+ * and ticks the "you're up" countdown locally between snapshots. Responses are applied in request order, so a slow
+ * poll can never overwrite a newer action result.
+ */
+function useLiveMe(initial: RegisteredMe) {
+  const router = useRouter();
+  const seq = useRef(0);
+  const [snap, setSnap] = useState<Snapshot>(() => ({ me: initial, at: Date.now(), seq: 0 }));
+
+  const apply = useCallback((me: Me | undefined, id: number) => {
+    if (!me) return;
+    if (!me.registered) {
+      router.refresh();
+      return;
+    }
+    setSnap((prev) => (id < prev.seq ? prev : { me, at: Date.now(), seq: id }));
+  }, [router]);
+
+  const refetch = useCallback(async () => {
+    const id = ++seq.current;
+    try {
+      const res = await fetch("/me/status", { cache: "no-store", headers: { Accept: "application/json" } });
+      if (res.status === 401) {
+        router.push("/login");
+        return;
+      }
+      if (!res.ok) return; // transient: keep the last snapshot, the next poll retries
+      apply((await res.json()) as Me, id);
+    } catch {
+      // offline: keep the last snapshot
+    }
+  }, [apply, router]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const start = () => {
+      if (timer === undefined) timer = setInterval(() => void refetch(), POLL_MS);
+    };
+    const stop = () => {
+      if (timer !== undefined) clearInterval(timer);
+      timer = undefined;
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refetch();
+        start();
+      } else stop();
+    };
+    if (document.visibilityState === "visible") start();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    const pulse = createMaxWaitDebounce(() => void refetch(), 300, 800);
+    let disposed = false;
+    let sb: SupabaseClient | null = null;
+    let channel: RealtimeChannel | undefined;
+    void import("@/lib/supabase-browser")
+      .then(({ getBrowserClient }) => {
+        if (disposed) return;
+        sb = getBrowserClient();
+        channel = sb
+          ?.channel("me_site_pulse")
+          .on("postgres_changes", { event: "*", schema: "public", table: "site_pulse" }, pulse.trigger)
+          .subscribe();
+      })
+      .catch((err: unknown) => console.error("live updates unavailable", err));
+
+    return () => {
+      disposed = true;
+      stop();
+      pulse.cancel();
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (sb && channel) void sb.removeChannel(channel);
+    };
+  }, [refetch]);
+
+  const fromAction = useCallback((state: MeActionState) => apply(state.me, ++seq.current), [apply]);
+  return { snap, fromAction };
+}
+
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(t);
+  }, [active]);
+  return now;
+}
+
+/** Run a server action and push its fresh status into the live snapshot. */
+function useMeAction(action: (prev: MeActionState, fd: FormData) => Promise<MeActionState>, onResult: (s: MeActionState) => void) {
+  return useActionState(async (prev: MeActionState, fd: FormData) => {
+    const next = await action(prev, fd);
+    onResult(next);
+    return next;
+  }, ME_IDLE);
+}
+
+export function MeDashboard({ initial }: { initial: RegisteredMe }) {
+  const { snap, fromAction } = useLiveMe(initial);
+  const me = snap.me;
+  const phase = mePhase(me);
+  const now = useNow(phase === "up");
+  const secondsLeft = me.claim ? claimSecondsLeft(me.claim.seconds_left, snap.at, now) : 0;
+  const ft = facetimeLink(me.brodie_number);
+  const [qState, qAction, qPending] = useMeAction(queueAction, fromAction);
+  const [tState, tAction, tPending] = useMeAction(setTexts, fromAction);
+  const inLine = me.queue.status === "waiting" || me.queue.status === "notified" || phase === "up";
+  const cap = me.daily_call_cap ?? me.calls_today + me.calls_left;
+
+  return (
+    <div className="space-y-5">
+      <header className="flex items-end justify-between gap-3">
+        <div className="min-w-0">
+          <p className="eyebrow">Signed in</p>
+          <h1 className="truncate font-display text-4xl font-extrabold uppercase italic leading-none sm:text-5xl">
+            {me.display_name}
+          </h1>
+        </div>
+        <Link
+          href={`/u/${encodeURIComponent(me.display_name)}`}
+          className="inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border border-hairline-strong px-4 text-sm font-semibold text-ink-2 hover:border-accent hover:text-ink"
+        >
+          Profile <ArrowRightIcon className="size-4" />
+        </Link>
+      </header>
+
+      <StatusHero me={me} phase={phase} secondsLeft={secondsLeft} facetime={ft} />
+
+      <dl className="grid grid-cols-2 gap-3">
+        <Stat label="Today's points" value={String(me.points_today)} accent />
+        <Stat label="Calls left today" value={`${me.calls_left}`} hint={`of ${cap} · resets midnight ET`} />
+        <Stat label="Total points" value={String(me.points)} hint={me.rank ? `${ordinalRank(me.rank)} of ${me.total_users}` : "Unranked"} />
+        <Stat
+          label="Day streak"
+          value={String(me.streak)}
+          hint={`${me.valid_reps} valid reps`}
+          icon={me.streak > 0 ? <FlameIcon className="size-5 text-gold" /> : null}
+        />
+      </dl>
+
+      <form action={tAction} className="card flex items-center justify-between gap-4 p-4">
+        <input type="hidden" name="opted_out" value={me.opted_out ? "0" : "1"} />
+        <div className="min-w-0">
+          <p className="font-semibold">Brodie texts</p>
+          <p className="text-sm text-ink-3">
+            {me.opted_out ? "Off (STOP). Turning on is like texting START." : "On. Turning off is like texting STOP and leaves the line."}
+          </p>
+          {tState.status && !tState.ok ? <p role="alert" className="mt-1 text-sm text-bad">{tState.error}</p> : null}
+        </div>
+        <button
+          type="submit"
+          role="switch"
+          aria-checked={!me.opted_out}
+          aria-label="Brodie texts"
+          disabled={tPending}
+          className={`relative h-8 w-14 shrink-0 rounded-full border transition-colors disabled:opacity-60 ${me.opted_out ? "border-hairline-strong bg-surface-3" : "border-accent bg-accent"}`}
+        >
+          <span
+            aria-hidden
+            className={`absolute top-1/2 size-6 -translate-y-1/2 rounded-full transition-[left] duration-200 ${me.opted_out ? "left-0.5 bg-ink-3" : "left-[1.625rem] bg-on-accent"}`}
+          />
+        </button>
+      </form>
+
+      {/* Thumb-reach queue control: sticky on phones, inline on larger screens. */}
+      <form
+        action={qAction}
+        className="sticky bottom-0 z-20 -mx-4 bg-gradient-to-t from-canvas via-canvas/95 to-transparent px-4 pt-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:static sm:mx-0 sm:bg-none sm:p-0"
+      >
+        <input type="hidden" name="action" value={inLine ? "leave" : "join"} />
+        <QueueButton phase={phase} inLine={inLine} pending={qPending} />
+        <p role="status" aria-live="polite" className={`mt-2 min-h-5 text-center text-sm ${qState.ok ? "text-ink-2" : "text-bad"}`}>
+          {qState.status ? (qState.ok ? qState.message : qState.error) : null}
+        </p>
+      </form>
+    </div>
+  );
+}
+
+function QueueButton({ phase, inLine, pending }: { phase: ReturnType<typeof mePhase>; inLine: boolean; pending: boolean }) {
+  const blocked = phase === "in_call" || phase === "at_cap" || phase === "closed" || phase === "banned";
+  if (inLine) {
+    return (
+      <button
+        type="submit"
+        disabled={pending}
+        className="inline-flex min-h-14 w-full items-center justify-center rounded-full border border-hairline-strong bg-surface-2 px-6 font-display text-xl font-extrabold uppercase tracking-wide text-ink transition-transform active:scale-[0.98] disabled:opacity-60"
+      >
+        {pending ? "Leaving…" : "Leave the line"}
+      </button>
+    );
+  }
+  return (
+    <button
+      type="submit"
+      disabled={pending || blocked}
+      className="inline-flex min-h-14 w-full items-center justify-center rounded-full bg-accent px-6 font-display text-xl font-extrabold uppercase tracking-wide text-on-accent shadow-[0_10px_40px_-10px_rgb(212_255_58/0.55)] transition-transform active:scale-[0.98] disabled:bg-surface-3 disabled:text-ink-3 disabled:shadow-none"
+    >
+      {pending ? "Joining…" : blocked ? "Line closed for you" : "Get in line"}
+    </button>
+  );
+}
+
+function StatusHero({
+  me,
+  phase,
+  secondsLeft,
+  facetime,
+}: {
+  me: RegisteredMe;
+  phase: ReturnType<typeof mePhase>;
+  secondsLeft: number;
+  facetime: string | null;
+}) {
+  if (phase === "up") {
+    return (
+      <section
+        aria-live="assertive"
+        className="relative overflow-hidden rounded-[var(--radius-card)] bg-accent p-5 text-on-accent stripes-live animate-stripes sm:p-6"
+      >
+        <p className="eyebrow text-on-accent/80">You&apos;re up</p>
+        <p className="mt-1 font-display text-hero font-extrabold uppercase italic leading-none">FaceTime now</p>
+        <p className="mt-3 font-mono text-6xl font-bold tabular-nums" aria-label={`${secondsLeft} seconds left`}>
+          {formatClock(secondsLeft)}
+        </p>
+        <p className="mt-1 text-sm font-semibold">Call before the clock hits zero or the spot goes to the next person.</p>
+        {facetime ? (
+          <a
+            href={facetime}
+            className="mt-4 inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-full bg-on-accent px-6 font-display text-xl font-extrabold uppercase tracking-wide text-accent"
+          >
+            <PhoneIcon className="size-5" /> FaceTime Brodie
+          </a>
+        ) : null}
+      </section>
+    );
+  }
+  const card = (eyebrow: string, title: React.ReactNode, body: React.ReactNode, tone = "") => (
+    <section aria-live="polite" className={`card p-5 sm:p-6 ${tone}`}>
+      <p className="eyebrow">{eyebrow}</p>
+      <div className="mt-1 font-display text-hero font-extrabold uppercase italic leading-none">{title}</div>
+      <div className="mt-3 text-ink-2">{body}</div>
+    </section>
+  );
+  switch (phase) {
+    case "in_call":
+      return card(
+        "Live",
+        <span className="text-live">On the line</span>,
+        "Rep it out. Results land here the moment the call ends.",
+        "border-live/40",
+      );
+    case "waiting": {
+      const eta = formatEtaRange(me.queue.eta);
+      return card(
+        "In line",
+        <>
+          <span className="text-accent">#{me.queue.position ?? "…"}</span>
+          <span className="ml-3 text-3xl text-ink-2 not-italic">in line</span>
+        </>,
+        <>
+          {eta ? (
+            <>
+              Your turn in <strong className="text-ink">{eta}</strong>.{" "}
+            </>
+          ) : null}
+          Keep this page open: it flips to a countdown when you&apos;re up. Fewest calls today goes first.
+        </>,
+        "border-accent/40",
+      );
+    }
+    case "open":
+      return card(
+        "Line's open",
+        <span className="text-accent">Walk right in</span>,
+        <>
+          Nobody&apos;s waiting. {facetime ? (
+            <a href={facetime} className="font-semibold text-ink underline underline-offset-4">FaceTime Brodie now</a>
+          ) : "FaceTime Brodie now"}{" "}
+          or get in line to hold a spot.
+        </>,
+        "border-accent/40",
+      );
+    case "at_cap":
+      return card("Done for today", "Maxed out", "You've used today's calls. Your next one unlocks at midnight ET.");
+    case "closed":
+      return card(
+        me.frozen ? "Final" : "Not started",
+        me.frozen ? "Board frozen" : "Soon",
+        me.frozen ? "Scoring is closed. Final results are pending verification." : "The line opens when the competition starts.",
+      );
+    case "banned":
+      return card("Account", "Can't queue", "This account can't join the line. Contact the team if this is a mistake.", "border-bad/40");
+    default:
+      return card("Not in line", "Ready?", "Get in line and we'll count you down here when it's your turn.");
+  }
+}
+
+function Stat({ label, value, hint, accent, icon }: { label: string; value: string; hint?: string; accent?: boolean; icon?: React.ReactNode }) {
+  return (
+    <div className="card p-4">
+      <dt className="text-sm font-semibold text-ink-2">{label}</dt>
+      <dd className={`mt-1 flex items-center gap-1.5 font-display text-5xl font-extrabold leading-none tabular-nums ${accent ? "text-accent" : "text-ink"}`}>
+        {value}
+        {icon}
+      </dd>
+      {hint ? <dd className="mt-1 text-xs text-ink-3">{hint}</dd> : null}
+    </div>
+  );
+}

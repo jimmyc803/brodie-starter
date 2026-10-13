@@ -3,8 +3,10 @@
 import { cookies } from "next/headers";
 import { refresh } from "next/cache";
 import { redirect } from "next/navigation";
+import { siteRedirect } from "@/lib/auth-session";
 import {
   ACCESS_COOKIE,
+  ADMIN_REALM,
   REFRESH_COOKIE,
   AdminInputError,
   LOGIN_NONCE_COOKIE,
@@ -12,7 +14,6 @@ import {
   dispatcherRequest,
   isAllowlisted,
   issueLoginNonce,
-  loginNonceMatches,
   parseCallId,
   parseConfigKey,
   parseEmail,
@@ -29,7 +30,7 @@ import {
   writeAudit,
   type ActionResult,
 } from "@/lib/admin";
-import { SupabaseError, authLogout, authSendOtp, authVerifyOtp, serviceRpc } from "@/lib/supabase-server";
+import { SupabaseError, authLogout, authSendOtp, serviceRpc } from "@/lib/supabase-server";
 
 // Every exported function here is a public POST endpoint. All admin mutations go through runAdminAction, which
 // re-verifies the Supabase session and admin_allowlist membership server-side before touching anything.
@@ -57,7 +58,7 @@ export async function sendLoginCode(_prev: Prev, fd: FormData): Promise<ActionRe
   (await cookies()).set(nonce.name, nonce.value, nonce.options);
   try {
     // Only allowlisted addresses get an email (and an auth user); the response never reveals membership.
-    if (await isAllowlisted(email)) await authSendOtp(email);
+    if (await isAllowlisted(email)) await authSendOtp(email, undefined, siteRedirect("/admin/auth/confirm"));
   } catch (e) {
     console.error("[admin] send code failed", e instanceof SupabaseError ? `${e.status} ${e.message}` : e);
   }
@@ -75,36 +76,21 @@ export async function verifyLoginCode(_prev: Prev, fd: FormData): Promise<Action
     return { ok: false, status: 400, error: e instanceof AdminInputError ? e.message : "Invalid input." };
   }
   const store = await cookies();
-  // Login-CSRF guard: only the browser that requested this email's code may complete it. Checked before the code is
-  // spent, so a rejected attempt does not burn it.
-  if (!loginNonceMatches(store.get(LOGIN_NONCE_COOKIE)?.value, email)) {
-    return {
-      ok: false,
-      status: 403,
-      error: "Sign-in must be completed in the browser that requested the code (within 15 min). Request a new code.",
-    };
+  // Login-CSRF guard + code verification + verified-email match (shared realm code; nonce checked before spending).
+  const signIn = await ADMIN_REALM.signInWithCode(email, code, store.get(LOGIN_NONCE_COOKIE)?.value);
+  if (!signIn.ok) {
+    return { ok: false, status: signIn.status, error: signIn.error, ...(signIn.status === 401 ? { data: { email } } : {}) };
   }
-  let session;
-  try {
-    session = await authVerifyOtp({ email, token: code });
-  } catch (e) {
-    console.error("[admin] verify failed", e instanceof SupabaseError ? `${e.status} ${e.message}` : e);
-    return { ok: false, status: 401, error: "Code is invalid or expired.", data: { email } };
-  }
-  // Fail closed: the verified session must carry the same email the nonce was bound to.
-  if (!session.email || session.email !== email) {
-    await authLogout(session.accessToken).catch((e) => console.error("[admin] logout failed", e));
-    return { ok: false, status: 403, error: "Forbidden: sign-in email could not be verified." };
-  }
+  const session = signIn.session;
   let allowed: boolean;
   try {
-    allowed = await isAllowlisted(session.email);
+    allowed = await isAllowlisted(session.email ?? "");
   } catch (e) {
     console.error("[admin] allowlist check failed", e);
     return { ok: false, status: 503, error: "Could not verify allowlist; try again.", data: { email } };
   }
   if (!allowed) {
-    await authLogout(session.accessToken).catch((e) => console.error("[admin] logout failed", e));
+    await ADMIN_REALM.logoutQuietly(session.accessToken);
     return { ok: false, status: 403, error: "Forbidden: not on the admin allowlist." };
   }
   for (const c of sessionCookies(session)) store.set(c.name, c.value, c.options);

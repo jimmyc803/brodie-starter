@@ -8,6 +8,8 @@ const NAV = [
   { href: "/", label: "Board" },
   { href: "/rules", label: "Rules" },
   { href: "/setup", label: "Setup" },
+  // Web-only fallback (MESSAGING_PROVIDER=web_only): sign in, join and queue on the site.
+  ...(process.env.NEXT_PUBLIC_WEB_JOIN === "1" ? [{ href: "/me", label: "My spot" }] : []),
 ];
 
 export function Logo() {
@@ -58,7 +60,7 @@ export function SiteNav({ joinHref }: { joinHref: string | null }) {
 /** Thumb-reach CTA on phones. Hidden on /join, where the page itself is the CTA. */
 export function MobileJoinBar({ joinHref }: { joinHref: string | null }) {
   const path = usePathname();
-  if (path.startsWith("/join")) return null;
+  if (path.startsWith("/join") || path.startsWith("/me") || path.startsWith("/login")) return null;
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 bg-gradient-to-t from-canvas via-canvas/85 to-transparent px-4 pt-8 pb-[max(1rem,env(safe-area-inset-bottom))] sm:hidden">
       <JoinButton href={joinHref} size="md" label="Text JOIN to compete" className="pointer-events-auto w-full" />
