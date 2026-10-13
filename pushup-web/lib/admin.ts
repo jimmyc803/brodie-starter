@@ -59,6 +59,13 @@ export function requireReason(v: unknown): string {
   return r;
 }
 
+/** Reason for actions where it is optional: blank becomes a placeholder (the DB audit trail still needs text). */
+export function optionalReason(v: unknown): string {
+  const r = str(v).replace(/\s+/g, " ").trim();
+  if (r.length > REASON_MAX) throw new AdminInputError(`Reason is too long (max ${REASON_MAX} characters).`);
+  return r || "no reason given";
+}
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function parseUuid(v: unknown, label = "User id"): string {

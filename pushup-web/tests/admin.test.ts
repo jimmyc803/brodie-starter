@@ -31,11 +31,13 @@ import {
   checkAdmin,
   etYesterday,
   isAllowlisted,
+  optionalReason,
   parsePoints,
   requireAdmin,
   requireReason,
 } from "@/lib/admin";
 import {
+  adjustScore,
   removeQueueEntry,
   sendBroadcast,
   sendLoginCode,
@@ -340,7 +342,6 @@ describe("reason validation", () => {
   it("every mutating action rejects a missing reason before any RPC/dispatcher call", async () => {
     cookieJar.set(ACCESS_COOKIE, "tok-boss");
     const cases = [
-      () => setBan(PREV, form({ user_id: USER, ban: "1", reason: " " })),
       () => removeQueueEntry(PREV, form({ queue_id: "7" })),
       () => setConfigValue(PREV, form({ key: "daily_call_cap", value: "6", reason: "" })),
       () => sendBroadcast(PREV, form({ body: "hello", confirm: "yes", reason: "" })),
@@ -353,6 +354,18 @@ describe("reason validation", () => {
     }
     expect(rpcCalls()).toHaveLength(0);
     expect(dispatcherCalls()).toHaveLength(0);
+  });
+
+  it("ban and score adjust need no reason: blank becomes a placeholder", async () => {
+    cookieJar.set(ACCESS_COOKIE, "tok-boss");
+    expect(await setBan(PREV, form({ user_id: USER, ban: "1" }))).toMatchObject({ ok: true });
+    expect(await adjustScore(PREV, form({ user_id: USER, points: "+5", reason: " " }))).toMatchObject({ ok: true });
+    expect(rpcCalls().map((c) => (c.body as Record<string, unknown>).p_reason)).toEqual([
+      "no reason given",
+      "no reason given",
+    ]);
+    expect(optionalReason("  typo   fix ")).toBe("typo fix");
+    expect(() => optionalReason("x".repeat(501))).toThrow(AdminInputError);
   });
 
   it("validates other inputs", async () => {

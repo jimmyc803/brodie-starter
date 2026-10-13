@@ -23,6 +23,7 @@ import {
   parseQueueId,
   parseText,
   parseUuid,
+  optionalReason,
   requireReason,
   rpcOutcome,
   runAdminAction,
@@ -200,7 +201,7 @@ export async function setBan(_prev: Prev, fd: FormData): Promise<ActionResult> {
     await runAdminAction(async ({ email }) => {
       const userId = parseUuid(fd.get("user_id"));
       const ban = fd.get("ban") === "1";
-      const reason = requireReason(fd.get("reason"));
+      const reason = optionalReason(fd.get("reason"));
       const res = await serviceRpc(ban ? "ch_admin_ban" : "ch_admin_unban", {
         p_user_id: userId,
         p_reason: reason,
@@ -216,7 +217,7 @@ export async function adjustScore(_prev: Prev, fd: FormData): Promise<ActionResu
     await runAdminAction(async ({ email }) => {
       const userId = parseUuid(fd.get("user_id"));
       const points = parsePoints(fd.get("points"));
-      const reason = requireReason(fd.get("reason"));
+      const reason = optionalReason(fd.get("reason"));
       const res = await serviceRpc<Record<string, unknown>>("ch_admin_adjust", {
         p_user_id: userId,
         p_points: points,

@@ -45,6 +45,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                     action={setBan}
                     submitLabel={u.banned_at ? "Unban" : "Ban"}
                     danger={!u.banned_at}
+                    reason={false}
                     confirm={`${u.banned_at ? "Unban" : "Ban"} ${u.display_name ?? u.id}?`}
                   >
                     <input type="hidden" name="user_id" value={u.id} />
@@ -55,6 +56,7 @@ export default async function AdminUsersPage({ searchParams }: { searchParams: P
                   <ActionForm
                     action={adjustScore}
                     submitLabel="Adjust"
+                    reason={false}
                     confirm={`Adjust points for ${u.display_name ?? u.id}?`}
                   >
                     <input type="hidden" name="user_id" value={u.id} />
