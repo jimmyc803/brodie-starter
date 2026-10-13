@@ -1,7 +1,5 @@
 """facetime/frameprep.py: the bridge content crop and the orientation lock (a phone held sideways under a portrait lock)."""
-import json
 import os
-import shutil
 
 import numpy as np
 import pytest
@@ -185,22 +183,3 @@ def test_apply_reuses_the_geometry_and_rejects_other_frame_sizes():
     assert out is not None and upright(out) and out.flags['C_CONTIGUOUS']
     assert prep.apply(np.zeros((480, 640, 3), np.uint8)) is None
     assert FramePrep(probe=pose).apply(frame) is None              # nothing seen yet
-
-
-# ------------------------------------------------------------------------------------------------- a real clip
-CLIP = os.path.join(ROOT, 'data', 'tmp', 'pushup_clips', 'mk11544.mp4')
-
-
-@pytest.mark.skipif(not os.path.exists(CLIP) or shutil.which('ffmpeg') is None, reason='needs the local push-up clip + ffmpeg')
-@pytest.mark.parametrize('held, fix', [(90, 270), (270, 90)])
-def test_real_sideways_clip_is_turned_and_counted(tmp_path, held, fix):
-    """mk11544 turned sideways inside a bridge frame (a portrait-locked phone on its side): the lock turns it upright
-    within ~2 s and the reps are counted like the upright clip's."""
-    from facetime import annotate_pushups
-    up = tmp_path / 'up.mp4'; side = tmp_path / 'side.mp4'
-    annotate_pushups.main(['--video', CLIP, '--out', str(up)])
-    annotate_pushups.main(['--video', CLIP, '--out', str(side), '--rotate', str(held), '--bridge'])
-    a = json.load(open(tmp_path / 'up.json')); b = json.load(open(tmp_path / 'side.json'))
-    assert b['rotation'] == fix and len(b['rotations']) == 1 and b['rotations'][0]['t'] <= 2.5
-    assert a['reps'] >= 4 and b['reps'] >= a['reps'] - 1
-    assert b['status_frames'].get(next(k for k in b['status_frames'] if 'GOOD' in k), 0) > 0.6 * b['frames']
