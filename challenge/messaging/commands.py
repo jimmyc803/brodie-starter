@@ -74,6 +74,37 @@ def parse(body: str) -> Command:
     return Command(kind or "UNKNOWN", arg)
 
 
+# Attribution tags a JOIN may carry, in any position: "ref-K7X2QB" (a participant's invite code) and "src-tiktok" (the
+# site link the texter came from). A '-', ':' or '=' follows the prefix, so a tag can never be a valid display name
+# (names are [A-Za-z0-9_] only) and plain "JOIN name" parses exactly as before.
+_JOIN_TAG = re.compile(r"(?i)^(ref|src)[-:=]([A-Za-z0-9_]{1,24})$")
+
+
+@dataclass(frozen=True)
+class JoinArg:
+    name: str
+    ref_code: str | None = None
+    source: str | None = None
+
+
+def split_join_arg(arg: str) -> JoinArg:
+    """Split a JOIN argument into the display name and optional ref-/src- tags (first of each kind wins)."""
+    ref: str | None = None
+    src: str | None = None
+    words: list[str] = []
+    for token in arg.split():
+        match = _JOIN_TAG.match(token.strip(_EDGES.replace("-", "").replace(":", "").replace("=", "")))
+        if match is None:
+            words.append(token)
+            continue
+        kind, value = match.group(1).lower(), match.group(2)
+        if kind == "ref":
+            ref = ref or value.upper()
+        else:
+            src = src or value.lower()
+    return JoinArg(" ".join(words).strip(_EDGES), ref, src)
+
+
 def validate_display_name(name: str) -> tuple[bool, str]:
     if not 3 <= len(name) <= 20:
         return False, "Use 3–20 characters."

@@ -193,6 +193,8 @@ export function MeDashboard({ initial }: { initial: RegisteredMe }) {
         </button>
       </form>
 
+      {me.ref_code ? <InviteCard code={me.ref_code} /> : null}
+
       {/* Thumb-reach queue control: sticky on phones, inline on larger screens. */}
       <form
         action={qAction}
@@ -325,6 +327,45 @@ function StatusHero({
     default:
       return card("Not in line", "Ready?", "Get in line and we'll count you down here when it's your turn.");
   }
+}
+
+/** The user's invite link. Friends who text JOIN from it are credited to this account (no contact details shared). */
+function InviteCard({ code }: { code: string }) {
+  const path = `/join?ref=${encodeURIComponent(code)}`;
+  const [note, setNote] = useState<string | null>(null);
+  const share = async () => {
+    const url = new URL(path, window.location.origin).toString();
+    try {
+      if (typeof navigator.share === "function") {
+        await navigator.share({ title: "Brodie Push-Up Challenge", text: "Push-up battle on FaceTime. Join me:", url });
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      setNote("Link copied.");
+    } catch (e) {
+      // A dismissed share sheet is not an error; anything else falls back to showing the link to copy by hand.
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      setNote(url);
+    }
+  };
+  return (
+    <section aria-labelledby="invite-heading" className="card flex items-center justify-between gap-4 p-4">
+      <div className="min-w-0">
+        <p id="invite-heading" className="font-semibold">Invite friends</p>
+        <p className="text-sm text-ink-3">
+          Your code <strong className="font-mono text-ink">{code}</strong> rides along when they text JOIN from your link.
+        </p>
+        {note ? <p role="status" className="mt-1 text-sm break-all text-ink-2">{note}</p> : null}
+      </div>
+      <button
+        type="button"
+        onClick={share}
+        className="min-h-11 shrink-0 rounded-full border border-hairline-strong px-4 text-sm font-semibold hover:border-accent hover:text-accent"
+      >
+        Share link
+      </button>
+    </section>
+  );
 }
 
 function Stat({ label, value, hint, accent, icon }: { label: string; value: string; hint?: string; accent?: boolean; icon?: React.ReactNode }) {

@@ -169,6 +169,7 @@ def _me_payload(r: dict[str, Any], email: str | None, caller_id_source: str) -> 
         "brodie_number": r.get("brodie_number"),
         "started": bool(r.get("started")),
         "frozen": bool(r.get("frozen")),
+        "ref_code": r.get("ref_code"),  # the caller's own invite code (shareable /join?ref=<code>)
     }
 
 

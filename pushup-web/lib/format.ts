@@ -1,3 +1,4 @@
+import { NO_TAGS, joinSmsHref, type JoinTags } from "./attribution";
 import type { LineStatus, PowerHour, PowerHourStatus } from "./types";
 
 /** Format a duration in ms as H:MM:SS (or D d H:MM:SS when over a day). Negative clamps to 0. */
@@ -60,9 +61,9 @@ export function isFinal(frozen: boolean, windowEnd: string, nowMs: number): bool
   return frozen || (!Number.isNaN(end) && nowMs >= end);
 }
 
-export function smsLink(brodieNumber: string | null): string | null {
-  if (!brodieNumber) return null;
-  return `sms:${brodieNumber}&body=JOIN%20`;
+/** Pre-filled "JOIN " text to the line; optional invite/source tags (see lib/attribution.ts). */
+export function smsLink(brodieNumber: string | null, tags: JoinTags = NO_TAGS): string | null {
+  return joinSmsHref(brodieNumber, tags);
 }
 
 /** YYYY-MM-DD of the given instant in America/New_York. */

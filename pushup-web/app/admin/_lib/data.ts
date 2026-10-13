@@ -1,6 +1,7 @@
 import "server-only";
 import { dispatcherRequest, etYesterday } from "@/lib/admin";
 import { serviceRpc, serviceSelect } from "@/lib/supabase-server";
+import type { RawMetrics } from "./metrics";
 
 /** Page loaders for the admin console (service role; only call after requireAdmin()). */
 
@@ -73,6 +74,7 @@ export type AdminUser = {
   banned_at: string | null;
   ban_reason: string | null;
   opted_out_at: string | null;
+  is_team: boolean;
   points: number | null;
   rank: number | null;
 };
@@ -85,7 +87,7 @@ export function sanitizeSearch(q: string): string {
 export async function searchUsers(q: string): Promise<AdminUser[]> {
   const term = sanitizeSearch(q);
   const base =
-    "clients?select=id,display_name,joined_at,banned_at,ban_reason,opted_out_at&joined_at=not.is.null&limit=50";
+    "clients?select=id,display_name,joined_at,banned_at,ban_reason,opted_out_at,is_team&joined_at=not.is.null&limit=50";
   const byName = term
     ? serviceSelect<Omit<AdminUser, "points" | "rank">>(
         `${base}&display_name=ilike.${encodeURIComponent(`*${term}*`)}&order=display_name.asc`,
@@ -102,7 +104,7 @@ export async function searchUsers(q: string): Promise<AdminUser[]> {
   if (h?.user_id && !rows.some((r) => r.id === h.user_id)) {
     all = [
       ...(await serviceSelect<Omit<AdminUser, "points" | "rank">>(
-        `clients?select=id,display_name,joined_at,banned_at,ban_reason,opted_out_at&id=eq.${encodeURIComponent(h.user_id)}`,
+        `clients?select=id,display_name,joined_at,banned_at,ban_reason,opted_out_at,is_team&id=eq.${encodeURIComponent(h.user_id)}`,
       )),
       ...rows,
     ];
@@ -113,6 +115,17 @@ export async function searchUsers(q: string): Promise<AdminUser[]> {
   });
   const byId = new Map((board ?? []).map((b) => [b.user_id, b]));
   return all.map((u) => ({ ...u, points: byId.get(u.id)?.points ?? null, rank: byId.get(u.id)?.rank ?? null }));
+}
+
+// ------------------------------------------------------------------ metrics
+
+/** Whole metrics page in one RPC (aggregated in Postgres; no per-user queries). */
+export async function getMetrics(includeTeam: boolean, nowMs = Date.now()): Promise<RawMetrics> {
+  return serviceRpc<RawMetrics>("ch_admin_metrics", {
+    p_include_team: includeTeam,
+    p_now: new Date(nowMs).toISOString(),
+    p_days: 30,
+  });
 }
 
 // ------------------------------------------------------------------ calls

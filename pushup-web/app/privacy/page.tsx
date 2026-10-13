@@ -75,6 +75,12 @@ export default function PrivacyPage() {
             <>
               <strong>Website data.</strong> If you use the optional website sign-in, your email address for the sign-in link. Our hosting provider also keeps ordinary request logs (IP address, browser, time). We use no advertising trackers.
             </>,
+            <>
+              <strong>Visit counts.</strong> The site counts visits and taps on its &ldquo;Text JOIN&rdquo; button. Each count stores only the time, the page, the referring website&apos;s domain and any link label or invite code in the link (like ?src=tiktok). No cookies, IP addresses or device identifiers, and nothing that ties a visit to you.
+            </>,
+            <>
+              <strong>Invites.</strong> Every player gets an invite code. If you join with a friend&apos;s code (or from a labeled link), we record who invited you and how you found us. Our team sees this by display name only; it is never public.
+            </>,
           ]}
         />
       </Section>
@@ -98,6 +104,7 @@ export default function PrivacyPage() {
             "To text you: replies to your commands, queue and \"you're up\" texts, call results, power hour alerts, rank changes, a daily recap and reminders.",
             "To keep it fair: review disputes and suspected cheating, correct scores, and re-check stored rep measurements with a corrected judge.",
             "To keep it running: find and fix errors and abuse.",
+            "To see how people find the Challenge: totals of visits, sign-ups and invites, for our team.",
             "To show results on the public leaderboard and result cards.",
             "We do not sell your data and we do not use it for ads.",
           ]}

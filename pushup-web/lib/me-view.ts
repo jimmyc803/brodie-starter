@@ -30,6 +30,8 @@ export type Me =
       brodie_number: string | null;
       started: boolean;
       frozen: boolean;
+      /** This user's invite code; friends who join via /join?ref=<code> are credited to them. */
+      ref_code?: string | null;
       server_time?: string;
     };
 
