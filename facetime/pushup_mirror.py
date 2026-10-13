@@ -34,9 +34,11 @@ overprint, yellow tickets, ink borders, hard shadows, Anton + Space Mono) via fa
 respects mirror.SAFE_X / SAFE_TOP / SAFE_BOTTOM (FaceTime Fill crops the sides, the island covers the top, the
 self-view the bottom left).
 
-Landscape (render(..., landscape=True); the worker's choice when the caller's phone is held sideways, see
-frameprep.phone_sideways / OrientationGate): a 1280x720 canvas, because FaceTime turns our track upright on the sideways
-phone and fills its landscape screen with it (a portrait canvas there shows only a ~3x zoomed strip). The caller's whole
+Landscape (render(..., landscape=True); the worker's choice when the caller's phone is sideways = its picture needed
+turning, see frameprep's orientation lock / OrientationGate): a 1280x720 canvas. The worker never ships it as a
+landscape track any more: live calls (2026-10-13) showed FaceTime mangling a track whose size changes mid-call, and a
+phone on the floor never rotates its screen, so the card goes pre-turned (frameprep.unrotate, the inverse of the
+caller's rotation) on the constant 720x1280 track, which FaceTime fills; the physical turn of the phone reads it upright. The caller's whole
 picture, upright, fitted large on an ink panel on the left (no zoom, no pan, whatever follow is), the status pill / stamp
 at its top centre; on paper in a right column the BRODIE wordmark + timer, the overprinted count, Brodie small at the
 bottom left of the column with his bubble over the picture's corner. Safe area: the LS_* constants (fill crop ~65 px top

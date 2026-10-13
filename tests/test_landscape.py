@@ -235,15 +235,18 @@ def _mirror_job(monkeypatch, captured):
     return job
 
 
-def test_mirror_loop_switches_the_canvas_when_the_decision_flips(monkeypatch):
+def test_mirror_loop_keeps_one_canvas_size_for_the_whole_call(monkeypatch):
+    """The track is 720x1280 from the first frame to the last, through idle, portrait and sideways (pre-turned) phases:
+    live calls (2026-10-13) showed FaceTime dropping to a small fitted box for good after any mid-stream size switch."""
     captured = []; job = _mirror_job(monkeypatch, captured)
     rgb = np.full(SRC, 90, np.uint8); phase = {'n': 0}
+    job.mirror_rot = 0
     def drive():
         if not job.mirror_live: return False
         job.mirror_in = (rgb, plank(), 1, time.monotonic())               # a live caller frame every tick
         n = len(captured)
-        if phase['n'] == 0 and n >= 3: job.mirror_landscape = True; phase.update(n=1, at=n)
-        elif phase['n'] == 1 and n >= phase['at'] + 4: job.mirror_landscape = False; phase.update(n=2, at=n)
+        if phase['n'] == 0 and n >= 3: job.mirror_landscape = True; job.mirror_rot = 90; phase.update(n=1, at=n)
+        elif phase['n'] == 1 and n >= phase['at'] + 4: job.mirror_landscape = False; job.mirror_rot = 0; phase.update(n=2, at=n)
         elif phase['n'] == 2 and n >= phase['at'] + 4: job.mirror_in = None; phase.update(n=3, at=n)
         return phase['n'] == 3 and n >= phase['at'] + 2
     async def go():
@@ -255,9 +258,8 @@ def test_mirror_loop_switches_the_canvas_when_the_decision_flips(monkeypatch):
             await asyncio.sleep(0.005)
         job.stop.set(); await asyncio.wait_for(t, 5)
     asyncio.run(go())
-    sizes = [c for i, c in enumerate(captured) if i == 0 or c != captured[i - 1]]
-    assert (1280, 720) in captured and sizes[0] == (720, 1280)
-    assert sizes[:3] == [(720, 1280), (1280, 720), (720, 1280)]           # portrait -> landscape -> portrait, no flicker
+    assert len(captured) >= 10
+    assert set(captured) == {(720, 1280)}                                 # never a landscape frame on the track
     assert captured[-1] == (720, 1280)                                    # no caller video: the idle card, portrait
 
 
@@ -270,7 +272,7 @@ def test_idle_card_is_portrait_even_when_the_phone_was_sideways(monkeypatch):
     assert (f.width, f.height) == (1280, 720)
 
 
-def test_feed_layout_follows_the_phone_with_hysteresis(capsys):
+def test_feed_layout_follows_the_measured_rotation_not_the_picture_shape(capsys):
     job = worker.CoachJob.__new__(worker.CoachJob)
     job.pipe = SimpleNamespace(pose_variant='full'); job.prep = FramePrep(probe=lambda img: None)
     up, side = bridge(PORTRAIT_PIC), bridge(LANDSCAPE_PIC)
@@ -280,24 +282,23 @@ def test_feed_layout_follows_the_phone_with_hysteresis(capsys):
         job.prep_frame(raw, t); job.update_layout(raw, t); seen.append((t, job.mirror_landscape)); t += 0.1
     for _ in range(30): step(up)
     assert job.mirror_landscape is False
+    for _ in range(100): step(side)                                       # a landscape-shaped picture alone: no evidence
+    assert job.mirror_landscape is False and job.mirror_rot == 0          # (shape flips flipped the track size mid-call)
+    job.prep.rotation = 90                                                # the lock measured the turn: sideways for real
     t_turn = t
-    for _ in range(100): step(side)                                       # the phone goes sideways for 10 s
-    assert job.mirror_landscape is True
+    for _ in range(100): step(up)
+    assert job.mirror_landscape is True and job.mirror_rot == 90
     first = min(tt for tt, v in seen if v)
     assert first - t_turn >= ORIENT_SUSTAIN_S - 1e-6                      # not before the sustain
     assert sum(1 for i in range(1, len(seen)) if seen[i][1] != seen[i - 1][1]) == 1   # one switch, no flapping
-    assert "phone sideways: coach-video landscape" in capsys.readouterr().out
-    job.prep.rotation = 90                                                # portrait-locked and sideways: still landscape
-    for _ in range(40): step(up)
-    assert job.mirror_landscape is True
+    assert 'landscape pre-turned 90 deg on the portrait track' in capsys.readouterr().out
 
 
 def test_layout_update_failure_is_logged_and_keeps_the_layout(capsys):
     job = worker.CoachJob.__new__(worker.CoachJob)
     class Boom:
-        rotation = 0
         @property
-        def content(self): raise RuntimeError('boom')
+        def rotation(self): raise RuntimeError('boom')
     job.prep = Boom(); job.mirror_landscape = True
     for k in range(3): job.update_layout(np.zeros((8, 8, 3), np.uint8), float(k))
     assert job.mirror_landscape is True and job.layout_fails == 3
