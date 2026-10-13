@@ -92,3 +92,13 @@ class InfrastructureTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_pgenv_splits_uri_without_putting_password_in_argv():
+    import importlib.util, pathlib
+    spec = importlib.util.spec_from_file_location('pgenv', pathlib.Path(__file__).with_name('pgenv.py'))
+    mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+    env = mod.pg_env('postgresql://ops.ref:p%40ss@pooler.example.com:6543/postgres?sslmode=verify-full', base={})
+    assert (env['PGHOST'], env['PGPORT'], env['PGUSER'], env['PGPASSWORD'], env['PGDATABASE'], env['PGSSLMODE']) == \
+        ('pooler.example.com', '6543', 'ops.ref', 'p@ss', 'postgres', 'verify-full')
+    assert mod.pg_env('postgresql://u:p@h/db', base={})['PGSSLMODE'] == 'require'

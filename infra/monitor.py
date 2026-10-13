@@ -4,7 +4,12 @@ import datetime
 import json
 import os
 import subprocess
+import sys
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pgenv import pg_env  # noqa: E402
 
 
 def alert(message):
@@ -67,7 +72,7 @@ def main():
         AND created_at > now() - interval '5 minutes'),
       'stale', (SELECT count(*) FROM heartbeats WHERE at < now() - interval '180 seconds'));
     """
-    env = dict(os.environ, PGDATABASE=os.environ['SUPABASE_DB_URL'], PGCONNECT_TIMEOUT='10')
+    env = pg_env(os.environ['SUPABASE_DB_URL'])
     result = subprocess.run(['psql', '-X', '-At', '-v', 'ON_ERROR_STOP=1', '-c', query],
                             env=env, capture_output=True, text=True, timeout=25, check=True)
     status = json.loads(result.stdout)

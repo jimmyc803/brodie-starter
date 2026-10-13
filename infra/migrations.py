@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 sql = ["SELECT pg_advisory_lock(hashtextextended('brodie-deploy', 0));",
        'CREATE TABLE IF NOT EXISTS public.schema_migrations '
@@ -17,6 +18,8 @@ for path in sorted(Path('db/migrations').glob('*.sql')):
             f"SELECT NOT EXISTS (SELECT 1 FROM public.schema_migrations WHERE name='{path.name}') AS apply_migration \\gset",
             '\\if :apply_migration', f'\\i {path}',
             f"INSERT INTO public.schema_migrations(name,sha256) VALUES ('{path.name}','{digest}');", '\\endif']
-env = dict(os.environ, PGDATABASE=os.environ['SUPABASE_DB_URL'], PGCONNECT_TIMEOUT='10')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from pgenv import pg_env  # noqa: E402
+env = pg_env(os.environ['SUPABASE_DB_URL'])
 subprocess.run(['psql', '-X', '-v', 'ON_ERROR_STOP=1'], input='\n'.join(sql) + '\n',
                text=True, env=env, check=True)
