@@ -101,29 +101,41 @@ gap gate is gone (j1 measured 0.14).
   more. Before, the side with the larger |dev| was kept, so an allowed -19.5 deg pike hid a sustained +18.5 deg sag
   (test_allowed_pike_cannot_mask_sustained_sag). Only one column is stored, so a rejudge with different hip limits
   judges the stored side only.
-- Knee pivot (fix round): knee_floor_contact is also true when the knee is the pivot of the rep, whatever the knee
-  angle. A knee push-up with the foot raised reads 161.7 deg at the knee, so the < 160 deg rule alone scored it 5/5.
-  Over the judged frames (3-frame moving average) the least-squares slope of knee height vs hip height (image
-  vertical, torso lengths) is ~0.5 in a plank (the knee rides on the ankle-hip line) and ~0 or negative with the
-  knee on the floor. Pivot iff slope < 0.2 (KNEE_PIVOT_SLOPE), hip travel p90-p10 >= 0.1 torso, >= 6 frames, and
-  the knee's 2nd-lowest height above the wrist-ankle line < 0.1 torso (KNEE_PIVOT_MAX_KF; without it, sigma 0.02
-  jitter flagged 6-12% of synthetic plank reps at depth 90-105, now 0/150 at every depth and noise).
-  Real slopes: clean side-view 0.36-0.75 (one rep 0.26), cm_interval (kettlebells, knee 161-166) 0.50-0.63, the
-  knees clip -0.83..-0.19 (all 4 reps flagged). Margins: 0.16 clean / 0.39 knees. Real replay after the fix: clean
-  acceptance and counts unchanged on every clip (26/30); only reason mixes on already-rejected off-angle / two-people
-  reps moved between hips_sag and hips_pike.
-  Synthetic knees-on-floor at knee 161.7 deg: 0/60 accepted at noise 0 and 0.01, 6/60 at 0.02 (test bound 15%).
+- Knee pivot (fix round, revised in fix round 2): knee_floor_contact is also true when the knee is planted on the
+  floor, whatever the knee angle. A knee push-up with the foot raised reads 161.7 deg at the knee, so the < 160 deg
+  rule alone scored it 5/5. Over the judged frames (3-frame moving average) the least-squares slope of knee height vs
+  hip height is ~0.5 in a plank (the knee rides on the ankle-hip line) and ~0 or negative with the knee on the floor.
+  Heights are image vertical from the median ankle in one per-rep scale (median torso length), so moving the body in
+  the frame changes nothing (fix round 2: per-frame torso division made the slope placement-dependent, e.g. hip_offset
+  0.05, depth 90, sigma 0.02, seed 0 flipped knees_down -> accepted when shifted up 0.3; test_verdicts_invariant_to_
+  body_placement_in_frame). Rule: only a knee whose 2nd-lowest height above the wrist-ankle line is < 0.1 torso
+  (KNEE_PIVOT_MAX_KF) can be planted; it is planted iff slope < 0.2 (KNEE_PIVOT_SLOPE) or there is no plank evidence:
+  < 6 frames or hip travel (range of the smoothed hip height) < 0.2 torso (KNEE_PIVOT_MIN_HIP). Fix round 2: before,
+  missing evidence counted as "not planted", so knees planted at 160.1 deg with stationary hips (torso pivoting at the
+  hip) or 0.022-torso hip travel passed 5/5 (test_planted_knees_with_little_hip_motion_rejected). A static test (knee
+  height vs the person's own ankle / the ankle-hip chord) was measured and rejected: on real clean side-view clips the
+  knee sits from 0.06 torso below to 0.16 above the ankle in the image and the hip only 0.05-0.43 above it, overlapping
+  a planted knee, so only the motion evidence separates. The knee angle stays a soft factor only through the bent-knee
+  floor-line rule (kc).
+  Real (judged frames, knee near the line): clean slopes 0.46-0.72 (margin 0.26), hip travel >= 0.26 (margin 0.06,
+  thin); cm_interval (kettlebells, knee 161-167, floor-line height -0.06) slopes 0.58-0.62; the knees clip -0.94..-0.73
+  (all 4 reps flagged). Real replay after fix round 2: clean acceptance and counts unchanged on every clip (26/30), no
+  clean rep flagged; latency p95 17.2 ms (machine shared with other test runs).
+  Synthetic false contact on planks (5 seeds x 6 bodies/sides = 150 reps per case: depth 75/100/105, 1.5 s bottom
+  hold, hip offset +-0.05, 1 s reps): 0 at sigma 0 and 0.01; at 0.02 only the 1.5 s bottom hold, 1/150.
+- Incline / decline: median wrist-ankle support-line tilt over the judged frames, folded into torso_ok.
+- src/rtcoach/video.py: the ffprobe size parse now uses JSON. On this ffprobe build the CSV output had blank
+  stream-group lines, so `read_frames` crashed on every clip.
 
-### Residuals (synthetic)
+### Residuals (synthetic, accepted cheat reps)
 
 | case | sigma 0.01 | sigma 0.02 |
 |---|---|---|
 | no_lockout 140 deg | 0/60 | 12/60 (bound 25%, D-31) |
-| knees on floor, knee 161.7 deg | 0/60 | 6/60 (bound 15%) |
+| knees on floor, knee 161.7 deg | 0/150 | 6/150 (test: 0/60, bound 10%) |
+| knees planted 160.1 deg, stationary hips | 0/150 | 0/150 (test bound 10%) |
+| knees planted 160.1 deg, hip motion x0.1 / x0.3 | 0/150 / 0/150 | 0/150 / 6/150 (test 3/60, bound 10%) |
 | depth +5 deg (near miss) | 4% | 28% (bound 30%) |
-- Incline / decline: median wrist-ankle support-line tilt over the judged frames, folded into torso_ok.
-- src/rtcoach/video.py: the ffprobe size parse now uses JSON. On this ffprobe build the CSV output had blank
-  stream-group lines, so `read_frames` crashed on every clip.
 
 ## Labels
 

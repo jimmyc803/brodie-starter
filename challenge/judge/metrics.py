@@ -69,8 +69,9 @@ Metric definitions (sel = judged frames, see above; n = len(sel)):
                         dev >= -hip_pike_max_dev_deg (hips coming down from the walk-in excluded); all judged frames if
                         there is none. The sag side always uses every judged frame.
   knee_floor_contact    2nd-lowest kc < knee_floor_margin (>= 2 bent-knee frames within the margin of the floor) OR
-                        the knee is the rep's pivot (_knee_pivot: knee height does not follow hip height, slope <
-                        KNEE_PIVOT_SLOPE), which catches knees resting on the floor at any knee angle.
+                        the knee is planted (_knee_pivot): it is near the floor line and the hips show no plank
+                        co-movement (knee height does not follow hip height, or the hips barely move). Catches knees
+                        resting on the floor at any knee angle; translation-invariant (one per-rep origin and scale).
   shoulder_elbow_gap    2nd-lowest gap over good frames. Informational only since j2.
   shoulder_wrist_drop   j2: (2nd-lowest drop) / (2nd-highest drop) over good frames = the shoulder's height above
                         the wrist at the bottom as a fraction of that at the lockout (90 deg elbow ~ 0.55, 125 deg
@@ -103,8 +104,8 @@ TORSO_OK_FRAC = 0.8
 EVIDENCE_FRAMES = 2       # a gate is decided by the k-th most extreme frame (D-16)
 TOP_SLACK_DEG = 10.0      # rep-start rule: a "top" frame has filtered elbow >= lockout_min_deg - TOP_SLACK_DEG
 CONTACT_OFF = 1.0         # kc of a frame whose knee is not bent (above any knee_floor_margin)
-KNEE_PIVOT_SLOPE = 0.2       # knee-height / hip-height slope below which the knee is the rep's pivot (on the floor)
-KNEE_PIVOT_MIN_HIP = 0.1     # hip travel (torso lengths) needed to measure the slope
+KNEE_PIVOT_SLOPE = 0.2       # knee-height / hip-height slope below which the knee does not ride with the hips
+KNEE_PIVOT_MIN_HIP = 0.2     # hip travel (smoothed range, torso lengths) needed for plank evidence; below = planted
 KNEE_PIVOT_MIN_FRAMES = 6
 KNEE_PIVOT_MAX_KF = 0.1       # ...and the knee must be low: 2nd-lowest height above the wrist-ankle floor line (torso)
 KNEE_CONTACT_MAX_DEG = 160.0  # knee angle below which a knee near the floor line counts as contact (CALIBRATION.md)
@@ -212,8 +213,10 @@ class _SideFrame:
     gap: float | None = None
     drop: float | None = None
     sup: float | None = None          # support-line tilt (deg), not median-filtered (the rep uses its median)
-    kh: float | None = None           # raw knee / hip height up the image (-y / torso_len), not median-filtered: their
-    hh: float | None = None           # co-movement over the rep tells a knee pivot from a plank (_knee_pivot)
+    yk: float | None = None           # raw image y of knee / hip / ankle and the torso length (same units), not
+    yh: float | None = None           # median-filtered: the knee's motion relative to the hip tells a knee resting on
+    ya: float | None = None           # the floor from a plank (_knee_features)
+    tor: float | None = None
     kf: float | None = None           # raw knee height above the floor line (kh before the bent-knee rule)
     prone: bool = False
 
@@ -344,7 +347,8 @@ class RepMetricsAccumulator:
                 if nrm[1] > 0:
                     nrm = -nrm                   # point up the image (away from the floor)
                 kh = float((P[KN] - w0) @ nrm) / torso
-                sf.kh, sf.hh, sf.kf = -float(P[KN, 1]) / torso, -float(P[HP, 1]) / torso, kh
+                sf.yk, sf.yh, sf.ya, sf.tor = float(P[KN, 1]), float(P[HP, 1]), float(P[AN, 1]), torso
+                sf.kf = kh
                 bent = math.isfinite(sf.knee) and sf.knee < KNEE_CONTACT_MAX_DEG
                 sf.kc = kh if bent else max(kh, CONTACT_OFF)
         sf.prone = _prone(f)
@@ -422,29 +426,43 @@ class RepMetricsAccumulator:
             shoulder_elbow_gap=_kth_low([f.gap for f in G]))
 
 
+def _knee_features(G: list[_SideFrame]) -> dict | None:
+    """Knee evidence over the judged good frames (heights up the image, in one per-rep torso length, from the median
+    ankle: translation of the whole body in the frame does not change them).
+    slope: least-squares d(knee height) / d(hip height) after a 3-frame moving average; travel: range (max - min) of
+    the smoothed hip height, so a bottom hold does not shrink it (both None under KNEE_PIVOT_MIN_FRAMES frames);
+    low: 2nd-lowest knee height above the wrist-ankle floor line."""
+    pts = [(f.ya, f.yh, f.yk, f.tor) for f in G if f.yk is not None]
+    if not pts:
+        return None
+    A = np.array(pts, dtype=float)
+    scale = max(float(np.median(A[:, 3])), _EPS)
+    o = float(np.median(A[:, 0]))
+    x, y = (o - A[:, 1]) / scale, (o - A[:, 2]) / scale
+    out = {"slope": None, "travel": None, "low": _kth_low([f.kf for f in G])}
+    if len(x) >= KNEE_PIVOT_MIN_FRAMES:
+        k = np.ones(3) / 3.0                     # 3-frame moving average: per-frame jitter would flatten the slope
+        xs, ys = np.convolve(x, k, mode="valid"), np.convolve(y, k, mode="valid")
+        out["travel"] = float(xs.max() - xs.min())
+        out["slope"] = float(np.cov(xs, ys)[0, 1] / max(float(np.var(xs, ddof=1)), _EPS))
+    return out
+
+
 def _knee_pivot(G: list[_SideFrame]) -> bool:
-    """True when the knee stays put while the hips move: a knee resting on the floor is the rep's pivot (knee
-    push-up), whatever the knee angle. In a plank the pivot is the toes and the knee rides on the ankle-hip line, so
-    its height follows the hip height at about its fraction of the leg (slope ~0.5; real clean reps 0.36-0.75, real
-    knee push-ups -0.83..-0.19). Slope = least-squares d(knee height) / d(hip height) over the judged good frames,
-    image vertical in torso lengths after a 3-frame moving average (knee and hip are at a similar camera distance,
-    so perspective scales both alike; the wrist-ankle floor line is not used because a raised foot tilts it).
-    Needs >= KNEE_PIVOT_MIN_FRAMES frames, a hip travel (p90 - p10) of at least KNEE_PIVOT_MIN_HIP torso lengths and
-    the knee near the floor (2nd-lowest height above the wrist-ankle line < KNEE_PIVOT_MAX_KF; without it, landmark
-    jitter on a short, shallow plank rep can flatten the slope); otherwise False."""
-    pts = [(f.hh, f.kh) for f in G if f.hh is not None and f.kh is not None]
-    if len(pts) < KNEE_PIVOT_MIN_FRAMES:
+    """True when the knee is planted on the floor (knee push-up), whatever the knee angle. Only a knee near the floor
+    line counts (2nd-lowest height above the wrist-ankle line < KNEE_PIVOT_MAX_KF; straight plank legs over raised
+    handles or seen from a low camera can sit near it too). Such a knee is cleared only by plank evidence: in a plank
+    the pivot is the toes and the knee rides on the ankle-hip line, so its height follows the hip height at about its
+    fraction of the leg (slope ~0.5; real clean reps 0.46-0.72 where the knee is near the line; real knee push-ups
+    -0.94..-0.73). Planted iff the slope is < KNEE_PIVOT_SLOPE, or it cannot be measured: fewer than
+    KNEE_PIVOT_MIN_FRAMES frames or hip travel < KNEE_PIVOT_MIN_HIP (stationary hips with the torso pivoting at the hip
+    give no plank evidence, so they do not pass; real clean reps travel >= 0.26)."""
+    ft = _knee_features(G)
+    if ft is None or ft["low"] is None or ft["low"] >= KNEE_PIVOT_MAX_KF:
         return False
-    k = np.ones(3) / 3.0                         # 3-frame moving average: per-frame jitter would flatten the slope
-    x = np.convolve([p[0] for p in pts], k, mode="valid")
-    y = np.convolve([p[1] for p in pts], k, mode="valid")
-    if float(np.percentile(x, 90) - np.percentile(x, 10)) < KNEE_PIVOT_MIN_HIP:
-        return False
-    low = _kth_low([f.kf for f in G])
-    if low is None or low >= KNEE_PIVOT_MAX_KF:
-        return False
-    slope = float(np.cov(x, y)[0, 1] / max(float(np.var(x, ddof=1)), _EPS))
-    return slope < KNEE_PIVOT_SLOPE
+    if ft["slope"] is None or ft["travel"] < KNEE_PIVOT_MIN_HIP:
+        return True
+    return ft["slope"] < KNEE_PIVOT_SLOPE
 
 
 def _prone(f: FrameObs) -> bool:

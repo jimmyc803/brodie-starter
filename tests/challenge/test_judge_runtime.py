@@ -8,10 +8,10 @@ import dataclasses
 import numpy as np
 import pytest
 
-from challenge.judge.gates import JUDGE_VERSION
+from challenge.judge.gates import DEFAULT_THRESHOLDS, JUDGE_VERSION, judge_rep
 from challenge.judge.metrics import FrameObs
 from challenge.judge.runtime import JudgeRuntime
-from challenge.judge.synth import synth_pushups
+from challenge.judge.synth import accumulate_clip, synth_pushups
 from facetime.perception import Config, Perception
 from facetime.pipeline import REP_PARAMS_V2, FramePipeline
 from rtcoach.pose import PrimaryTracker, count_persons, is_duplicate, select_primary
@@ -355,3 +355,30 @@ def test_challenge_window_set_before_first_frame_on_prewarmed_pipeline():
     assert len(reps) == 5
     assert [e['in_challenge'] for e in reps] == [105.5 <= e['t'] <= 108.5 for e in reps]
     assert any(e['in_challenge'] for e in reps) and not all(e['in_challenge'] for e in reps)
+
+
+# ---- translation invariance ----
+
+def _translated(clip, dx, dy):
+    out = dataclasses.replace(clip, frames=[dataclasses.replace(f, img=f.img.copy()) for f in clip.frames])
+    for f in out.frames:
+        f.img[:, 0] += dx
+        f.img[:, 1] += dy
+    return out
+
+
+@pytest.mark.parametrize('seed', range(3))
+@pytest.mark.parametrize('kw', [dict(hip_offset=0.05, depth=90.0), dict(depth=100.0), dict(hip_offset=-0.05)])
+def test_verdicts_invariant_to_body_placement_in_frame(kw, seed):
+    """Moving the whole body in the frame must not change any verdict, on the accumulator and the RepCounter2 path.
+    Shifts keep every landmark inside the frame (synth y spans ~0.39-0.94, so up to 0.3 up and 0.05 down); a landmark
+    leaving the frame legitimately changes the verdict (not_in_frame)."""
+    clip = synth_pushups(noise=0.02, seed=seed, **kw)
+    D = DEFAULT_THRESHOLDS
+    base_acc = [judge_rep(m, D) for m in accumulate_clip(clip, D)]
+    base_pipe = [(f['valid'], f['reject_reasons']) for _, _, f in run_pipeline(clip)[1]]
+    assert base_pipe
+    for dx, dy in ((0.0, -0.3), (0.0, -0.15), (0.0, 0.05), (-0.09, 0.0), (0.15, -0.2)):
+        moved = _translated(clip, dx, dy)
+        assert [judge_rep(m, D) for m in accumulate_clip(moved, D)] == base_acc, (dx, dy)
+        assert [(f['valid'], f['reject_reasons']) for _, _, f in run_pipeline(moved)[1]] == base_pipe, (dx, dy)

@@ -440,8 +440,14 @@ def test_knee_floor_margin_no_false_rejects_at_high_noise():
 
 
 def test_dispatcher_config_defaults_match_judge_defaults():
+    """Every key the dispatcher's fallback config sets equals the judge default, and every calibrated gate key is set
+    (a stale gate value there overrides the calibration). Keys it omits (liveness_*, task 12) fall back to
+    DEFAULT_THRESHOLDS through merged_thresholds."""
     from challenge.config import DEFAULTS
-    assert DEFAULTS["judge_thresholds"] == D
+    cfg = DEFAULTS["judge_thresholds"]
+    assert cfg == {k: D[k] for k in cfg}
+    assert set(GATE_KEYS) <= set(cfg)
+    assert merged_thresholds(cfg) == D
 
 
 CALIBRATION_SQL = Path(__file__).resolve().parents[2] / "db" / "migrations" / "20261020_challenge_judge_calibration.sql"
@@ -534,15 +540,18 @@ def test_allowed_pike_cannot_mask_sustained_sag(side):
     assert all(not v and r == ["hips_pike"] for v, r in vs), vs
 
 
-def _knees_on_floor_extended(knee_deg=161.7, **kw):
+def _knees_on_floor_extended(knee_deg=161.7, hip_scale=1.0, **kw):
     """Knee push-up (knee resting on the floor, the rep's pivot) with the foot raised so the knee angle reads
-    `knee_deg` in every frame: above the 150 deg knee_min_deg and the 160 deg bent-knee contact limit."""
+    `knee_deg` in every frame: above the 150 deg knee_min_deg and the 160 deg bent-knee contact limit. hip_scale
+    scales the hip's motion about its mean (0 = stationary hips: the torso pivots at the hip)."""
     noise, seed = kw.pop("noise", 0.0), kw.get("seed", 0)
     side = kw.get("side", "left")
     clip = synth_pushups(knees_down=True, **kw)
     h, k, a = (23, 25, 27) if side == "left" else (24, 26, 28)
     rng = np.random.default_rng(seed + 1000)
+    hm = np.mean([f.img[h, :2] for f in clip.frames], axis=0)
     for f in clip.frames:
+        f.img[h, :2] = hm + (f.img[h, :2] - hm) * hip_scale
         sc = np.array([f.aspect, 1.0])
         H, K, A = f.img[h, :2] * sc, f.img[k, :2] * sc, f.img[a, :2] * sc
         u = (K - H) / np.linalg.norm(K - H)             # thigh continued past the knee
@@ -572,5 +581,28 @@ def test_knees_resting_on_floor_with_extended_knee_angle_rejected(noise):
                 accepted += v
                 total += 1
                 assert v or "knees_down" in r
-    # 0 at sigma <= 0.01; at 0.02 jitter can hide the knee pivot in a 2 s rep: measured residual 6/60
-    assert accepted / total <= (0.0 if noise < 0.02 else 0.15), accepted
+    # 0 at sigma <= 0.01; at 0.02 jitter can hide the knee pivot in a 2 s rep: measured 0/60 here, 6/150 over 5 seeds
+    assert accepted / total <= (0.0 if noise < 0.02 else 0.10), accepted
+
+
+@pytest.mark.parametrize("noise", [0.0, 0.01, 0.02])
+@pytest.mark.parametrize("hip_scale", [0.0, 0.1, 0.3])
+def test_planted_knees_with_little_hip_motion_rejected(hip_scale, noise):
+    """Knees planted at 160.1 deg (just above the bent-knee contact limit) with stationary or barely moving hips
+    (hip travel 0 / ~0.03 / ~0.09 torso): too little hip motion to show plank co-movement is not evidence of a plank,
+    so a knee at the floor line still counts as contact."""
+    accepted = total = 0
+    for body, side in GRID:
+        for seed in range(2):
+            clip = _knees_on_floor_extended(knee_deg=160.1, hip_scale=hip_scale, body=body, side=side, seed=seed,
+                                            noise=noise)
+            ms = accumulate_clip(clip, D)
+            if noise == 0.0:
+                assert all(m.min_knee_deg > 160.0 for m in ms)
+            for m in ms:
+                v, r = judge_rep(m, D)
+                accepted += v
+                total += 1
+                assert v or "knees_down" in r
+    # 0 at sigma <= 0.01; at 0.02 measured 0 / 0 / 3 of 60 for hip_scale 0 / 0.1 / 0.3 (CALIBRATION.md residuals)
+    assert accepted / total <= (0.0 if noise < 0.02 else 0.10), accepted
