@@ -347,6 +347,7 @@ declare
   v_ws timestamptz := ch_calls_cfg_ts('window_start');
   v_we timestamptz := ch_calls_cfg_ts('window_end');
   v_frozen bool := coalesce((select value = 'true'::jsonb from competition_config where key = 'competition_frozen'), false);
+  v_fz_at timestamptz := ch_calls_cfg_ts('frozen_at');  -- freeze cutoff; reps are judged by timestamp, not commit time
   v_count_s int := ch_calls_cfg_int('call_count_s', 180);
   v_mult int := ch_calls_cfg_int('power_multiplier', 2);
   v_total int;
@@ -406,7 +407,7 @@ begin
     from raw r
   ), scored as (
     select tm.*,
-           case when v_frozen or (v_we is not null and tm.at_f >= v_we) then 'after_freeze'
+           case when (v_frozen and (v_fz_at is null or tm.at_f >= v_fz_at)) or (v_we is not null and tm.at_f >= v_we) then 'after_freeze'
                 when v_ws is not null and tm.at_f < v_ws then 'before_start'
                 when tm.at_f >= v_call.connected_at + make_interval(secs => v_count_s) then 'after_count'
                 when v_live = 'fail' then 'liveness_fail' end as extra,

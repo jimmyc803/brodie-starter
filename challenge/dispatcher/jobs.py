@@ -72,7 +72,10 @@ class Jobs:
             self._audience = (now, self.store.rpc("ch_jobs_audience", {"p_now": now}) or [])
         return self._audience[1]
 
-    def _send(self, user_id: str, template: str, ctx: dict, key: str) -> bool:
+    def _send(self, user_id: str, template: str, ctx: dict, key: str,
+              expires_at: datetime | None = None) -> bool:
+        if expires_at is not None:  # stale after this instant: the outbox suppresses instead of sending late
+            ctx = {**ctx, "expires_at": expires_at.isoformat()}
         try:
             r = self.outbox.enqueue(user_id=user_id, template=template, ctx=ctx, dedupe_key=key, proactive=True)
         except StoreError as e:
@@ -144,6 +147,9 @@ class Jobs:
         if not self._is_done("freeze"):
             self.store.rpc("ch_config_set", {"p_key": "competition_frozen", "p_value": Json(True),
                                              "p_actor": "system", "p_reason": "window_end reached"})
+            # scoring is timestamp-based: reps count iff ts < min(window_end, frozen_at)
+            self.store.rpc("ch_set_frozen_at", {"p_at": parse_ts(self.cfg.get("window_end")),
+                                                "p_actor": "system", "p_reason": "window_end reached"})
             self._mark_done("freeze", now)
             logger.warning("competition frozen at window_end")
         if self._is_done("final"):
@@ -172,7 +178,8 @@ class Jobs:
             if not self._quiet(now):
                 for u in self._users(now):
                     self._send(u["user_id"], template, {"power_hour": fmt_range(row["starts_at"], row["ends_at"])},
-                               f"{template}:{day}:{u['user_id']}")
+                               f"{template}:{day}:{u['user_id']}",
+                               expires_at=starts if template == "ph_warn" else parse_ts(row["ends_at"]))
             # exactly once either way: quiet hours skip the text, they do not defer it
             self.store.rpc("ch_power_hour_mark", {"p_date_et": day, "p_kind": kind, "p_now": now})
             done.append(template)
@@ -223,7 +230,7 @@ class Jobs:
             when = end.astimezone(ET).strftime("%I:%M %p").lstrip("0") + " ET"
             for u in self._users(now):
                 n += self._send(u["user_id"], "ending_soon", {"ends_at": f"tonight at {when}"},
-                                f"ending_soon:{u['user_id']}")
+                                f"ending_soon:{u['user_id']}", expires_at=end)
         self._mark_done(f"ending:{et_day(now)}", now)
         return n
 
@@ -283,11 +290,18 @@ class Jobs:
             if pos < 2 or quiet or not moved or not gap_ok:
                 continue
             lo = int(eta // 5 * 5)
-            if self._send(q["user_id"], "queue_update", {"position": pos, "eta": f"~{lo}–{lo + 5} min"},
-                          f"queue_update:{q['queue_id']}:{int(now.timestamp())}"):
-                sent += 1
-            self.store.rpc("ch_job_set", {"p_key": key, "p_now": now, "p_value": Json({
-                "queue_id": q["queue_id"], "position": pos, "eta_min": eta, "sent_at": now.isoformat()})})
+            ctx = {"position": pos, "eta": f"~{lo}–{lo + 5} min", "_proactive": True,
+                   "expires_at": (now + QUEUE_UPDATE_MIN_GAP).isoformat()}
+            state = {"queue_id": q["queue_id"], "position": pos, "eta_min": eta, "sent_at": now.isoformat()}
+            try:  # intent + baseline in one DB transaction, deduped per user and 10-minute bucket
+                r = self.store.rpc("ch_queue_update_notify", {
+                    "p_user_id": q["user_id"], "p_state_key": key, "p_state": Json(state), "p_ctx": ctx,
+                    "p_bucket_s": int(QUEUE_UPDATE_MIN_GAP.total_seconds()), "p_now": now})
+            except StoreError as e:
+                if "handle_required" not in str(e):
+                    raise
+                continue
+            sent += 0 if r.get("duplicate") else 1
         for key in set(states) - live:
             self.store.rpc("ch_job_delete", {"p_key": key})
         return sent

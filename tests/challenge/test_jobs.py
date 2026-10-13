@@ -434,3 +434,91 @@ def test_app_starts_jobs_loop_unless_disabled(db, monkeypatch):
     with TestClient(create_app(store, None, clock=lambda: D, flags=Flags(), token="t", jobs=off)):
         time.sleep(0.2)
     assert off.calls == 0
+
+
+# ---------------------------------------------------------------- fix round
+def test_call_spanning_window_end_commits_after_freeze(env):
+    conn, store, cfg, provider, jobs, clock = env
+    uid, h = mkuser(conn)
+    start = et(18, 23, 58)
+    assert store.rpc("ch_call_start", {"p_call_id": "span", "p_line_id": "line-1", "p_handle": h,
+                                       "p_mode": "chert_meta", "p_now": start})["decision"] == "accept"
+    jobs.run_due(et(19, 0, 0, 1))  # freeze happens while the call is still running
+    assert cfg.get("competition_frozen") is True
+    assert datetime.fromisoformat(cfg.get("frozen_at")) == et(18, 23, 59, 59)
+    reps = [rep(1, et(18, 23, 58, 30).isoformat()), rep(2, et(18, 23, 59, 58).isoformat()),
+            rep(3, et(19, 0, 0, 1).isoformat()), rep(4, et(19, 0, 1).isoformat())]
+    ev = commit_ev("span")
+    ev["payload"].update(reps=reps, started_at=start.isoformat(), ended_at=et(19, 0, 1, 10).isoformat())
+    r = store.rpc("ch_commit_reps", {"p_call_id": "span", "p_payload": ev["payload"], "p_now": et(19, 0, 1, 20)})
+    assert r["ok"] and r["valid_reps"] == 2 and r["points"] == 2
+    rows = conn.execute("select valid, reject_reasons from reps order by rep_number").fetchall()
+    assert [x[0] for x in rows] == [True, True, False, False]
+    assert all("after_freeze" in x[1] for x in rows[2:])
+
+
+def test_admin_freeze_stamps_cutoff(env):
+    conn, store, cfg, *_ = env
+    uid, h = mkuser(conn)
+    start = et(14, 12)
+    store.rpc("ch_call_start", {"p_call_id": "adm", "p_line_id": "line-1", "p_handle": h, "p_mode": "chert_meta", "p_now": start})
+    store.rpc("ch_config_set", {"p_key": "competition_frozen", "p_value": __import__("challenge.store", fromlist=["Json"]).Json(True),
+                                "p_actor": "admin@x", "p_reason": "freeze"})
+    cut = datetime.fromisoformat(cfg.get("frozen_at"))
+    assert abs((cut - datetime.now(cut.tzinfo)).total_seconds()) < 60  # stamped with now()
+    cut = start + timedelta(seconds=60)
+    store.rpc("ch_set_frozen_at", {"p_at": cut, "p_actor": "admin@x", "p_reason": "test cutoff"})
+    ev = commit_ev("adm")
+    ev["payload"]["reps"] = [rep(1, (cut - timedelta(seconds=5)).isoformat()), rep(2, (cut + timedelta(seconds=5)).isoformat())]
+    r = store.rpc("ch_commit_reps", {"p_call_id": "adm", "p_payload": ev["payload"], "p_now": start + timedelta(seconds=200)})
+    assert r["valid_reps"] == 1
+
+
+def test_power_hour_secret_required_in_competition_mode(db, monkeypatch):
+    store = PgStore(db)
+    monkeypatch.setenv("CHALLENGE_MODE", "competition")
+    for bad in (None, "", "short"):
+        if bad is None:
+            monkeypatch.delenv("POWER_HOUR_SECRET", raising=False)
+        else:
+            monkeypatch.setenv("POWER_HOUR_SECRET", bad)
+        with pytest.raises(RuntimeError, match="POWER_HOUR_SECRET"):
+            create_app(store, None, clock=lambda: D, flags=Flags(), token="t")
+    monkeypatch.setenv("POWER_HOUR_SECRET", "x" * 16)
+    create_app(store, None, clock=lambda: D, flags=Flags(), token="t")
+    monkeypatch.setenv("CHALLENGE_MODE", "demo")
+    monkeypatch.delenv("POWER_HOUR_SECRET")
+    create_app(store, None, clock=lambda: D, flags=Flags(), token="t")
+
+
+def test_expired_time_bound_texts_are_suppressed(env):
+    conn, store, cfg, provider, jobs, clock = env
+    uid, h = mkuser(conn)
+    t = et(13, 14, 45)
+    exp = lambda dt: dt.isoformat()  # noqa: E731
+    for key, tpl, expires in (("e1", "ph_warn", et(13, 15)), ("e2", "ph_start", et(13, 16)),
+                              ("e3", "ending_soon", et(13, 20)), ("e4", "queue_update", et(13, 14, 55))):
+        ctx = {"power_hour": "3:00–4:00 PM", "ends_at": "tonight", "position": 3, "eta": "~5–10 min",
+               "expires_at": exp(expires), "_proactive": True}
+        store.rpc("ch_outbox_enqueue", {"p_handle": None, "p_user_id": uid, "p_template": tpl, "p_body": None,
+                                        "p_media_url": None, "p_dedupe_key": key, "p_not_before": None, "p_now": t, "p_ctx": ctx})
+    jobs.outbox.clock = lambda: et(13, 15, 30)
+    jobs.outbox.run_once(et(13, 15, 30))
+    st = dict(conn.execute("select dedupe_key, status from messages order by dedupe_key").fetchall())
+    assert st == {"e1": "suppressed", "e2": "sent", "e3": "sent", "e4": "suppressed"}
+    assert conn.execute("select last_error from messages where dedupe_key='e1'").fetchone()[0] == "expired"
+
+
+def test_job_claim_and_queue_update_bucket_are_atomic(env):
+    conn, store, cfg, *_ = env
+    assert store.rpc("ch_job_claim", {"p_key": "k", "p_now": D, "p_gap_s": 1800}) is True
+    assert store.rpc("ch_job_claim", {"p_key": "k", "p_now": D + timedelta(minutes=29), "p_gap_s": 1800}) is False
+    assert store.rpc("ch_job_claim", {"p_key": "k", "p_now": D + timedelta(minutes=31), "p_gap_s": 1800}) is True
+    uid, h = mkuser(conn)
+    args = {"p_user_id": uid, "p_state_key": f"qpos:{uid}", "p_state": {"position": 3}, "p_ctx": {"position": 3, "eta": "x"},
+            "p_bucket_s": 600, "p_now": D}
+    assert store.rpc("ch_queue_update_notify", args)["duplicate"] is False
+    other = {**args, "p_state": {"position": 2}, "p_now": D + timedelta(seconds=30)}  # a second dispatcher, same bucket
+    assert store.rpc("ch_queue_update_notify", other)["duplicate"] is True
+    assert store.rpc("ch_job_get", {"p_key": f"qpos:{uid}"}) == {"position": 3}  # loser did not touch state
+    assert n_msgs(conn, "queue_update") == 1

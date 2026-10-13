@@ -12,7 +12,7 @@ from challenge.config import Config
 from challenge.messaging.providers import MessagingProvider
 from challenge.messaging.templates import PROACTIVE_TEMPLATES, render
 from challenge.store import Store
-from challenge.timeutil import next_quiet_end
+from challenge.timeutil import next_quiet_end, parse_ts
 
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,10 @@ class Outbox:
             self._mark(row, "failed", error="max_attempts")
             return 0
         ctx = row.get("ctx") or {}
+        expires = ctx.get("expires_at")
+        if expires and claim_at >= parse_ts(expires):  # time-bound text that went stale (e.g. held overnight)
+            self._mark(row, "suppressed", error="expired")
+            return 0
         proactive = ctx.get("_proactive", row["template"] in PROACTIVE_TEMPLATES)
         if proactive:
             user = self.store.rpc("ch_user_by_handle", {"p_handle": row["handle"]})

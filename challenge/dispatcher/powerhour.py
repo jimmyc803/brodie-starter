@@ -16,6 +16,18 @@ from challenge.timeutil import ET, UTC, et_day, parse_ts
 logger = logging.getLogger("challenge.jobs")
 
 
+MIN_SECRET_LEN = 16
+
+
+def require_secret() -> None:
+    """Startup guard: outside test/demo modes an empty or short salt would make power hours guessable."""
+    mode = os.environ.get("CHALLENGE_MODE", "").strip().lower()
+    if mode in ("", "demo", "test", "off"):
+        return
+    if len(os.environ.get("POWER_HOUR_SECRET", "")) < MIN_SECRET_LEN:
+        raise RuntimeError(f"POWER_HOUR_SECRET must be set (>= {MIN_SECRET_LEN} chars) when CHALLENGE_MODE={mode}")
+
+
 def _salt() -> str:
     return os.environ.get("POWER_HOUR_SECRET", "")
 

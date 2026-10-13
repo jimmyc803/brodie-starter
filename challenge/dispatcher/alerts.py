@@ -8,7 +8,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from challenge.store import Json, Store
+from challenge.store import Store
 from challenge.timeutil import parse_ts
 
 logger = logging.getLogger("challenge.alerts")
@@ -56,15 +56,19 @@ class Alerts:
         fired: list[str] = []
         for cond, detail in self.conditions(now).items():
             key = f"alert_last:{cond}"
-            last = self.store.rpc("ch_job_get", {"p_key": key})
-            if last and now - parse_ts(last["at"]) < DEDUPE:
+            # atomic per-condition claim in the DB: concurrent dispatchers cannot both alert
+            if not self.store.rpc("ch_job_claim", {"p_key": key, "p_now": now,
+                                                   "p_gap_s": int(DEDUPE.total_seconds())}):
                 continue
             logger.error("ALERT %s: %s", cond, detail)
             handles = self.cfg.get("team_alert_handles") or []
             stamp = int(now.timestamp())
-            for h in handles:
-                self.outbox.enqueue(handle=h, template="alert", ctx={"condition": cond, "detail": detail},
-                                    dedupe_key=f"alert:{cond}:{stamp}:{h}", proactive=False)
-            self.store.rpc("ch_job_set", {"p_key": key, "p_value": Json({"at": now.isoformat()}), "p_now": now})
+            try:
+                for h in handles:
+                    self.outbox.enqueue(handle=h, template="alert", ctx={"condition": cond, "detail": detail},
+                                        dedupe_key=f"alert:{cond}:{stamp // 600}:{h}", proactive=False)
+            except Exception:
+                self.store.rpc("ch_job_delete", {"p_key": key})  # release the claim so the next run retries
+                raise
             fired.append(cond)
         return fired

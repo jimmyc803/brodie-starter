@@ -24,6 +24,7 @@ from challenge.dispatcher import postcall
 from challenge.dispatcher.flags import Flags
 from challenge.dispatcher.postcall import Outbox, StoreOutbox
 from challenge.dispatcher.jobs import Jobs, run_loop
+from challenge.dispatcher.powerhour import require_secret
 from challenge.messaging.outbox import Outbox as SendOutbox
 from challenge.messaging.providers import provider_from_env
 from challenge.store import Json, Store, StoreError, store_from_env
@@ -63,6 +64,7 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
                clock: Callable[[], datetime] | None = None, flags: Flags | None = None,
                token: str | None = None, rate_per_min: int | None = None,
                jobs: Jobs | None = None) -> FastAPI:
+    require_secret()
     clock = clock or (lambda: datetime.now(timezone.utc))
     flags = flags or Flags.from_env()
     flags.log_startup()
