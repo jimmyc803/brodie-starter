@@ -6,7 +6,7 @@ re-judged later under new thresholds (scripts/rejudge.py). Reasons come back in 
     multiple_people, not_in_frame, knees_down, hips_sag, hips_pike, too_shallow, no_lockout, too_fast,
     not_horizontal, classifier:<label>
 
-Gate definitions (j3 lenient, docs/challenge/CALIBRATION.md "j3 lenient"; metrics in challenge/judge/metrics.py).
+Gate definitions (j4, docs/challenge/CALIBRATION.md "j3 lenient" and "j4"; metrics in challenge/judge/metrics.py).
 A gate is evaluated only when its metric is measurable (not None / NaN); an unmeasurable metric passes its gate, so
 feet, ankles or knees outside the frame (or the occluded far side) never reject a rep:
   multiple_people  persons_in_frame > 1.
@@ -18,6 +18,8 @@ feet, ankles or knees outside the frame (or the occluded far side) never reject 
                    (ankles out of frame: a low close camera put plank knees near the wrists' level in real footage).
   hips_sag         max_hip_line_dev_deg >  hip_line_max_dev_deg   (signed: + = hips below the shoulder-ankle line).
   hips_pike        max_hip_line_dev_deg < -hip_pike_max_dev_deg.
+                   Both hip gates are skipped when min_knee_deg < hip_knee_min_deg (j4): with clearly bent legs the
+                   shoulder-hip-ankle line is not a body line (and a knee push-up is knees_down's job, not the hips').
   too_shallow      neither depth signal reached its limit: the better side's min elbow (min of min_elbow_deg_l/_r)
                    > depth_elbow_max_deg AND shoulder_wrist_drop > depth_drop_max (either one suffices; a front or
                    diagonal view foreshortens the elbow angle but still shows the shoulder travel). A missing signal
@@ -39,18 +41,21 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from challenge.judge.metrics import RepMetrics
 
-JUDGE_VERSION = "j3"
+JUDGE_VERSION = "j4"
 # Judge families whose stored metrics the current gates can re-judge (scripts/rejudge.py). j2 metrics are a stricter
-# reading of the same quantities (frame_conf_frac over all six keypoints, knee_floor_contact incl. the pivot test), so
-# re-judging them under j3 never accepts more than j3 would have measured live.
-REJUDGE_FAMILIES = ("j2", "j3")
+# reading of the same quantities (frame_conf_frac over all six keypoints, knee_floor_contact incl. the pivot test), and
+# so are j3 metrics relative to j4 (image-only hip deviation, knee and lockout angles, which j4 relaxes with the
+# view-independent world landmarks), so re-judging them never accepts more than j4 would have measured live -- except
+# the j4 bent-leg hip skip, which a lower stored knee angle can trigger (intended: see "j4" in CALIBRATION.md).
+REJUDGE_FAMILIES = ("j2", "j3", "j4")
 DEFAULT_THRESHOLDS: dict[str, Any] = {
-    "min_conf": 0.4, "leg_min_conf": 0.7, "frame_conf_frac": 0.6, "knee_min_deg": 120, "knee_floor_margin": 0.1,
+    "min_conf": 0.4, "leg_min_conf": 0.7, "frame_conf_frac": 0.6, "knee_min_deg": 145, "knee_floor_margin": 0.1,
+    "hip_knee_min_deg": 120,
     "hip_line_max_dev_deg": 30, "hip_pike_max_dev_deg": 40, "depth_elbow_max_deg": 125, "depth_drop_max": 0.88,
-    "lockout_min_deg": 135, "incline_max_deg": 25, "decline_max_deg": 35, "min_rep_s": 0.45, "max_cadence_rpm": 100,
+    "lockout_min_deg": 130, "incline_max_deg": 25, "decline_max_deg": 65, "min_rep_s": 0.45, "max_cadence_rpm": 100,
     "classifier_veto": [], "classifier_veto_substrings": [],
     "liveness_enabled": False, "liveness_window_s": [45, 150], "liveness_timeout_s": 4,
-    "cue_min_gap_s": 4,
+    "cue_min_gap_s": 4, "cue_repeat_gap_s": 10,
     # liveness challenge (challenge/judge/liveness.py; distances in torso lengths, times in seconds); only used with
     # liveness_enabled
     "liveness_lift_h": 0.4, "liveness_floor_leave": 0.25, "liveness_quiet_s": 2.0, "liveness_min_react_s": 0.5,
@@ -97,7 +102,8 @@ def judge_rep(m: RepMetrics, thr: dict) -> tuple[bool, list[str]]:
         r.append("not_in_frame")
     if m.knee_floor_contact is True and not _missing(m.min_knee_deg) and m.min_knee_deg < t["knee_min_deg"]:
         r.append("knees_down")
-    if not _missing(m.max_hip_line_dev_deg):
+    legs_straight = _missing(m.min_knee_deg) or m.min_knee_deg >= t["hip_knee_min_deg"]
+    if not _missing(m.max_hip_line_dev_deg) and legs_straight:
         if m.max_hip_line_dev_deg > t["hip_line_max_dev_deg"]:
             r.append("hips_sag")
         elif m.max_hip_line_dev_deg < -t["hip_pike_max_dev_deg"]:

@@ -72,8 +72,11 @@ def test_knee_reps_counted_but_invalid():
     assert all(not v['valid'] and v['reject_reasons'][0] == 'knees_down' for _, _, v in reps)
     cues = [v['cue'] for _, _, v in reps]
     assert cues[0] == 'knees_down'
-    # rate limited: reps fire 2 s apart and cue_min_gap_s is 4 s -> every other rep gets the cue
-    assert cues == ['knees_down', None, 'knees_down', None, 'knees_down']
+    # rate limited (j4, no nagging): reps fire 2 s apart and the same cue repeats at most every cue_repeat_gap_s (10 s)
+    assert cues == ['knees_down', None, None, None, None]
+    pipe, reps = run_pipeline(clip, judge_thr=dict(KNEES_THR, cue_repeat_gap_s=4))
+    # cue_min_gap_s is 4 s -> every other rep gets the cue
+    assert [v['cue'] for _, _, v in reps] == ['knees_down', None, 'knees_down', None, 'knees_down']
 
 
 def test_two_people_counted_but_invalid_multiple_people():
@@ -180,10 +183,30 @@ def test_runtime_most_important_reason_wins_cue():
 
 def test_runtime_cue_gap_from_thresholds_and_bad_window():
     clip = synth_pushups(n_reps=4, lead_in_s=1.0, depth=SHALLOW)
-    v = _feed(JudgeRuntime({'cue_min_gap_s': 0}), clip)
+    v = _feed(JudgeRuntime({'cue_min_gap_s': 0, 'cue_repeat_gap_s': 0}), clip)
     assert [x.cue_key for x in v] == ['too_shallow'] * 4
+    v = _feed(JudgeRuntime({'cue_min_gap_s': 0}), clip)          # default cue_repeat_gap_s 10: said once
+    assert [x.cue_key for x in v] == ['too_shallow', None, None, None]
     with pytest.raises(ValueError):
         JudgeRuntime().set_challenge_window(3, 2)
+
+
+def test_runtime_cue_priority_depth_before_hips_and_lockout():
+    # the most useful correction is spoken, not the first reason in the C5 storage order
+    j = JudgeRuntime({'cue_min_gap_s': 0, 'cue_repeat_gap_s': 0})
+    assert j._cue(0.0, ['hips_sag', 'too_shallow', 'no_lockout']) == 'too_shallow'
+    assert j._cue(1.0, ['hips_pike', 'no_lockout']) == 'no_lockout'
+    assert j._cue(2.0, ['too_shallow', 'not_horizontal']) == 'too_shallow'
+    assert j._cue(3.0, ['not_horizontal']) == 'not_in_frame'
+    assert j._cue(4.0, ['knees_down', 'too_shallow']) == 'knees_down'
+    assert j._cue(5.0, ['too_fast']) is None
+    # a different fault is still cued inside the same-cue repeat gap; the same one is not
+    j = JudgeRuntime({'cue_min_gap_s': 4, 'cue_repeat_gap_s': 10})
+    assert [j._cue(t, r) for t, r in [(0, ['too_shallow']), (2, ['no_lockout']), (5, ['no_lockout']),
+                                      (9, ['too_shallow']), (11, ['too_shallow'])]] == \
+        ['too_shallow', None, 'no_lockout', None, 'too_shallow']
+    j.reset()
+    assert j._cue(12, ['no_lockout']) == 'no_lockout'
 
 
 def test_runtime_frame_without_pose_is_not_in_frame():

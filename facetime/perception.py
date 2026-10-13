@@ -272,8 +272,12 @@ class Perception:
         if cid != self._coach_id: self._coach_id = cid; self._last_count = 0; self._rc_t = {}; self._rc_last_i = None   # fresh Coach (new exercise, after a rest): counts restart
         rc = coach.rc if coach is not None else None
         if rc is not None and getattr(rc, 'i', None) is not None and rc.i != self._rc_last_i:   # the counter consumed this frame
+            prev = self._rc_last_i; t0 = self._rc_t.get(prev) if prev is not None else None
+            if t0 is not None and 1 < rc.i - prev <= 64:                  # the pipeline resampled a slow frame gap into
+                for k in range(prev + 1, rc.i):                             # several counter ticks: spread their times
+                    self._rc_t[k] = t0 + (self._t - t0) * (k - prev) / (rc.i - prev)
             self._rc_last_i = rc.i; self._rc_t[rc.i] = self._t
-            if len(self._rc_t) > 400: del self._rc_t[min(self._rc_t)]
+            while len(self._rc_t) > 400: del self._rc_t[min(self._rc_t)]
         c = r['count']
         if c < self._last_count: self._last_count = 0
         if c > self._last_count:

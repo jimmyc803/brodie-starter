@@ -15,8 +15,10 @@ JudgeRuntime per push-up Coach (judge option on) and drives it on the pipeline's
                                   after every start()/poll(), since a FREEZE attempt's deadline shrinks.
 
 Classifier labels for a rep = labels emitted in (previous fire, this fire]; the classifier can only veto (gates.py).
-Cue: the first reject reason in C5 priority order that has a spoken cue (challenge.judge.cues.cue_for_reason) - the most
-important reason wins - and at most one cue per thr['cue_min_gap_s'] seconds (a suppressed cue is None, not queued).
+Cue: the most useful reject reason that has a spoken cue (challenge.judge.cues.best_cue, CUE_PRIORITY: depth before hips
+and lockout, not_horizontal last), at most one cue per thr['cue_min_gap_s'] seconds and the same cue at most once per
+thr['cue_repeat_gap_s'] seconds, so a caller repeating one fault hears it once, not every other rep (j4, no nagging; a
+suppressed cue is None, not queued).
 """
 from __future__ import annotations
 
@@ -24,7 +26,7 @@ import dataclasses
 from dataclasses import dataclass, field
 from typing import Any
 
-from challenge.judge.cues import cue_for_reason
+from challenge.judge.cues import best_cue
 from challenge.judge.gates import JUDGE_VERSION, judge_rep, merged_thresholds
 from challenge.judge.metrics import FrameObs, RepMetricsAccumulator
 
@@ -56,6 +58,7 @@ class JudgeRuntime:
         self._labels: list[tuple[float, str]] = []
         self._last_fire: float | None = None
         self._last_cue_t: float | None = None
+        self._cue_t: dict[str, float] = {}         # cue key -> time it was last given (cue_repeat_gap_s)
 
     def reset(self) -> None:
         """Counting (re)starts (also when the tracked person is replaced, so no rep mixes two people): drop the buffered frames, labels, cadence history and cue rate limit (challenge windows stay)."""
@@ -63,6 +66,7 @@ class JudgeRuntime:
         self._labels = []
         self._last_fire = None
         self._last_cue_t = None
+        self._cue_t = {}
 
     def on_frame(self, f: FrameObs) -> None:
         self.acc.add_frame(f)
@@ -108,10 +112,14 @@ class JudgeRuntime:
         return v
 
     def _cue(self, t: float, reasons: list[str]) -> str | None:
-        key = next((k for k in (cue_for_reason(r) for r in reasons) if k), None)
+        key = best_cue(reasons)
         if key is None:
             return None
         if self._last_cue_t is not None and t - self._last_cue_t < float(self.thr["cue_min_gap_s"]):
             return None
+        last = self._cue_t.get(key)
+        if last is not None and t - last < float(self.thr["cue_repeat_gap_s"]):
+            return None
         self._last_cue_t = t
+        self._cue_t[key] = t
         return key

@@ -20,6 +20,16 @@ correction labels go to on_label, and every count increase calls on_rep; the res
 judge = {rep n: RepVerdict.event_fields()} for the reps counted on that frame (facetime.perception merges them into the rep
 events). judge=False: nothing of this runs and the result has no 'judge' key.
 
+Counter clock (2026-10-13, launch hardening): the rep counters, the Coach and the judge's evidence rules count FRAMES at
+fps (10). Live pose on the EC2 box runs at only ~4-8 fps during calls, so before this a 0.8 s minimum rep period became 2 s
+at 4 fps and a 3-frame smoothing window 0.75 s: fast push-ups (about 1 rep/s) were mostly not counted (synthetic 8 reps at
+0.9 s: 1 counted at 4 fps). With resample=True (default) every processed frame is preceded by the counter frames the
+fps clock missed since the previous processed frame, linearly interpolated between the two poses (causal: both are
+known now; nothing waits for a future frame), so the counter and the judge see a 10 fps sequence whatever the pose rate.
+Gaps over RESAMPLE_MAX_GAP_S (a stall) are not filled, a frame without a pose is held (the counter repeats its last
+signals, as it does for a missing pose), and nothing is interpolated across a person switch. Recorded replays that
+pass t_ms = i * 1000 / FPS have 100 ms gaps, so they are unchanged.
+
 INJECTION SEAM (judge_eval, tests): FramePipeline.process_landmarks(img, world, persons, t_ms, aspect) is everything after
 pose estimation; process(rgb) = to_short_side + Pose + process_landmarks. Build the pipeline with pose_variant=None to skip
 loading MediaPipe entirely (process() then raises); feeding recorded/synthetic landmarks through process_landmarks runs the
@@ -81,6 +91,7 @@ SHORT_SIDE = 288
 JUDGE_EXERCISES = ('pushups',)   # classifier classes the strict judge runs for
 JUDGE_LAG_S = 2.0                # judge pending tail (RepMetricsAccumulator max_lag_s)
 JUDGE_LAG_GAP_S = 10.0           # ... with a gap-gated counter (a held rep is confirmed up to gap_confirm rep periods later)
+RESAMPLE_MAX_GAP_S = 1.0         # counter clock: frame gaps up to this are filled with interpolated frames (module docstring)
 
 def judge_default():
     """The judge option's default: on for CHALLENGE_MODE=competition."""
@@ -131,9 +142,11 @@ class _TimedClassifier:
 
 class FramePipeline:
     def __init__(self, model_path, exercise=None, pose_variant='full', params=None, thresholds=None, rep_params=REP_PARAMS, fps=FPS, trigger='auto', gesture_next=False,
-                 judge=None, judge_thr=None, num_poses=None):
+                 judge=None, judge_thr=None, num_poses=None, resample=True):
         """judge: None = judge_default() (CHALLENGE_MODE=competition). judge_thr: judge thresholds over DEFAULT_THRESHOLDS.
-        num_poses: None = 2 with the judge on (people count), else 1. pose_variant=None: no pose model (landmark injection)."""
+        num_poses: None = 2 with the judge on (people count), else 1. pose_variant=None: no pose model (landmark injection).
+        resample: fill the counter's fps clock between slow frames with interpolated poses (module docstring, counter clock)."""
+        self.resample = bool(resample); self._prev = None; self._acc = 0.0; self.n_interp = 0
         self.judge_on = judge_default() if judge is None else bool(judge); self.judge_thr = judge_thr; self.judge = None
         self.num_poses = int(num_poses) if num_poses is not None else (2 if self.judge_on else 1)
         self._judged = 0; self.persons = 0; self.n_switch = 0; self._rc_t = {}
@@ -173,7 +186,7 @@ class FramePipeline:
                            rep_params=(self.rep_params if self.countable else None), thresholds=self.thresholds, trigger=None if curl else self.trigger)
         if not p.get('start_line', True):
             self.coach.last_say = 0.0            # the session script spoke instead; praise waits praise_after s as usual
-        self.judge = self._build_judge(ex); self._judged = 0
+        self.judge = self._build_judge(ex); self._judged = 0; self._prev = None; self._acc = 0.0
         return ex
 
     def _build_judge(self, ex):
@@ -229,6 +242,7 @@ class FramePipeline:
         ok = a is not None; self.last_landmarks = a                      # (33,5) normalised x,y,z,vis,pres or None (for --show overlays)
         if persons is None: persons = 1 if ok else 0
         self.persons = int(persons)
+        ticks = self._ticks(a, w, ok, ms, switched)                     # counter frames for this frame, the real one last
         if switched and self.judge is not None:
             rc0 = self.coach.rc if self.coach is not None else None
             if rc0 is not None and hasattr(rc0, 'restart'): rc0.restart()
@@ -243,9 +257,14 @@ class FramePipeline:
         if not v['visible']:
             pass                                                        # paused: no counting, no corrections, counter keeps its state
         elif self.coach is not None and not self.armed:                 # warm-up: counter only
-            if self.coach.rc is not None: self.coach.rc.update(a if ok else None, w, ok)
+            if self.coach.rc is not None: self._feed_counter(self.coach.rc, ticks)
         elif self.coach is not None:
-            t = time.perf_counter(); ev = self.coach.step(a, w, ok); step_ms = (time.perf_counter() - t) * 1000
+            t = time.perf_counter()
+            if self.coach.rc is not None:                               # the counter runs here on the fps clock; the Coach gets its result
+                ev = self.coach.step(a, w, ok, rep=self._feed_counter(self.coach.rc, ticks))
+            else:
+                ev = self.coach.step(a, w, ok)
+            step_ms = (time.perf_counter() - t) * 1000
         clf_ms = self.clf.last_ms if self.clf is not None else 0.0
         ex_probs = self.clf.last_ex_probs if (self.clf is not None and self.clf.ex_seq != seq0) else None
         rc = self.coach.rc if self.coach is not None else None
@@ -262,15 +281,59 @@ class FramePipeline:
             r['gesture_next'] = True                                   # the T-pose hold completed on this frame (--gesture-next)
         if self.judge is not None:
             r['persons'] = self.persons; r['judge_t'] = ms / 1000.0
-            r['judge'] = self._judge_step(a, w, ok, ms / 1000.0, aspect, ev, rc)
+            r['judge'] = self._judge_step(a, w, ok, ms / 1000.0, aspect, ev, rc, ticks)
         return r
 
-    def _judge_step(self, a, w, ok, t_s, aspect, ev, rc):
-        """Feed the judge this frame and its correction labels; verdicts for the reps counted on this frame: {n: event fields}."""
+    def _ticks(self, a, w, ok, ms, switched=False):
+        """[(t_ms, img, world, ok)]: the counter frames this processed frame stands for on the fps clock, the frame itself
+        last. Missed ticks since the previous frame are interpolated between the two poses (held as 'no pose' when either
+        frame has none). One entry when resample is off, on the first frame, after a person switch and across gaps
+        > RESAMPLE_MAX_GAP_S or non-increasing times. A fractional remainder carries over, so 4 fps feeds 2-3 ticks a frame
+        and 10 ticks a second on average."""
+        prev = self._prev
+        self._prev = (float(ms), a if ok else None, w if ok else None)
+        gap = (float(ms) - prev[0]) / 1000.0 if prev is not None else 0.0
+        if not self.resample or prev is None or switched or not 0.0 < gap <= RESAMPLE_MAX_GAP_S:
+            self._acc = 0.0
+            return [(float(ms), a, w, ok)]
+        self._acc += gap * self.fps
+        n = max(1, int(np.floor(self._acc + 0.5)))
+        self._acc = max(self._acc - n, -0.5)              # frames faster than fps: one tick each, no debt piles up
+        out = []
+        for k in range(1, n):
+            f = k / n; tk = prev[0] + (float(ms) - prev[0]) * f
+            if ok and prev[1] is not None:
+                wk = (prev[2] + (w - prev[2]) * f) if (w is not None and prev[2] is not None) else (w if f >= 0.5 else prev[2])
+                out.append((tk, (prev[1] + (a - prev[1]) * f).astype(np.float32),
+                            None if wk is None else np.asarray(wk, np.float32), True))
+            else:
+                out.append((tk, None, None, False))
+        self.n_interp += len(out)
+        out.append((float(ms), a, w, ok))
+        return out
+
+    def _feed_counter(self, rc, ticks):
+        """Run the counter over this frame's ticks; returns the count completed on the last tick that completed one (0 =
+        none), the Coach's `rep` argument. Each tick's time goes to the counter-frame -> judge-clock map (_rc_t)."""
+        c = 0
+        for tk, img, world, ok in ticks:
+            got = rc.update(img if ok else None, world, ok)
+            if got: c = got
+            ri = getattr(rc, 'i', None)
+            if ri is not None and self.judge is not None:
+                self._rc_t[ri] = tk / 1000.0
+                if len(self._rc_t) > 600: del self._rc_t[min(self._rc_t)]
+        return c
+
+    def _judge_step(self, a, w, ok, t_s, aspect, ev, rc, ticks=()):
+        """Feed the judge this frame (after its interpolated ticks: the evidence rules count frames at fps) and its
+        correction labels; verdicts for the reps counted on this frame: {n: event fields}."""
         from challenge.judge.metrics import FrameObs
         j = self.judge
-        j.on_frame(FrameObs(t=t_s, img=(a if ok else None), world=(w if ok else None), persons=self.persons,
-                            **({'aspect': float(aspect)} if aspect else {})))
+        asp = {'aspect': float(aspect)} if aspect else {}
+        for tk, img, world, tok in list(ticks)[:-1]:
+            if tok: j.on_frame(FrameObs(t=tk / 1000.0, img=img, world=world, persons=self.persons, **asp))
+        j.on_frame(FrameObs(t=t_s, img=(a if ok else None), world=(w if ok else None), persons=self.persons, **asp))
         for e in ev:
             if e.get('intent') == 'correction' and e.get('why'): j.on_label(t_s, e['why'])
         out = {}

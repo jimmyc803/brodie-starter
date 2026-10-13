@@ -24,12 +24,14 @@ DEFAULTS: dict[str, Any] = {
     "recap_hour": 10,
     "streak_risk_hour": 20,
     "avatar_level_thresholds": [0, 25, 60, 120, 200, 300, 450, 650, 900, 1200],
-    "judge_thresholds": {   # j3 lenient (challenge/judge/gates.py DEFAULT_THRESHOLDS, docs/challenge/CALIBRATION.md)
-        "min_conf": 0.4, "leg_min_conf": 0.7, "frame_conf_frac": 0.6, "knee_min_deg": 120, "knee_floor_margin": 0.1,
+    "judge_thresholds": {   # j4 (challenge/judge/gates.py DEFAULT_THRESHOLDS, docs/challenge/CALIBRATION.md)
+        "min_conf": 0.4, "leg_min_conf": 0.7, "frame_conf_frac": 0.6, "knee_min_deg": 145, "knee_floor_margin": 0.1,
+        "hip_knee_min_deg": 120,
         "hip_line_max_dev_deg": 30, "hip_pike_max_dev_deg": 40, "depth_elbow_max_deg": 125, "depth_drop_max": 0.88,
-        "lockout_min_deg": 135, "incline_max_deg": 25, "decline_max_deg": 35, "min_rep_s": 0.45, "max_cadence_rpm": 100,
+        "lockout_min_deg": 130, "incline_max_deg": 25, "decline_max_deg": 65, "min_rep_s": 0.45, "max_cadence_rpm": 100,
         "classifier_veto": [], "classifier_veto_substrings": [],
         "liveness_enabled": False, "liveness_window_s": [45, 150], "liveness_timeout_s": 4, "cue_min_gap_s": 4,
+        "cue_repeat_gap_s": 10,
     },
     "registration_open": True,
     "competition_frozen": False,

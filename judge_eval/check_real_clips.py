@@ -8,7 +8,7 @@ Each clip goes through judge_eval.run.run_video_clip (decode, pose,
 RepCounter2, judge: the live code path). Slow (about 2 min for ~5k frames), so it is one module-scoped run.
 
 Pinned values are what j3 (lenient, CALIBRATION.md "j3 lenient") achieves: clean 29/30 = 93.3% accepted, worst clean
-count error 1, off-angle 31 reps accepted, so a regression fails. j3 deliberately accepts moderate inclines / declines
+count error 1, off-angle 31 reps accepted (36 since j4), so a regression fails. j3 deliberately accepts moderate inclines / declines
 (owner decision), so not_horizontal is no longer a never-accept category; its acceptance is pinned to an upper bound
 instead, so it cannot silently grow.
 """
@@ -65,8 +65,9 @@ def test_not_horizontal_bounded(results):
 CLEAN_ACCEPT_ACHIEVED = 0.93
 CLEAN_COUNT_ERR_ACHIEVED = 1
 # Off-angle reps accepted: j2 3 (support line read -25..-43 deg from the camera angle), j3 31 of 44 expected (world
-# wrist-ankle support line, per-signal keypoints). Pinned so the angle robustness cannot regress.
-OFF_ANGLE_ACCEPTED_ACHIEVED = 31
+# wrist-ankle support line, per-signal keypoints), j4 36 (world-landmark hip line / knee / lockout, CALIBRATION.md
+# "j4"). Pinned so the angle robustness cannot regress.
+OFF_ANGLE_ACCEPTED_ACHIEVED = 36
 
 
 def test_clean_acceptance_and_count_error(results):

@@ -224,3 +224,74 @@ DB config (competition_config.judge_thresholds). The live row was set by hand to
 `db/migrations/20261022_challenge_judge_j3.sql` (not yet applied) aligns it with the code defaults: it adds
 leg_min_conf 0.7 and liveness_enabled false, changes depth to 125 / 0.88 (from 120 / 0.92), and changes
 knee_floor_margin to 0.1 (from -1, which turns knees_down off completely).
+
+## j4 launch leniency (owner decision, 2026-10-13)
+
+The owner asked for this before the public launch: good reps must count, the camera angle should matter less (most
+callers will not prop the phone near the floor), and obvious non-push-ups (knee push-ups, tiny half reps, standing or
+jiggling) must still be rejected. JUDGE_VERSION is now "j4". `REJUDGE_FAMILIES` is j2, j3 and j4. j3 metrics are a
+stricter reading than j4 metrics, so a rejudge never accepts more than j4 would have measured live. The one exception
+is the bent-leg hip skip below.
+
+Counting at the live frame rate (facetime/pipeline.py). Live EC2 processes 4-8 fps, but RepCounter2 indexes frames on a
+fixed 10 fps clock (smoothing, 0.8 s minimum period, plateaus). At 4 fps a 0.9 s rep looked like 0.36 s, and a synthetic
+set of 8 counted 1. FramePipeline now resamples the landmark stream onto the 10 fps counter clock. A gap of up to 1 s
+between frames is filled with linearly interpolated landmarks (a fractional accumulator keeps the tick rate exact).
+Longer gaps, an exercise switch, and `resample=False` feed only the real frame. The judge sees the same interpolated
+ticks. Perception spreads the service time over the invented counter indices, so `turning_t` and `lag_s` stay set.
+
+Gates and metrics (challenge/judge/gates.py, metrics.py):
+- World landmarks are used for the hip line, knee and lockout. MediaPipe world landmarks are metric and 3-D, so their
+  angles do not depend on the view. Hip deviation is the image and world readings combined: the smaller magnitude when
+  they agree in sign, and 0 when they disagree (a bend that only the image shows is perspective). The knee uses the
+  world angle when it is straighter than the image angle by more than 15 deg (a foreshortened leg), and the image angle
+  otherwise. top_elbow_deg is the larger of the image and world 2nd-highest values (a foreshortened forearm).
+- `hip_knee_min_deg` 120 is new. The hip sag/pike gates are skipped when min_knee_deg < 120: with clearly bent legs the
+  shoulder-hip-ankle line is not a body line. A knee push-up is still caught by knees_down, which needs floor contact
+  and a bent knee.
+- `knee_min_deg` 145 (was 120) catches more flat-shin knee push-ups (synthetic ~141 deg: 4/6 still accepted at
+  default thresholds, 0/6 with 150). It is safe now because a foreshortened straight leg reads straight in the world.
+- `lockout_min_deg` 130 (was 135). `decline_max_deg` 65 (was 35): the image support line tilts with a raised camera.
+- Cues (challenge/judge/cues.py `CUE_PRIORITY`, runtime.py). The spoken reason is the most useful correction, not the C5
+  storage order: multiple_people, not_in_frame, knees_down, too_shallow ("Lower!"), no_lockout, hips, then
+  not_horizontal last. `cue_repeat_gap_s` 10 (new) means the same cue is spoken at most once per 10 s, on top of
+  `cue_min_gap_s` 4 between any two cues. A caller repeating one fault hears it once instead of every other rep.
+
+Owner calls, read-only rejudge of the stored metrics (liveness_fail dropped, j3 then j4): owner call 14aa 26 then 27
+out of 34; 0dee 16 then 17 out of 31; d8ef 2 then 2 out of 6; 46ac 4 then 4 out of 6. On 14aa the newly accepted rep is
+rep 8 (hips -97 with knee 81 mid-set, a bent-leg reading). The 7 still rejected are correct: rep 1 is setup, reps 2, 3
+and 27 are junk frames, rep 33 is shallow (elbow 128, drop 0.96), and rep 34 has top 125 and is not horizontal. Rep 32
+(torso_ok false under the stricter j2 torso test) is probably valid, but a rejudge cannot change torso_ok. On 0dee the
+newly accepted rep is rep 22 (top 133). Reps 18 and 19 (pike -50/-45 with straight knees) may be view-inflated, but only
+live j4 metrics (world agreement) can tell. The rest are setup, end-of-set junk or double fires. Live j4 metrics are
+at least as lenient as these rejudge numbers, which use the stricter stored metrics.
+
+Real clips (cached landmarks replayed through FramePipeline.process_landmarks; j3, then j4 with resampling):
+
+| | j3 @10 | j4 @10 | j3 @6 | j4 @6 | j3 @4 | j4 @4 |
+|---|---|---|---|---|---|---|
+| clean accepted | 29/30 | 29/30 | 29/29 | 29/30 | 28/28 | 29/29 |
+| off_angle accepted (44 expected) | 31 | 36 | 28 | 34 | 21 | 34 |
+| partial_frame accepted | 6/7 | 7/7 | 9/9 | 9/9 | 10/10 | 11/11 |
+| bad_light accepted | 8/10 | 8/10 | 8/9 | 7/8 | 8/9 | 8/8 |
+| knees accepted | 0 | 0 | 0 | 0 | 1 | 0 |
+| two_people accepted | 0 | 0 | 0 | 1 | 1 | 0 |
+| not_horizontal accepted | 8/12 | 8/12 | 9/13 | 10/13 | 10/12 | 12/13 |
+
+`judge_eval/check_real_clips.py` (10 fps, the full decode path) passes, and it now pins off_angle at 36 or more.
+
+Synthetic camera sweep (`synth_pushups(camera=(yaw, pitch))`, 6 reps at 10 and 4 fps). Clean reps are now accepted 6/6
+for every yaw from 0 to 90 (side to head-on) and every pitch from 0 to 50. Under j3, clean reps were rejected as
+not_horizontal at yaw >= 45 with pitch 50, and at yaw >= 75 with pitch 35. Half reps at 140 deg are still rejected from
+the side and from raised side or diagonal cameras (tests/challenge/test_judge_j4.py).
+
+Residuals:
+- A raised oblique camera (pitch >= 35 at yaw 45-90) foreshortens the image elbow, so 140-deg half reps can pass.
+- A raised camera behind the feet (negative yaw, pitch >= 20) counts nothing. The world torso then looks upright to
+  RepCounter2's prone gate, and loosening that gate would let standing callers count.
+- On px_6980138 (burpees with an undetected second person), one rep is accepted at 6 fps.
+- not_horizontal acceptance grows at low fps (12/13 at 4 fps). The pin of 8 or fewer is at 10 fps.
+
+DB config: migration `db/migrations/20261023_challenge_judge_j4.sql` (not yet applied) sets knee_min_deg 145,
+hip_knee_min_deg 120, lockout_min_deg 130 and decline_max_deg 65, along with the unchanged gate values.
+cue_repeat_gap_s comes from the code default.

@@ -22,6 +22,10 @@ maps a liveness cue key to the motion that answers it.
 
 pauses = [(t0, dur)]: the rep phase stops at real time t0 for dur seconds (the body holds whatever pose it is in, as
 when a person freezes mid-rep); the clip grows by the paused time and fire times shift accordingly.
+camera = (yaw_deg, pitch_deg) (launch hardening, 2026-10-13): instead of the level orthographic side view, a perspective
+phone camera 2.5 m from the body centre; yaw turns the body about the vertical (+ head toward the camera, 90 = front view),
+pitch looks down from above (a phone propped on a chair or held high). World landmarks are then in the camera's
+orientation (as MediaPipe's are), so a pitched camera tilts them too. None (default) = the original side view.
 camera_shifts = [(t0, dur, dx, dy)]: the whole image moves by (dx, dy) (fractions of the frame HEIGHT, y down) with a
 raised-cosine ramp in and out (as when the phone, or a filmed laptop screen, is moved), applied after projection.
 """
@@ -44,6 +48,10 @@ WRIST_Z = 0.04        # wrist joint height above the floor
 ANKLE_Z = 0.10        # ankle joint height on the toes
 KNEE_FLOOR_Z = 0.05   # knee joint height when kneeling
 HIP_MIN_Z = 0.11      # hip joint height when the pelvis rests on the floor (sag is limited by it)
+CAM_DIST_M = 2.5      # camera option: distance from the body centre (m)
+CAM_Z0 = 0.25         # camera option: height of the body centre above the floor (m)
+CAM_FILL = 0.8        # camera option: the body's extent fills at most this much of the frame
+_EPS_SYN = 1e-9
 FLOOR_Y = 0.88        # floor line in normalised image y
 TAP_OFFSET = np.array([-0.04, 0.07])    # wrist relative to the shoulder when the hand rests on it (m)
 LIFT_OFFSET = np.array([0.30, 0.30])    # wrist relative to its floor position at the top of a lift (m)
@@ -82,6 +90,23 @@ class SynthClip:
     frames: list[FrameObs]
     fire_times: list[float]
     meta: dict = field(default_factory=dict)
+
+
+def _camera_point(x0: float, z_up: float, lateral: float, dirn: float, camera: tuple[float, float],
+                  scale: float) -> np.ndarray:
+    """Perspective view of one body point (camera option): (u, v) image offsets in height units from the image centre
+    and (x, y, z) camera-aligned metres (MediaPipe world orientation, y down). The level side view is rotated by yaw
+    about the vertical (+ turns the head toward the camera; 90 = straight front view) and seen by a camera CAM_DIST_M
+    away, pitched down by pitch (a phone propped higher up, looking down). The focal length keeps the body's scale at
+    the body centre; synth_pushups then centres the body in the frame."""
+    yaw, pitch = math.radians(float(camera[0])), math.radians(float(camera[1]))
+    a = dirn * yaw
+    x, y, z = x0, -(z_up - CAM_Z0), lateral
+    x, z = x * math.cos(a) + z * math.sin(a), -x * math.sin(a) + z * math.cos(a)
+    yc = y * math.cos(pitch) - z * math.sin(pitch)
+    zc = y * math.sin(pitch) + z * math.cos(pitch) + CAM_DIST_M
+    f = scale * CAM_DIST_M
+    return np.array([f * x / zc, f * yc / zc, x, yc, zc - CAM_DIST_M])
 
 
 def _circle_x(c0: np.ndarray, r0: float, c1: np.ndarray, r1: float) -> tuple[np.ndarray, np.ndarray]:
@@ -145,15 +170,20 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
                   occlude_lower_body: bool = False, occlude_arms: bool = False, side: str = "left", body: str = "average", fps: float = 10.0,
                   lead_in_s: float = 1.0, tail_s: float = 0.5, aspect: float = 16 / 9, seed: int = 0,
                   bottom_hold_s: float = 0.0, hand_motions: list | tuple = (), far_vis: float = 0.45,
-                  pauses: list | tuple = (), camera_shifts: list | tuple = ()) -> SynthClip:
+                  pauses: list | tuple = (), camera_shifts: list | tuple = (),
+                  camera: tuple[float, float] | None = None) -> SynthClip:
     """Side-view plank push-up clip at `fps`. depth / lockout = elbow angle (deg) at the bottom / top of every rep.
     fire_times = the end of each rep cycle (back at the top), when a rep counter would fire. n_reps=0 = a plank hold.
     hand_motions / far_vis / pauses / camera_shifts: see the module docstring. occlude_lower_body / occlude_arms: knees,
-    ankles and feet / both shoulders, elbows and wrists at visibility 0.08 in every frame."""
+    ankles and feet / both shoulders, elbows and wrists at visibility 0.08 in every frame.
+    camera = (yaw_deg, pitch_deg): a perspective phone camera instead of the level side view (module docstring)."""
     if not 0.0 <= bottom_hold_s < rep_s:
         raise ValueError("bottom_hold_s must be in [0, rep_s)")
     if side not in ("left", "right"):
         raise ValueError(f"side must be 'left' or 'right', got {side!r}")
+    if camera is not None and (len(camera) != 2 or not -90.0 <= float(camera[0]) <= 90.0
+                               or not 0.0 <= float(camera[1]) < 80.0):
+        raise ValueError(f"camera must be (yaw_deg in [-90, 90], pitch_deg in [0, 80)), got {camera!r}")
     for m in hand_motions:
         if len(m) != 4 or m[0] not in ("tap", "lift") or m[1] not in ("left", "right") or float(m[3]) <= 0:
             raise ValueError(f"hand motion must be (tap|lift, left|right, t0, dur>0), got {m!r}")
@@ -205,6 +235,15 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
     ref = poses if not pz else [(0.0, _pose(B, theta_at(i / fps), knees_down, hip_offset, wrist)) for i in range(n_ref)]
     xs = [p[k][0] for _, p in ref for k in p]
     xmid = (min(xs) + max(xs)) / 2
+    cam_c, cam_k = (0.0, 0.0), 1.0
+    if camera is not None:
+        # frame the body like the side view does: centred on the moving body's extent, shrunk to fit when the near end
+        # of a foreshortened body would leave the image
+        uv = np.array([_camera_point(dirn * (p[k][0] - xmid), p[k][1], lat, dirn, camera, s)[:2]
+                       for _, p in ref for k in p for lat in (-0.18, 0.18)])
+        lo, hi = uv.min(axis=0), uv.max(axis=0)
+        cam_c = tuple((lo + hi) / 2)
+        cam_k = min(1.0, CAM_FILL / max(float(hi[1] - lo[1]), _EPS_SYN), CAM_FILL * aspect / max(float(hi[0] - lo[0]), _EPS_SYN))
     frames: list[FrameObs] = []
     for t, p in poses:
         img = np.zeros((33, 5))
@@ -225,10 +264,16 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
         far_p, far_k = hands["right" if side == "left" else "left"]
 
         def put(idx: int, X: np.ndarray, vis: float, lateral: float) -> None:
-            img[idx, 0] = (aspect / 2 + dirn * (X[0] - xmid) * s) / aspect
-            img[idx, 1] = FLOOR_Y - X[1] * s
             img[idx, 3] = vis
             img[idx, 4] = 0.99
+            if camera is not None:
+                c = _camera_point(dirn * (X[0] - xmid), X[1], lateral, dirn, camera, s)
+                img[idx, 0] = 0.5 + (c[0] - cam_c[0]) * cam_k / aspect
+                img[idx, 1] = 0.5 + (c[1] - cam_c[1]) * cam_k
+                world[idx] = c[2:]
+                return
+            img[idx, 0] = (aspect / 2 + dirn * (X[0] - xmid) * s) / aspect
+            img[idx, 1] = FLOOR_Y - X[1] * s
             world[idx] = (dirn * X[0], -X[1], lateral)
 
         for k, idx in zip(order, near_i):
@@ -267,7 +312,8 @@ def synth_pushups(*, depth: float = 75.0, lockout: float = 176.0, knees_down: bo
                 noise=noise, bottom_hold_s=bottom_hold_s, extra_person=extra_person,
                 occlude_lower_body=occlude_lower_body, occlude_arms=occlude_arms, side=side, body=body,
                 fps=fps, seed=seed, hand_motions=[tuple(m) for m in hand_motions], far_vis=far_vis,
-                pauses=pz, camera_shifts=[tuple(c) for c in camera_shifts])
+                pauses=pz, camera_shifts=[tuple(c) for c in camera_shifts],
+                camera=None if camera is None else (float(camera[0]), float(camera[1])))
     return SynthClip(frames=frames, fire_times=fires, meta=meta)
 
 

@@ -1,6 +1,7 @@
 """Strict judge core: metrics accumulation, deterministic gates, synthetic cheat coverage (CONTRACTS C5, SPEC §6)."""
 import copy
 import dataclasses
+import functools
 import json
 import re
 from pathlib import Path
@@ -60,11 +61,13 @@ def _metrics(**over):
 # ---------------------------------------------------------------- clean acceptance
 
 def test_contract_constants():
-    # j3 lenient defaults (docs/challenge/CALIBRATION.md "j3 lenient"), equal to the owner's live competition_config
-    assert JUDGE_VERSION == "j3"
-    assert D["knee_min_deg"] == 120 and D["depth_elbow_max_deg"] == 125 and D["lockout_min_deg"] == 135
+    # j4 defaults (docs/challenge/CALIBRATION.md "j4"), equal to the owner's live competition_config after migration
+    # 20261023_challenge_judge_j4.sql
+    assert JUDGE_VERSION == "j4"
+    assert D["knee_min_deg"] == 145 and D["depth_elbow_max_deg"] == 125 and D["lockout_min_deg"] == 130
     assert D["hip_line_max_dev_deg"] == 30 and D["hip_pike_max_dev_deg"] == 40 and D["depth_drop_max"] == 0.88
-    assert D["incline_max_deg"] == 25 and D["decline_max_deg"] == 35 and D["knee_floor_margin"] == 0.1
+    assert D["incline_max_deg"] == 25 and D["decline_max_deg"] == 65 and D["knee_floor_margin"] == 0.1
+    assert D["hip_knee_min_deg"] == 120
     assert "depth_margin" not in D and D["liveness_enabled"] is False
     assert D["classifier_veto_substrings"] == [] and D["classifier_veto"] == []
 
@@ -372,16 +375,35 @@ def _mid_rep_frames(clip, n):
     return list(range(i0, i0 + n))
 
 
+def _in_world(fault):
+    """A real body fault shows in MediaPipe's world landmarks as well as in the image (j4 judges hips, knees and lockout
+    with both): apply an image-space fault, then move the edited joints' world xy by the same amount. Without a
+    camera the synthetic world xy is the image xy scaled by 1/s (x times the aspect), so the edit stays consistent."""
+    @functools.wraps(fault)
+    def wrapped(f, side="left", *a, **kw):
+        sh, an = (11, 27) if side == "left" else (12, 28)
+        asp = np.array([f.aspect, 1.0])
+        s = float(np.linalg.norm((f.img[sh, :2] - f.img[an, :2]) * asp) / np.linalg.norm(f.world[sh, :2] - f.world[an, :2]))
+        before = f.img[:, :2].astype(float).copy()
+        out = fault(f, side, *a, **kw)
+        f.world[:, :2] += ((f.img[:, :2] - before) * asp / s).astype(f.world.dtype)
+        return out
+    return wrapped
+
+
+@_in_world
 def _bend_knee(f, side="left"):
     k = 25 if side == "left" else 26
     f.img[k, 1] -= 0.10                               # knee lifted 0.1 frame heights: ~130 deg knee
 
 
+@_in_world
 def _drop_hip(f, side="left"):
     h = 23 if side == "left" else 24
     f.img[h, 1] += 0.09                               # hip pushed toward the floor: ~20 deg sag
 
 
+@_in_world
 def _knee_to_floor(f, side="left"):
     h, k, w, a = (23, 25, 15, 27) if side == "left" else (24, 26, 16, 28)
     u = (f.img[h, 0] - f.img[a, 0]) / (f.img[w, 0] - f.img[a, 0])
@@ -478,7 +500,7 @@ def test_dispatcher_config_defaults_match_judge_defaults():
     assert merged_thresholds(cfg) == D
 
 
-CALIBRATION_SQL = Path(__file__).resolve().parents[2] / "db" / "migrations" / "20261022_challenge_judge_j3.sql"
+CALIBRATION_SQL = Path(__file__).resolve().parents[2] / "db" / "migrations" / "20261023_challenge_judge_j4.sql"
 GATE_KEYS = [k for k, v in D.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
              and not k.startswith(("liveness_", "cue_"))]
 
@@ -491,7 +513,7 @@ def test_calibration_migration_sets_every_gate_value_explicitly():
 
 
 def test_migrated_competition_config_judges_with_calibrated_thresholds(conn):
-    # the seeded judge_thresholds row overrides DEFAULT_THRESHOLDS, so the j3 migration must set every gate value
+    # the seeded judge_thresholds row overrides DEFAULT_THRESHOLDS, so the j4 migration must set every gate value
     for _ in range(2):                                # applied once by the harness; re-running must be a no-op
         v = conn.execute("select value from competition_config where key = 'judge_thresholds'").fetchone()[0]
         assert "depth_margin" not in v and {k: v.get(k) for k in GATE_KEYS} == {k: D[k] for k in GATE_KEYS}
@@ -506,9 +528,13 @@ def _hips_settling(clip, side, t0, t_from=0.0):
     """Hips 0.12 frame heights high (about -27 deg pike) from t_from until 0.6 s into the descent that starts at t0,
     then coming down linearly onto the plank line by t0 + 0.8 s (bottom at t0 + 1.0)."""
     h = 23 if side == "left" else 24
+
+    @_in_world
+    def lift(f, side):
+        f.img[h, 1] -= 0.12 * min(1.0, (t0 + 0.8 - f.t) / 0.2)
     for f in clip.frames:
         if t_from <= f.t < t0 + 0.8:
-            f.img[h, 1] -= 0.12 * min(1.0, (t0 + 0.8 - f.t) / 0.2)
+            lift(f, side)
 
 
 @pytest.mark.parametrize("side", SIDES)
@@ -526,6 +552,7 @@ def test_first_rep_walk_in_pike_ignored_later_pike_kept(side):
     assert verdicts(clip)[0][1][0] == "hips_pike"
 
 
+@_in_world
 def _set_hip_dev(f, side, target):
     """Move the visible-side hip vertically until hip_line_dev_deg reads `target` (deg, + sag / - pike); the knee
     stays on the (straight) ankle-hip line at its original fraction."""

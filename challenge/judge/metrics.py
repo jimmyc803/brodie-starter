@@ -3,7 +3,9 @@
 Input: FrameObs per frame. `img` is the MediaPipe (33,5) image-landmark array (x, y, z, visibility, presence), x and y
 normalised to [0,1] by frame width / height, y growing DOWNWARD. `aspect` = frame width / height (C5 addition, default
 16/9). All geometry is done in "height units": P = (x * aspect, y), i.e. pixels / frame height, so angles are true
-image angles regardless of aspect ratio. `world` (33,3) metres, y down, is only used for the torso fallback.
+image angles regardless of aspect ratio. `world` (33,3) metres, y down (MediaPipe world landmarks: metric 3-D, so their
+angles do not depend on the camera view) is used for the torso fallback and, since j4, for the knee, hip line and
+lockout readings (see "j4" below).
 
 Keypoints per side (MediaPipe): left = shoulder 11, elbow 13, wrist 15, hip 23, knee 25, ankle 27; right = 12, 14, 16,
 24, 26, 28. conf(k) = min(visibility, presence) (presence = 1 when the column is absent), NaN -> 0, and 0 when the
@@ -54,6 +56,12 @@ height units over frames with both confident (its last value is used while the h
            in the image than the ankles (incline, hands on a bench), - decline (feet raised). Not median-filtered.
   gap      (elbow_y - shoulder_y) / torso_len; <= 0 means the shoulder is at or below elbow height.
   drop     wrist_y - shoulder_y (height units; the shoulder's height above the wrist)   [shoulder, elbow, wrist]
+  j4 (docs/challenge/CALIBRATION.md "j4"), with world landmarks present (each reading falls back to the image alone):
+  knee     the world angle when it is straighter than the image one by more than KNEE_WORLD_GAP_DEG (a foreshortened
+           straight leg), else the image angle.
+  dev      image and world (world_hip_dev_deg: 3-D angle, sign from the hip's offset along world y) combined by
+           _agree: the smaller magnitude when both have the same sign, 0 when they disagree (a perspective bend).
+  elbow_w  world shoulder-elbow-wrist angle; top_elbow_deg is the larger of the image and world 2nd-highest values.
 Metric definitions (sel = judged frames, see above; n = len(sel)):
   side                  'left'|'right': side whose six keypoints have the higher mean visibility over the window
                         (ties -> left); 'none' when no frame has landmarks.
@@ -112,6 +120,7 @@ EVIDENCE_FRAMES = 2       # a gate is decided by the k-th most extreme frame (D-
 TOP_SLACK_DEG = 10.0      # rep-start rule: a "top" frame has filtered elbow >= lockout_min_deg - TOP_SLACK_DEG
 CONTACT_OFF = 1.0         # kc of a frame whose knee is not bent (above any knee_floor_margin)
 KNEE_CONTACT_MAX_DEG = 160.0  # knee angle below which a knee near the floor line counts as contact (CALIBRATION.md)
+KNEE_WORLD_GAP_DEG = 15.0     # j4: the world knee angle replaces the image one when it is straighter by more than this
 EMA_ALPHA = 0.1
 _EPS = 1e-9
 
@@ -216,6 +225,7 @@ class _SideFrame:
     drop: float | None = None
     sup: float | None = None          # support-line tilt (deg), not median-filtered (the rep uses its median)
     tilt: float | None = None         # world support-line tilt (deg), not median-filtered (the rep uses its median)
+    elbow_w: float | None = None      # j4: world-landmark elbow angle (lockout evidence that foreshortening cannot shrink)
     arm: bool = False                 # shoulder, elbow and wrist confident (upper body measurable)
     torso: bool = False               # shoulder and hip confident (torso_ok evidence)
     prone: bool = False
@@ -236,7 +246,7 @@ class _Med:
         return float(np.median(self.buf))
 
 
-_SIGNALS = ("elbow_side", "elbow", "knee", "dev", "kc", "gap", "drop")
+_SIGNALS = ("elbow_side", "elbow", "knee", "dev", "kc", "gap", "drop", "elbow_w")
 
 
 @dataclass
@@ -335,15 +345,23 @@ class RepMetricsAccumulator:
             torso = float(e["torso"].v)
         w0 = e["wr"].add(P[WR].copy()) if ok[WR] else e["wr"].v
         a0 = e["an"].add(P[AN].copy()) if leg[AN] else None
+        W = _world_side(f.world, ix)
         if arm_ok:
             sf.elbow = sf.elbow_side
             sf.drop = float(P[WR, 1] - P[SH, 1])     # shoulder height above the wrist (height units; only its ratio counts)
+            if W is not None:
+                sf.elbow_w = _finite(angle_deg(W[SH], W[EL], W[WR]))
         if ok[HP] and leg[KN] and leg[AN]:
-            sf.knee = angle_deg(P[HP], P[KN], P[AN])
-        if ok[SH] and ok[HP] and leg[AN]:
-            sf.dev = hip_line_dev_deg(P[SH], P[HP], P[AN])
-        elif ok[SH] and ok[HP] and leg[KN]:
-            sf.dev = hip_line_dev_deg(P[SH], P[HP], P[KN])   # ankles out of frame: the shoulder-hip-knee line
+            # j4: foreshortening (legs pointing toward or away from the camera) makes a straight leg look bent in the
+            # image; the world angle is view-independent, so it wins when it is clearly straighter (_straighter).
+            sf.knee = _straighter(angle_deg(P[HP], P[KN], P[AN]),
+                                  None if W is None else angle_deg(W[HP], W[KN], W[AN]))
+        far = AN if leg[AN] else (KN if leg[KN] else None)   # ankles out of frame: the shoulder-hip-knee line
+        if ok[SH] and ok[HP] and far is not None:
+            # j4: the image deviation, shrunk to the world deviation when that is smaller (0 when they disagree on the
+            # side): an off-angle camera inflates the image hip angle, the world angle does not change with the view
+            sf.dev = _agree(hip_line_dev_deg(P[SH], P[HP], P[far]),
+                            None if W is None else world_hip_dev_deg(W[SH], W[HP], W[far]))
         if ok[WR] and leg[AN]:
             sf.tilt = _world_tilt(f.world, ix[WR], ix[AN])
             dx = abs(float(P[WR, 0] - P[AN, 0]))
@@ -423,10 +441,14 @@ class RepMetricsAccumulator:
         contact = None if kc is None else bool(kc < float(self.thr["knee_floor_margin"]))
         d_lo, d_hi = _kth_low([f.drop for f in S]), _kth_high([f.drop for f in S])
         drop = d_lo / d_hi if (d_lo is not None and d_hi is not None and d_hi > _EPS) else None
-        tops = [x for x in (_kth_high([f.elbow for f in wl]), _kth_high([f.elbow for f in wr])) if x is not None]
-        top = _kth_high([f.elbow for f in F])
-        if top is None and tops:
-            top = max(tops)                          # visible side's arm never confident: the other arm's lockout
+        top, TF = _kth_high([f.elbow for f in F]), F
+        if top is None:                              # visible side's arm never confident: the other arm's lockout
+            cand = [(v, Fs) for Fs in (wl, wr) if (v := _kth_high([f.elbow for f in Fs])) is not None]
+            if cand:
+                top, TF = max(cand, key=lambda c: c[0])
+        top_w = _kth_high([f.elbow_w for f in TF])
+        if top is not None and top_w is not None and top_w > top:
+            top = top_w                              # j4: a foreshortened lockout reads straight in world landmarks
         arm_frames = sum(1 for i in sel if wl[i].arm or wr[i].arm)
         return RepMetrics(
             min_elbow_deg_l=_kth_low([wl[i].elbow_side for i in sel]),
@@ -440,6 +462,53 @@ class RepMetricsAccumulator:
             persons_in_frame=int(persons) if persons is not None else 0,
             rep_duration_s=0.0, torso_ok=bool(torso_ok), side=side, classifier_labels=labels,
             shoulder_elbow_gap=_kth_low([f.gap for f in S]))
+
+
+def world_hip_dev_deg(s: np.ndarray, h: np.ndarray, a: np.ndarray) -> float | None:
+    """Signed hip-line deviation in world landmarks (metres, y down; MediaPipe world is in the camera's orientation):
+    180 - the 3-D angle shoulder-hip-ankle, + when the hip lies below the shoulder-ankle line (its offset from the line
+    points down), - above. None for a degenerate line."""
+    ang = angle_deg(s, h, a)
+    u = a - s
+    L = float(np.linalg.norm(u))
+    if not math.isfinite(ang) or L < _EPS:
+        return None
+    u = u / L
+    off = (h - s) - float((h - s) @ u) * u
+    return (180.0 - ang) * (1.0 if off[1] > 0 else -1.0 if off[1] < 0 else 0.0)
+
+
+def _world_side(world: np.ndarray | None, ix: tuple[int, ...]) -> np.ndarray | None:
+    if world is None:
+        return None
+    W = np.asarray(world, float)[list(ix)]
+    return W if np.all(np.isfinite(W)) else None
+
+
+def _finite(x: float | None) -> float | None:
+    return x if x is not None and math.isfinite(x) else None
+
+
+def _straighter(img: float, world: float | None) -> float | None:
+    """Knee angle: the image reading, or the world reading when that is straighter by more than KNEE_WORLD_GAP_DEG
+    (a foreshortened leg; small image-world differences are pose noise and keep the image value)."""
+    img_v = img if math.isfinite(img) else None
+    w = world if world is not None and math.isfinite(world) else None
+    if img_v is None:
+        return w
+    return w if w is not None and w - img_v > KNEE_WORLD_GAP_DEG else img_v
+
+
+def _agree(img: float, world: float | None) -> float | None:
+    """Hip deviation: the image value when there is no world value; else the smaller magnitude of the two on the side
+    both agree on, 0 when they disagree (no evidence of a fault on either side)."""
+    if not math.isfinite(img):
+        return None
+    if world is None or not math.isfinite(world):
+        return img
+    if img * world <= 0:
+        return 0.0
+    return math.copysign(min(abs(img), abs(world)), img)
 
 
 def _world_tilt(world: np.ndarray | None, wr: int, an: int) -> float | None:

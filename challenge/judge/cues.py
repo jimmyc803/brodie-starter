@@ -65,6 +65,22 @@ def cue_for_reason(reason):
         return classifier_cue(reason.split(':', 1)[1])
     return REASON_CUE.get(reason)
 
+# Which reject reason gets the spoken cue when a rep fails several gates (j4): the most useful correction, not the C5
+# storage order. Depth is the most common real fault and the clearest fix ("Lower!"), so it outranks the hip line
+# (whose angle is coarse and partly view-dependent) and lockout; not_horizontal (mostly the camera angle, or not a
+# push-up at all) is last. Classifier labels and unknown reasons come after every listed reason.
+CUE_PRIORITY = ('multiple_people', 'not_in_frame', 'knees_down', 'too_shallow', 'no_lockout', 'hips_sag', 'hips_pike',
+                'not_horizontal')
+
+def best_cue(reasons):
+    """Cue key for a rejected rep: the reason first in CUE_PRIORITY (ties keep the given order) that has a cue."""
+    rank = {r: i for i, r in enumerate(CUE_PRIORITY)}
+    for r in sorted(reasons, key=lambda r: rank.get(r, len(rank))):
+        key = cue_for_reason(r)
+        if key:
+            return key
+    return None
+
 def text_for_reason(reason):
     key = cue_for_reason(reason)
     return CUES[key] if key else None
