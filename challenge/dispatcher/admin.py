@@ -214,6 +214,7 @@ def rejudge(b: RejudgeIn, request: Request, actor: str = Depends(admin_actor),
     changed = [d for d in diffs if d.changed]
     out: dict[str, Any] = {
         "apply": b.apply, "thresholds": thr, "reps_loaded": len(diffs), "reps_changed": len(changed),
+        "reps_skipped": sum(1 for d in diffs if d.skipped),
         "valid_before": sum(d.old_valid for d in diffs), "valid_after": sum(d.new_valid for d in diffs),
         "points_before": sum(d.old_points for d in diffs), "points_after": sum(d.new_points for d in diffs),
         "users": rj.user_deltas(diffs), "changes": [vars(d) for d in changed[:200]],

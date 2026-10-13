@@ -15,6 +15,7 @@ from challenge.config import Config
 from challenge.dispatcher.admin import STOP_HINT
 from challenge.dispatcher.app import create_app
 from challenge.dispatcher.flags import Flags
+from challenge.judge.gates import JUDGE_VERSION
 from challenge.dispatcher.ratelimit import RateLimiter
 from challenge.messaging.outbox import Outbox
 from challenge.messaging.providers import MockProvider
@@ -59,7 +60,7 @@ def give_reps(c, conn, handle, n_valid, call_id, n_invalid=0):
     reps = [rep(i + 1, at) for i in range(n_valid)] + [rep(n_valid + i + 1, at, valid=False) for i in range(n_invalid)]
     ev = {"kind": "reps_committed", "call_id": call_id, "idem_key": f"k-{call_id}", "at": at, "payload": {
         "started_at": T0.isoformat(), "ended_at": (T0 + timedelta(seconds=195)).isoformat(),
-        "liveness_result": "pass", "judge_version": "j1", "reps": reps}}
+        "liveness_result": "pass", "judge_version": JUDGE_VERSION, "reps": reps}}
     assert c.post("/calls/event", headers=TOK, json=ev).json()["ok"] is True
 
 
@@ -218,7 +219,7 @@ def test_rejudge_dry_run_and_apply(env):
     _, h = mkuser(conn)
     give_reps(c, conn, h, 3, "rj-1")
     d = c.post("/admin/rejudge", headers=hdr(), json={"apply": False}).json()
-    assert d["reps_loaded"] == 3 and d["apply"] is False and "applied" not in d
+    assert d["reps_loaded"] == 3 and d["apply"] is False and "applied" not in d and d["reps_skipped"] == 0
     before = conn.execute("select count(*) from reps where valid").fetchone()[0]
     assert c.post("/admin/rejudge", headers=hdr(), json={"thresholds": {"nope": 1}}).status_code == 400
     assert c.post("/admin/rejudge", headers=hdr(), json={"thresholds": {"min_rep_s": "fast"}}).status_code == 400

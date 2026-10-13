@@ -9,13 +9,24 @@ Keypoints per side (MediaPipe): left = shoulder 11, elbow 13, wrist 15, hip 23, 
 24, 26, 28. conf(k) = min(visibility, presence) (presence = 1 when the column is absent), NaN -> 0, and 0 when the
 landmark lies outside the image ([0,1] in x or y).
 
-Rep window: every frame since the previous close_rep, or since reset() (= counting start), with t <= t_fire. Nothing
-is truncated: frames are folded into running per-side aggregates (counters, sums and the two most extreme values), so
-memory is O(1) per rep. Frames newer than t_fire (rep event delivered late) stay in a short pending tail (frames
-within `max_lag_s` of the newest frame, not yet folded) and go to the next window.
+Rep window: every frame since the previous close_rep, or since reset() (= counting start), with t <= t_fire. The
+window's per-frame (median-filtered) values are buffered until close_rep (memory O(frames in the rep); a 180 s call
+at 30 fps is ~5k small records). Frames newer than t_fire (rep event delivered late) stay in a short pending tail
+(frames within `max_lag_s` of the newest frame, not yet folded) and go to the next window.
+
+Judged frames (j2, real-footage calibration): RepCounter2 fires near the bottom / early ascent, so a window holds the
+previous rep's ascent + lockout, this rep's descent and bottom, and for the first rep the whole setup. A "top" frame
+has a filtered visible-side elbow >= lockout_min_deg - TOP_SLACK_DEG; s = the last top frame before the window's last
+non-top frame (where this rep's descent starts), a = the first top frame.
+  * first rep since reset: frames [s, n) (setup before the last lockout, e.g. kneeling down, is not judged);
+  * later reps: frames [0, a] (the previous rep's ascent up to its lockout) and [s, n) (this rep's descent);
+    the lockout hold between a and s is skipped, so walking the hands in or shifting during a held top is not judged;
+  * no top or no non-top frame: the whole window.
+Every metric below is taken over the judged frames ("sel") except top_elbow_deg, persons_in_frame and side, which
+use the whole window (a lockout or a second person anywhere in the rep counts).
 
 Evidence rule (D-16): no single frame decides a gate in either direction.
-  * Geometric signals (elbow, knee, dev, kh, gap, drop) first pass a running median of the last 3 eligible frames
+  * Geometric signals (elbow, knee, dev, kc, gap, drop) first pass a running median of the last 3 eligible frames
     (continuous across rep windows), so a 1-frame landmark spike vanishes and a pose held for >= 2 consecutive
     frames survives. Each extreme metric is then the SECOND most extreme filtered value ("2nd-lowest" /
     "2nd-highest"): a threshold is crossed only by a fault (or a lockout / depth) lasting >= 2 consecutive frames,
@@ -29,32 +40,43 @@ height units over good frames):
   elbow    angle shoulder-elbow-wrist (deg).            knee   angle hip-knee-ankle (deg).
   dev      180 - angle(shoulder, hip, ankle), + when the hip lies below the shoulder-ankle line (larger image y,
            toward the floor = sag), - above (pike).
-  kh       knee height above the floor line / torso_len, + upward. Floor line = line through the per-side EMAs
-           (alpha 0.1, over good frames, carried across reps) of the wrist and ankle points, which rest on the floor
-           in a plank. None while the two EMA points coincide.
+  kc       knee contact height: kh = knee height above the floor line / torso_len, + upward. Floor line = line
+           through the per-side EMAs (alpha 0.1, over good frames, carried across reps) of the wrist and ankle
+           points, which rest on the floor in a plank. kc = kh while the knee is bent (knee < KNEE_CONTACT_MAX_DEG),
+           else max(kh, CONTACT_OFF): with straight legs the wrist-ankle line is not the floor under the knee
+           (camera perspective, hands on raised handles), so a straight knee never reads as contact. None while the
+           two EMA points coincide.
+  sup      support-line tilt (deg) = atan2(ankle_y - wrist_y, |wrist_x - ankle_x|): + when the wrists are higher
+           in the image than the ankles (incline, hands on a bench), - decline (feet raised). Not median-filtered.
   gap      (elbow_y - shoulder_y) / torso_len; <= 0 means the shoulder is at or below elbow height.
   drop     (wrist_y - shoulder_y) / torso_len.
-Metric definitions (n = frames in the window):
+Metric definitions (sel = judged frames, see above; n = len(sel)):
   side                  'left'|'right': side whose six keypoints have the higher mean visibility over the window
                         (ties -> left); 'none' when no frame has landmarks.
-  frame_conf_frac       (# good frames) / n; 0 when n == 0.
-  min_keypoint_conf     min over all window frames of the min visible-side keypoint conf (frames without landmarks = 0).
+  frame_conf_frac       (# good frames in sel) / n; 0 when n == 0.
+  min_keypoint_conf     min over sel of the min visible-side keypoint conf (frames without landmarks = 0).
   persons_in_frame      2nd-highest per-frame person count: > 1 iff >= 2 frames of the rep report more than one person.
   min_elbow_deg_l / _r  2nd-lowest filtered elbow angle of that side over frames where its shoulder, elbow and wrist
                         are confident.
-  top_elbow_deg         2nd-highest visible-side elbow angle over good frames (the lockout around the rep).
+  top_elbow_deg         2nd-highest visible-side elbow angle over the whole window's good frames (the lockout).
   min_knee_deg          2nd-lowest visible-side knee angle over good frames.
   max_hip_line_dev_deg  of the 2nd-highest and the 2nd-lowest dev over good frames, the one with the larger magnitude
-                        (so |value| > limit iff >= 2 frames deviate beyond the limit on that side).
-  knee_floor_contact    2nd-lowest kh < knee_floor_margin (>= 2 frames with the knee within the margin of the floor).
-  shoulder_elbow_gap    2nd-lowest gap over good frames (SPEC §6 depth criterion; contract amendment).
-  shoulder_wrist_drop   2nd-lowest drop over good frames. Informational only.
+                        (so |value| > limit iff >= 2 frames deviate beyond the limit on that side). First rep since
+                        reset: the pike side (2nd-lowest) counts from the first judged frame with
+                        dev >= -hip_pike_max_dev_deg (hips coming down from the walk-in excluded); all judged frames if
+                        there is none. The sag side always uses every judged frame.
+  knee_floor_contact    2nd-lowest kc < knee_floor_margin (>= 2 bent-knee frames within the margin of the floor).
+  shoulder_elbow_gap    2nd-lowest gap over good frames. Informational only since j2.
+  shoulder_wrist_drop   j2: (2nd-lowest drop) / (2nd-highest drop) over good frames = the shoulder's height above
+                        the wrist at the bottom as a fraction of that at the lockout (90 deg elbow ~ 0.55, 125 deg
+                        ~ 0.85); None when the 2nd-highest drop <= 0. Depth gate (depth_drop_max).
   rep_duration_s        t_fire - window start (previous fire, or first frame after reset).
   cadence_rpm           C5 addition: 60 * 5 / (sum of the last 5 rep durations, this one included) once 5 reps were
                         closed since reset; None before.
   torso_ok              given by the caller (RepCounter2 prone gate) or, when None, computed with
                         rtcoach.repcount2.body_state + gate_ok('prone') per good frame: True iff >= 80% of good frames
-                        pass (False when there are no good frames).
+                        pass (False when there are no good frames); in both cases AND -decline_max_deg <= median(sup)
+                        <= incline_max_deg when any sup exists.
 Every geometric metric is None when no good frame exists (gates.judge_rep then reports not_in_frame).
 Angles are rounded to 0.01 deg and ratios to 1e-4 (below float32 `real` storage precision, so re-judging stored
 metrics reproduces the live verdict and an exact 90.000 deg bottom is not lost to float error).
@@ -74,6 +96,9 @@ SH, EL, WR, HP, KN, AN = range(6)
 CADENCE_REPS = 5
 TORSO_OK_FRAC = 0.8
 EVIDENCE_FRAMES = 2       # a gate is decided by the k-th most extreme frame (D-16)
+TOP_SLACK_DEG = 10.0      # rep-start rule: a "top" frame has filtered elbow >= lockout_min_deg - TOP_SLACK_DEG
+CONTACT_OFF = 1.0         # kc of a frame whose knee is not bent (above any knee_floor_margin)
+KNEE_CONTACT_MAX_DEG = 160.0  # knee angle below which a knee near the floor line counts as contact (CALIBRATION.md)
 EMA_ALPHA = 0.1
 _EPS = 1e-9
 
@@ -141,32 +166,15 @@ def _conf(img: np.ndarray, idx: tuple[int, ...]) -> np.ndarray:
     return np.where(inside, c, 0.0)
 
 
-class _Low:
-    """The EVIDENCE_FRAMES smallest finite values seen; kth() = the k-th smallest (or the largest held if fewer)."""
-    __slots__ = ("v", "k")
-
-    def __init__(self, k: int = EVIDENCE_FRAMES) -> None:
-        self.v: list[float] = []
-        self.k = k
-
-    def add(self, x: float | None) -> None:
-        if x is None or not math.isfinite(x):
-            return
-        self.v.append(float(x))
-        self.v.sort()
-        del self.v[self.k:]
-
-    def kth(self) -> float | None:
-        return self.v[-1] if self.v else None
+def _kth_low(vals: list[float | None], k: int = EVIDENCE_FRAMES) -> float | None:
+    """The k-th smallest finite value (the largest one when fewer than k exist); None when there is none."""
+    v = sorted(float(x) for x in vals if x is not None and math.isfinite(x))
+    return v[min(k, len(v)) - 1] if v else None
 
 
-class _High(_Low):
-    def add(self, x: float | None) -> None:
-        super().add(None if x is None else -x)
-
-    def kth(self) -> float | None:
-        k = super().kth()
-        return None if k is None else -k
+def _kth_high(vals: list[float | None], k: int = EVIDENCE_FRAMES) -> float | None:
+    x = _kth_low([None if a is None else -a for a in vals], k)
+    return None if x is None else -x
 
 
 class _Ema:
@@ -182,7 +190,8 @@ class _Ema:
 
 @dataclass
 class _SideFrame:
-    """Per-frame scalars for one body side (computed at add_frame with the EMAs current at that frame)."""
+    """Per-frame scalars for one body side: raw at add_frame (with the EMAs current at that frame), replaced by their
+    median-filtered values when the frame is folded into the window."""
     vis: float | None
     conf_min: float
     good: bool
@@ -190,9 +199,10 @@ class _SideFrame:
     elbow: float | None = None        # the rest only for good frames
     knee: float | None = None
     dev: float | None = None
-    kh: float | None = None
+    kc: float | None = None
     gap: float | None = None
     drop: float | None = None
+    sup: float | None = None          # support-line tilt (deg), not median-filtered (the rep uses its median)
     prone: bool = False
 
 
@@ -211,43 +221,8 @@ class _Med:
         return float(np.median(self.buf))
 
 
-_SIGNALS = ("elbow_side", "elbow", "knee", "dev", "kh", "gap", "drop")
-
-
-class _SideAgg:
-    def __init__(self, med: dict[str, _Med]) -> None:
-        self.med = med
-        self.vis_sum = 0.0
-        self.vis_n = 0
-        self.good = 0
-        self.conf_min: float | None = None
-        self.elbow_side = _Low()
-        self.top = _High()
-        self.knee = _Low()
-        self.dev_hi = _High()
-        self.dev_lo = _Low()
-        self.kh = _Low()
-        self.gap = _Low()
-        self.drop = _Low()
-        self.prone = 0
-
-    def fold(self, s: _SideFrame) -> None:
-        if s.vis is not None:
-            self.vis_sum += s.vis
-            self.vis_n += 1
-        self.conf_min = s.conf_min if self.conf_min is None else min(self.conf_min, s.conf_min)
-        self.elbow_side.add(self.med["elbow_side"].add(s.elbow_side))
-        if s.good:
-            self.good += 1
-            self.top.add(self.med["elbow"].add(s.elbow))
-            self.knee.add(self.med["knee"].add(s.knee))
-            d = self.med["dev"].add(s.dev)
-            self.dev_hi.add(d)
-            self.dev_lo.add(d)
-            self.kh.add(self.med["kh"].add(s.kh))
-            self.gap.add(self.med["gap"].add(s.gap))
-            self.drop.add(self.med["drop"].add(s.drop))
-            self.prone += s.prone
+_SIGNALS = ("elbow_side", "elbow", "knee", "dev", "kc", "gap", "drop")
+_GOOD_SIGNALS = ("elbow", "knee", "dev", "kc", "gap", "drop")
 
 
 @dataclass
@@ -258,7 +233,8 @@ class _Rec:
 
 
 class RepMetricsAccumulator:
-    """Folds frames into the current rep window and turns them into RepMetrics at close_rep. Deterministic."""
+    """Buffers the current rep window (median-filtered per-frame values) and turns it into RepMetrics at close_rep.
+    Deterministic."""
 
     def __init__(self, thr: dict | None = None, max_lag_s: float = 2.0):
         self.thr = merged_thresholds(thr)
@@ -270,20 +246,24 @@ class RepMetricsAccumulator:
         self._pending: deque[_Rec] = deque()
         self._t_start: float | None = None
         self._durations: deque[float] = deque(maxlen=CADENCE_REPS)
+        self._closed = 0
         self._ema = {s: {"torso": _Ema(), "wr": _Ema(), "an": _Ema()} for s in SIDES}
         self._med = {s: {k: _Med() for k in _SIGNALS} for s in SIDES}
         self._new_window()
 
     def _new_window(self) -> None:
-        self._n = 0
-        self._persons = _High()
-        self._agg = {s: _SideAgg(self._med[s]) for s in SIDES}
+        self._persons: list[float] = []
+        self._win: dict[str, list[_SideFrame]] = {s: [] for s in SIDES}
 
     def _fold(self, r: _Rec) -> None:
-        self._n += 1
-        self._persons.add(float(r.persons))
+        self._persons.append(float(r.persons))
         for s, sf in r.sides.items():
-            self._agg[s].fold(sf)
+            med = self._med[s]
+            sf.elbow_side = med["elbow_side"].add(sf.elbow_side)
+            if sf.good:
+                for k in _GOOD_SIGNALS:
+                    setattr(sf, k, med[k].add(getattr(sf, k)))
+            self._win[s].append(sf)
 
     def add_frame(self, f: FrameObs) -> None:
         if self._t_start is None:
@@ -313,6 +293,7 @@ class RepMetricsAccumulator:
         m = self._metrics(list(labels or []), torso_ok)
         m.rep_duration_s = round(duration, 4)
         m.cadence_rpm = None if cadence is None else round(cadence, 4)
+        self._closed += 1
         self._new_window()
         return _rounded(m)
 
@@ -338,6 +319,9 @@ class RepMetricsAccumulator:
         sf.elbow = sf.elbow_side
         sf.knee = angle_deg(P[HP], P[KN], P[AN])
         sf.dev = hip_line_dev_deg(P[SH], P[HP], P[AN])
+        dx = abs(float(P[WR, 0] - P[AN, 0]))
+        if dx > _EPS or abs(float(P[AN, 1] - P[WR, 1])) > _EPS:
+            sf.sup = math.degrees(math.atan2(float(P[AN, 1] - P[WR, 1]), dx))
         if torso > _EPS:
             sf.gap = float((P[EL, 1] - P[SH, 1]) / torso)
             sf.drop = float((P[WR, 1] - P[SH, 1]) / torso)
@@ -347,39 +331,78 @@ class RepMetricsAccumulator:
                 nrm = np.array([-d[1], d[0]]) / L
                 if nrm[1] > 0:
                     nrm = -nrm                   # point up the image (away from the floor)
-                sf.kh = float((P[KN] - w0) @ nrm) / torso
+                kh = float((P[KN] - w0) @ nrm) / torso
+                bent = math.isfinite(sf.knee) and sf.knee < KNEE_CONTACT_MAX_DEG
+                sf.kc = kh if bent else max(kh, CONTACT_OFF)
         sf.prone = _prone(f)
         return sf
 
     # -- per rep -----------------------------------------------------------------------------------------------
+    def _select(self, F: list[_SideFrame]) -> list[int]:
+        """Indices of the window frames the rep is judged on (module docstring, rep window)."""
+        n = len(F)
+        thr = float(self.thr["lockout_min_deg"]) - TOP_SLACK_DEG
+        e = [f.elbow_side for f in F]
+        tops = [i for i, v in enumerate(e) if v is not None and v >= thr]
+        lows = [i for i, v in enumerate(e) if v is not None and v < thr]
+        if not tops or not lows:
+            return list(range(n))
+        starts = [i for i in tops if i < lows[-1]]
+        if not starts:
+            return list(range(n))
+        s, a = starts[-1], tops[0]
+        if self._closed == 0:
+            return list(range(s, n))
+        return list(range(n)) if a >= s else list(range(a + 1)) + list(range(s, n))
+
     def _metrics(self, labels: list[str], torso_ok: bool | None) -> RepMetrics:
-        al, ar = self._agg["left"], self._agg["right"]
-        if al.vis_n == 0 and ar.vis_n == 0:
+        wl, wr = self._win["left"], self._win["right"]
+        vl = [f.vis for f in wl if f.vis is not None]
+        vr = [f.vis for f in wr if f.vis is not None]
+        if not vl and not vr:
             side = "none"
         else:
-            ml = al.vis_sum / al.vis_n if al.vis_n else -1.0
-            mr = ar.vis_sum / ar.vis_n if ar.vis_n else -1.0
+            ml = sum(vl) / len(vl) if vl else -1.0
+            mr = sum(vr) / len(vr) if vr else -1.0
             side = "right" if mr > ml else "left"
-        a = self._agg.get(side, al)
-        n = self._n
-        persons = self._persons.kth()
+        F = self._win.get(side, wl)
+        sel = self._select(F)
+        S = [F[i] for i in sel]
+        G = [f for f in S if f.good]
+        persons = _kth_high(self._persons)
         if torso_ok is None:
-            torso_ok = a.good > 0 and a.prone >= TORSO_OK_FRAC * a.good
-        hi, lo = a.dev_hi.kth(), a.dev_lo.kth()
+            torso_ok = bool(G) and sum(f.prone for f in G) >= TORSO_OK_FRAC * len(G)
+        sups = [f.sup for f in G if f.sup is not None]
+        if sups:
+            sup = float(np.median(sups))
+            torso_ok = bool(torso_ok) and -float(self.thr["decline_max_deg"]) <= sup <= float(self.thr["incline_max_deg"])
+        devs = [f.dev for f in G if f.dev is not None]
+        pike_devs = devs
+        if self._closed == 0:
+            # first rep: hips still coming DOWN from walking into the plank are not pike evidence; the pike side counts
+            # from the first frame at or below the pike limit (plank established). Never there = every frame counts (a
+            # piked rep fails). Sag evidence always uses every frame.
+            pike = -float(self.thr["hip_pike_max_dev_deg"])
+            pike_devs = devs[next((i for i, v in enumerate(devs) if v >= pike), 0):]
+        hi, lo = _kth_high(devs), _kth_low(pike_devs)
         dev = None
         if hi is not None and lo is not None:
             dev = hi if abs(hi) >= abs(lo) else lo
-        kh = a.kh.kth()
+        kc = _kth_low([f.kc for f in G])
+        d_lo, d_hi = _kth_low([f.drop for f in G]), _kth_high([f.drop for f in G])
+        drop = d_lo / d_hi if (d_lo is not None and d_hi is not None and d_hi > _EPS) else None
         return RepMetrics(
-            min_elbow_deg_l=al.elbow_side.kth(), min_elbow_deg_r=ar.elbow_side.kth(),
-            top_elbow_deg=a.top.kth(), max_hip_line_dev_deg=dev, min_knee_deg=a.knee.kth(),
-            knee_floor_contact=None if kh is None else bool(kh < float(self.thr["knee_floor_margin"])),
-            shoulder_wrist_drop=a.drop.kth(),
-            min_keypoint_conf=float(a.conf_min) if (a.conf_min is not None and side != "none") else 0.0,
-            frame_conf_frac=a.good / n if n else 0.0,
+            min_elbow_deg_l=_kth_low([wl[i].elbow_side for i in sel]),
+            min_elbow_deg_r=_kth_low([wr[i].elbow_side for i in sel]),
+            top_elbow_deg=_kth_high([f.elbow for f in F if f.good]), max_hip_line_dev_deg=dev,
+            min_knee_deg=_kth_low([f.knee for f in G]),
+            knee_floor_contact=None if kc is None else bool(kc < float(self.thr["knee_floor_margin"])),
+            shoulder_wrist_drop=drop,
+            min_keypoint_conf=min(f.conf_min for f in S) if (S and side != "none") else 0.0,
+            frame_conf_frac=len(G) / len(S) if S else 0.0,
             persons_in_frame=int(persons) if persons is not None else 0,
             rep_duration_s=0.0, torso_ok=bool(torso_ok), side=side, classifier_labels=labels,
-            shoulder_elbow_gap=a.gap.kth())
+            shoulder_elbow_gap=_kth_low([f.gap for f in G]))
 
 
 def _prone(f: FrameObs) -> bool:

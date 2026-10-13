@@ -72,12 +72,12 @@ Setup: side view, full body. Guide: phone on floor/low surface ~6–8 ft to the 
 Gates (starting values in judge_thresholds; tune with harness):
 | Frame | shoulders, hips, knees, ankles (visible side) conf ≥ min_conf for ≥90% of rep frames | not_in_frame |
 | One person | exactly 1 person for the rep | multiple_people |
-| Knees | knee angle ≥160° whole rep AND knee never within knee_floor_margin of floor line (floor line from ankle+wrist keypoints during plank) | knees_down |
-| Plank line | shoulder–hip–ankle deviation ≤15°; sag and pike both fail | hips_sag / hips_pike |
-| Depth | elbow ≤90° at bottom AND shoulder drops to within depth_margin of elbow height | too_shallow |
-| Lockout | elbow ≥160° at top before next rep | no_lockout |
+| Knees | knee angle ≥150° whole rep AND a bent (<160°) knee never within knee_floor_margin of floor line (floor line from ankle+wrist keypoints during plank) | knees_down |
+| Plank line | shoulder–hip–ankle deviation: sag ≤17.5°, pike ≤20° | hips_sag / hips_pike |
+| Depth | elbow ≤100° at bottom AND shoulder-above-wrist height at the bottom ≤0.75 of its lockout height | too_shallow |
+| Lockout | elbow ≥150° at top before next rep | no_lockout |
 | Tempo | duration ≥0.8s; flag implausible sustained cadence | too_fast |
-| Torso | existing horizontal-torso check | not_horizontal |
+| Torso | existing horizontal-torso check AND wrist–ankle support line between 23° decline and 9° incline | not_horizontal |
 | Classifier veto | pushups - shallow / insufficient / elevated hips, or any knee or sag label | classifier:<label> |
 Liveness (anti-replay): once per call at random time 0:45–2:30, challenge cue random from "Tap your left shoulder" / "Tap your right shoulder" / "Lift your right hand"; 4s to perform, verified by pose. Pass → continue. Fail → one retry with a different challenge; fail again → void the call's reps (liveness_result=fail) and cue why. Reps during challenge window don't count and aren't penalized.
 Live feedback cues (add to cues.json, re-render audio): "Knees up — that one didn't count." "Go lower — chest down." "Lock out at the top." "Get your whole body in frame — side view." "Keep your hips in line." "One person in frame only." three challenges + "Challenge passed" + "Challenge failed — reps voided." "Not your turn — text QUEUE to Brodie to get in line." "You've hit today's limit — come back tomorrow." "You're not signed up yet — text JOIN and your name to Brodie." "Thirty seconds left." "Time!" "Check your texts for your results." "Power hour — every rep counts double." Rate-limit corrective cues; most important reason wins.

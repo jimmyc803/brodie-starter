@@ -56,7 +56,7 @@ calls(id text primary key /* chert call_id */, line_id text, user_id uuid, handl
       void bool not null default false, void_reason text, session_id uuid references sessions, committed_at timestamptz, rep_count int)
 alter table reps add column if not exists valid bool, reject_reasons text[], multiplier int, points int, at timestamptz /* absolute rep time */,
       min_elbow_deg_l real, min_elbow_deg_r real, top_elbow_deg real, max_hip_line_dev_deg real /* signed: + sag, - pike */,
-      min_knee_deg real, knee_floor_contact bool, shoulder_wrist_drop real, shoulder_elbow_gap real /* min over bottom of (elbow_y - shoulder_y)/torso_len; depth needs ≤ depth_margin */, min_keypoint_conf real, frame_conf_frac real,
+      min_knee_deg real, knee_floor_contact bool, shoulder_wrist_drop real, shoulder_elbow_gap real /* min over bottom of (elbow_y - shoulder_y)/torso_len; informational since j2 (C7.c) */, min_keypoint_conf real, frame_conf_frac real,
       persons_in_frame int, rep_duration_s real, torso_ok bool, side text, classifier_labels text[], in_challenge bool, judge_version text
 competition_config(key text primary key, value jsonb not null, updated_by text, updated_at timestamptz not null default now())
 power_hours(date_et date primary key, starts_at timestamptz not null, ends_at timestamptz not null, announced_at timestamptz,
@@ -169,10 +169,10 @@ Env flags (read once at startup, logged, echoed in /health and admin): `CALLER_I
 
 ## C5. Judge (challenge/judge/)
 ```python
-JUDGE_VERSION = "j1"
-DEFAULT_THRESHOLDS = {"min_conf":0.5, "frame_conf_frac":0.9, "knee_min_deg":160, "knee_floor_margin":0.02,
-  "hip_line_max_dev_deg":15, "depth_elbow_max_deg":90, "depth_margin":0.05, "lockout_min_deg":160,
-  "min_rep_s":0.8, "max_cadence_rpm":60, "classifier_veto":["pushups - shallow","pushups - insufficient","pushups - elevated hips"],
+JUDGE_VERSION = "j2"   # C7.c: real-footage calibration (docs/challenge/CALIBRATION.md)
+DEFAULT_THRESHOLDS = {"min_conf":0.5, "frame_conf_frac":0.9, "knee_min_deg":150, "knee_floor_margin":0.02,
+  "hip_line_max_dev_deg":17.5, "hip_pike_max_dev_deg":20, "depth_elbow_max_deg":100, "depth_drop_max":0.75,
+  "lockout_min_deg":150, "incline_max_deg":9, "decline_max_deg":23, "min_rep_s":0.8, "max_cadence_rpm":60, "classifier_veto":["pushups - shallow","pushups - insufficient","pushups - elevated hips"],
   "classifier_veto_substrings":["knee","sag"], "liveness_window_s":[45,150], "liveness_timeout_s":4, "cue_min_gap_s":4}
 @dataclass FrameObs: t: float; img: np.ndarray|None  # (33,5) x,y,z,vis,presence normalised; world: np.ndarray|None (33,3); persons: int
 @dataclass RepMetrics: (the C2 metric columns) + side: str, classifier_labels: list[str]
@@ -181,9 +181,9 @@ def judge_rep(m: RepMetrics, thr: dict) -> tuple[bool, list[str]]   # pure; reas
 class RepMetricsAccumulator: add_frame(f: FrameObs); close_rep(t_fire: float, labels: list[str], torso_ok: bool) -> RepMetrics; reset()
 class JudgeRuntime(thr: dict): on_frame(f: FrameObs); on_rep(rep_event: dict) -> RepVerdict(valid, reasons, metrics, cue_key|None)
 ```
-Rep window = frames from previous rep fire (or counting start) to this fire. `top_elbow_deg` = max visible-side elbow angle in window (lockout that started the rep);
-`min_elbow_deg_*` = min per side; depth requires visible-side min elbow ≤ depth_elbow_max_deg AND shoulder_elbow_gap ≤ depth_margin
-(shoulder_elbow_gap = min over window of (elbow_y − shoulder_y)/torso_len in image coords, i.e. shoulder drops to within depth_margin of elbow height; shoulder_wrist_drop kept as an informational metric; both defined precisely in judge/metrics.py docstring).
+Rep window = frames from previous rep fire (or counting start) to this fire; j2 judges a subset of it (C7.c). `top_elbow_deg` = max visible-side elbow angle in window (lockout that started the rep);
+`min_elbow_deg_*` = min per side; depth requires visible-side min elbow ≤ depth_elbow_max_deg AND shoulder_wrist_drop ≤ depth_drop_max
+(j2: shoulder_wrist_drop = bottom / lockout shoulder-above-wrist height ratio; shoulder_elbow_gap is stored but informational; both defined precisely in judge/metrics.py docstring).
 
 ## C6. Worker ↔ judge ↔ dispatcher
 `challenge/worker/controller.py: CompetitionCall(call_id, line_id, handle, dispatcher, judge_cfg, clock, say)` with
@@ -201,6 +201,7 @@ Cue keys (say_now phrases; exact text in SPEC §6) are the dict `challenge.judge
 
 - C7.x: calls gains `end_reason text` (end|timeout|commit). First end wins; only an explicit end/commit ended_at may replace a timeout end (once); counted_toward_cap only recomputed then.
 - C7.y (judge): metrics = 2nd-most-extreme value after a running 3-frame median; persons_in_frame = 2nd-highest count in the rep window; the rep window spans from the previous rep fire (or reset) with no truncation; RepAccumulator(thr=None, max_lag_s=2.0). knee_floor_margin 0.02 (D-17).
+- C7.c (task 15, judge j2 real-footage calibration, docs/challenge/CALIBRATION.md): JUDGE_VERSION "j2". Threshold keys: removed `depth_margin`; added `hip_pike_max_dev_deg` (hips_pike iff dev < −hip_pike_max_dev_deg; hips_sag keeps hip_line_max_dev_deg), `depth_drop_max` (too_shallow iff visible elbow > depth_elbow_max_deg OR shoulder_wrist_drop > depth_drop_max), `incline_max_deg` / `decline_max_deg` (torso_ok also requires the median support-line tilt within [−decline, +incline]; applied when metrics are computed, so rejudge cannot change it). Values changed: knee_min_deg 150, hip_line_max_dev_deg 17.5, depth_elbow_max_deg 100, lockout_min_deg 150 (D-31; knee_floor_margin 0.02 unchanged; challenge/config.py DEFAULTS had a stale 0.04). `shoulder_wrist_drop` column now stores the bottom/top drop ratio; `shoulder_elbow_gap` informational. Judged frames: first rep from the last lockout before its descent; later reps = previous ascent up to its lockout + this rep's descent (lockout hold skipped); top_elbow_deg/persons/side over the whole window. First rep: the pike side counts from the first frame at or above −hip_pike_max_dev_deg (walk-in to the plank), sag always all frames. knee_floor_contact only counts frames with knee < 160°. Synthetic no_lockout (140°) zero-accept is required at noise ≤0.01; at 0.02 a measured residual ≤25% is accepted (D-31). Migration 20261020_challenge_judge_calibration.sql sets every calibrated gate value explicitly into competition_config.judge_thresholds (the seeded row overrides defaults) and drops depth_margin; the dispatcher's /calls/start config sends them. scripts/rejudge.py and /admin/rejudge only re-judge reps whose judge_version family (text before the first '.') equals JUDGE_VERSION; others (j1) are kept as stored and reported as skipped (RepDiff.skipped, response `reps_skipped`).
 - C7.z: ch_postcall(p_call_id text, p_now, p_card_delivery) atomic+idempotent post-call intents; ch_postcall_pending(p_now,p_limit) for the jobs sweeper; ch_event_log + ch_event_run(idem_key, call_id, kind, payload, now) for /calls/event dedupe; calls.postcall_done_at. LINE_OFFLINE_GAP_S env writes competition_config at startup (audited).
 - C7.p: ch_power_hour(p_now timestamptz) -> jsonb {date_et, starts_at, ends_at, announced, active, over} | null — today (ET); unannounced hidden until start. service_role only.
 - C7.m: messages.processed_at; ch_inbound_done(p_id), ch_inbound_is_done(p_id) — webhook re-handles unprocessed duplicates; ch_outbox_sent_recent(p_now,p_window_s) caps claims across processes; ch_outbox_stamp_sent sets sent_at from the dispatcher clock.

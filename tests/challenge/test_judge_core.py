@@ -1,11 +1,15 @@
 """Strict judge core: metrics accumulation, deterministic gates, synthetic cheat coverage (CONTRACTS C5, SPEC §6)."""
 import copy
 import dataclasses
+import json
+import re
+from pathlib import Path
 
 import numpy as np
 import pytest
 
 from challenge.judge import DEFAULT_THRESHOLDS, JUDGE_VERSION, FrameObs, RepMetrics, RepMetricsAccumulator, judge_rep
+from challenge.judge.gates import merged_thresholds
 from challenge.judge.metrics import angle_deg, hip_line_dev_deg
 from challenge.judge.synth import BODIES, accumulate_clip, synth_pushups
 
@@ -46,8 +50,11 @@ def _metrics(**over):
 # ---------------------------------------------------------------- clean acceptance
 
 def test_contract_constants():
-    assert JUDGE_VERSION == "j1"
-    assert D["knee_min_deg"] == 160 and D["depth_elbow_max_deg"] == 90 and D["lockout_min_deg"] == 160
+    assert JUDGE_VERSION == "j2"
+    assert D["knee_min_deg"] == 150 and D["depth_elbow_max_deg"] == 100 and D["lockout_min_deg"] == 150
+    assert D["hip_line_max_dev_deg"] == 17.5 and D["hip_pike_max_dev_deg"] == 20 and D["depth_drop_max"] == 0.75
+    assert D["incline_max_deg"] == 9 and D["decline_max_deg"] == 23 and D["knee_floor_margin"] == 0.02
+    assert "depth_margin" not in D
     assert D["classifier_veto_substrings"] == ["knee", "sag"]
 
 
@@ -68,7 +75,7 @@ def test_exact_90_degree_rep_passes(body, side):
     ms = accumulate_clip(synth_pushups(body=body, side=side, depth=90.0, n_reps=3, bottom_hold_s=0.3), D)
     for m in ms:
         el = m.min_elbow_deg_l if side == "left" else m.min_elbow_deg_r
-        assert el <= 90.0 and m.shoulder_elbow_gap <= D["depth_margin"]
+        assert el <= 90.0 and m.shoulder_wrist_drop <= D["depth_drop_max"]
         assert judge_rep(m, D) == (True, [])
 
 
@@ -110,12 +117,20 @@ def test_sag_primary_reason(body, side):
 @pytest.mark.parametrize("cheat", sorted(CHEATS) + ["sag"])
 @pytest.mark.parametrize("noise", [0.01, 0.02])
 def test_zero_cheat_reps_accepted_at_high_noise(cheat, noise):
+    accepted = total = 0
     for body, side in GRID:
         for seed in range(2):
             kw = dict(hip_offset=sag_offset(body)) if cheat == "sag" else dict(CHEATS[cheat][0])
             kw.pop("fps", None)                       # fast reps at the default 10 fps must be rejected too
             vs = verdicts(synth_pushups(body=body, side=side, noise=noise, seed=seed, **kw))
-            assert not any(v for v, _ in vs), (cheat, body, side, seed)
+            accepted += sum(v for v, _ in vs)
+            total += len(vs)
+            if (cheat, noise) != ("no_lockout", 0.02):
+                assert not any(v for v, _ in vs), (cheat, body, side, seed)
+    # D-31: a 140 deg near-lockout under sigma 0.02 jitter reads up to ~152 deg, over lockout_min_deg 150 (set from real
+    # clean tops down to 145.6). Accepted residual, measured 12/60 = 0.20; zero is still required at sigma <= 0.01.
+    if (cheat, noise) == ("no_lockout", 0.02):
+        assert total == 60 and accepted / total <= 0.25, accepted
 
 
 def test_fast_reps_after_long_setup_still_flagged_from_second_rep():
@@ -135,8 +150,8 @@ def test_sustained_cadence_flags_too_fast():
 
 def test_knee_floor_contact_alone_rejects():
     assert judge_rep(_metrics(knee_floor_contact=True), D) == (False, ["knees_down"])
-    assert judge_rep(_metrics(min_knee_deg=159.9), D) == (False, ["knees_down"])
-    assert judge_rep(_metrics(min_knee_deg=160.0), D) == (True, [])
+    assert judge_rep(_metrics(min_knee_deg=149.9), D) == (False, ["knees_down"])
+    assert judge_rep(_metrics(min_knee_deg=150.0), D) == (True, [])
 
 
 def test_knee_pushup_metrics():
@@ -155,25 +170,28 @@ def test_reason_priority_order_full():
     assert reasons == ["multiple_people", "not_in_frame", "knees_down", "hips_sag", "too_shallow", "no_lockout",
                        "too_fast", "not_horizontal", "classifier:pushups - shallow",
                        "classifier:Pushups - Knee Push-Up"]
-    assert judge_rep(_metrics(max_hip_line_dev_deg=-15.1), D) == (False, ["hips_pike"])
-    assert judge_rep(_metrics(max_hip_line_dev_deg=15.0), D) == (True, [])
-    assert judge_rep(_metrics(max_hip_line_dev_deg=-15.0), D) == (True, [])
+    assert judge_rep(_metrics(max_hip_line_dev_deg=-20.1), D) == (False, ["hips_pike"])
+    assert judge_rep(_metrics(max_hip_line_dev_deg=17.6), D) == (False, ["hips_sag"])
+    assert judge_rep(_metrics(max_hip_line_dev_deg=17.5), D) == (True, [])
+    assert judge_rep(_metrics(max_hip_line_dev_deg=-20.0), D) == (True, [])
 
 
-def test_depth_gate_uses_visible_side_and_shoulder_elbow_gap():
-    assert judge_rep(_metrics(min_elbow_deg_l=90.0), D) == (True, [])
-    assert judge_rep(_metrics(min_elbow_deg_l=90.5), D) == (False, ["too_shallow"])
+def test_depth_gate_uses_visible_side_and_shoulder_wrist_drop():
+    assert judge_rep(_metrics(min_elbow_deg_l=100.0), D) == (True, [])
+    assert judge_rep(_metrics(min_elbow_deg_l=100.5), D) == (False, ["too_shallow"])
     assert judge_rep(_metrics(side="right", min_elbow_deg_l=150.0, min_elbow_deg_r=80.0), D) == (True, [])
-    assert judge_rep(_metrics(side="right", min_elbow_deg_l=60.0, min_elbow_deg_r=95.0), D) == (False, ["too_shallow"])
-    assert judge_rep(_metrics(shoulder_elbow_gap=0.05), D) == (True, [])
-    assert judge_rep(_metrics(shoulder_elbow_gap=0.06), D) == (False, ["too_shallow"])
-    # shoulder_wrist_drop is informational only
-    assert judge_rep(_metrics(shoulder_wrist_drop=5.0), D) == (True, [])
+    assert judge_rep(_metrics(side="right", min_elbow_deg_l=60.0, min_elbow_deg_r=105.0), D) == (False, ["too_shallow"])
+    # drop ratio (bottom / top shoulder-to-wrist height): an elbow that reads deep cannot rescue a shallow shoulder
+    assert judge_rep(_metrics(shoulder_wrist_drop=0.75), D) == (True, [])
+    assert judge_rep(_metrics(shoulder_wrist_drop=0.76), D) == (False, ["too_shallow"])
+    assert judge_rep(_metrics(shoulder_wrist_drop=None), D) == (False, ["not_in_frame"])
+    # shoulder_elbow_gap is informational only (j2)
+    assert judge_rep(_metrics(shoulder_elbow_gap=5.0), D) == (True, [])
 
 
 def test_lockout_tempo_torso_gates():
-    assert judge_rep(_metrics(top_elbow_deg=159.0), D) == (False, ["no_lockout"])
-    assert judge_rep(_metrics(top_elbow_deg=160.0), D) == (True, [])
+    assert judge_rep(_metrics(top_elbow_deg=149.9), D) == (False, ["no_lockout"])
+    assert judge_rep(_metrics(top_elbow_deg=150.0), D) == (True, [])
     assert judge_rep(_metrics(rep_duration_s=0.79), D) == (False, ["too_fast"])
     assert judge_rep(_metrics(rep_duration_s=0.8, cadence_rpm=60.0), D) == (True, [])
     assert judge_rep(_metrics(cadence_rpm=61.0), D) == (False, ["too_fast"])
@@ -290,12 +308,13 @@ def test_counting_start_is_reset_and_whole_window_counts():
     ms = [acc.close_rep(tf, [], None) for tf in clip.fire_times]
     assert ms[0].rep_duration_s == pytest.approx(6.0)
     assert [judge_rep(m, D) for m in ms] == [(True, []), (True, [])]
-    # without the reset the setup frames belong to the first rep window and it fails the frame gate
+    # without the reset the setup frames still belong to the first rep window (duration), but the first rep is judged
+    # from its last lockout before the descent on, so unreadable setup frames cannot fail it (j2 rep window)
     acc = RepMetricsAccumulator(D)
     for f in junk + clip.frames:
         acc.add_frame(f)
     m = acc.close_rep(clip.fire_times[0], [], None)
-    assert m.rep_duration_s == pytest.approx(16.0) and judge_rep(m, D)[1][0] == "not_in_frame"
+    assert m.rep_duration_s == pytest.approx(16.0) and judge_rep(m, D) == (True, [])
 
 
 def test_torso_flag_passthrough_and_labels():
@@ -306,8 +325,8 @@ def test_torso_flag_passthrough_and_labels():
 
 def test_low_visibility_frames_reduce_frame_conf_frac():
     clip = synth_pushups(n_reps=1)
-    for f in clip.frames[5:12]:
-        f.img[[11, 12], 3] = 0.1                      # shoulders lost for 7 of ~31 frames
+    for f in clip.frames[_mid_rep_frames(clip, 1)[0] - 3:][:7]:
+        f.img[[11, 12], 3] = 0.1                      # shoulders lost for 7 frames around the bottom
     m = accumulate_clip(clip, D)[0]
     assert m.frame_conf_frac < 0.9 and m.min_keypoint_conf < 0.5
     assert judge_rep(m, D)[1][0] == "not_in_frame"
@@ -380,19 +399,23 @@ def _pass_rate(noise, **kw):
     return ok / n
 
 
-# Pass-rate bounds per case. The brief asked for <= 5% cheat / >= 95% clean everywhere; with per-frame elbow jitter of
+# Cases are relative to the thresholds (lockout thr - 10 / - 5, depth thr + 5 / + 10). Pass-rate bounds per case.
+# The brief asked for <= 5% cheat / >= 95% clean everywhere; with per-frame elbow jitter of
 # about 4 deg (sigma 0.01) and 9 deg (sigma 0.02) and only a few frames at the top/bottom of a 10 fps rep, a >= 2-frame
 # rule cannot separate a 155 deg lockout from the 160 deg threshold at sigma 0.02. These bounds pin what is achieved
-# (measured 0.01: clean 1.00, 150: 0.00, 155: 0.08, 95: 0.02, 100: 0.00; 0.02: clean 0.94, 150: 0.16, 155: 0.38,
-# 95: 0.14, 100: 0.00) so a regression fails; the gap is reported for threshold tuning on real clips.
+# (j2, measured 0.01: clean 1.00, lock-10: 0.00, lock-5: 0.10, depth+5: 0.04, depth+10: 0.00; 0.02: clean 1.00,
+# lock-10: 0.14, lock-5: 0.30, depth+5: 0.28, depth+10: 0.04) so a regression fails. depth+5 at sigma 0.02 is looser
+# than j1's 0.14 because the real-footage calibration dropped the shoulder-elbow gap gate (docs/challenge/CALIBRATION.md).
 NEAR = {
-    0.01: {"clean": (">=", 0.95), "lock150": ("<=", 0.05), "lock155": ("<=", 0.10), "depth95": ("<=", 0.05),
-           "depth100": ("<=", 0.05)},
-    0.02: {"clean": (">=", 0.90), "lock150": ("<=", 0.20), "lock155": ("<=", 0.40), "depth95": ("<=", 0.20),
-           "depth100": ("<=", 0.05)},
+    0.01: {"clean": (">=", 0.95), "lock_m10": ("<=", 0.05), "lock_m5": ("<=", 0.10), "depth_p5": ("<=", 0.05),
+           "depth_p10": ("<=", 0.05)},
+    0.02: {"clean": (">=", 0.90), "lock_m10": ("<=", 0.20), "lock_m5": ("<=", 0.40), "depth_p5": ("<=", 0.30),
+           "depth_p10": ("<=", 0.05)},
 }
-NEAR_KW = {"clean": {}, "lock150": dict(lockout=150.0), "lock155": dict(lockout=155.0), "depth95": dict(depth=95.0),
-           "depth100": dict(depth=100.0)}
+NEAR_KW = {"clean": {}, "lock_m10": dict(lockout=D["lockout_min_deg"] - 10.0),
+           "lock_m5": dict(lockout=D["lockout_min_deg"] - 5.0),
+           "depth_p5": dict(depth=D["depth_elbow_max_deg"] + 5.0),
+           "depth_p10": dict(depth=D["depth_elbow_max_deg"] + 10.0)}
 
 
 @pytest.mark.parametrize("noise", sorted(NEAR))
@@ -414,3 +437,56 @@ def test_knee_floor_margin_no_false_rejects_at_high_noise():
     for body, side in GRID:
         assert all(m.knee_floor_contact for m in accumulate_clip(
             synth_pushups(body=body, side=side, knees_down=True, noise=0.02, seed=1), D))
+
+
+def test_dispatcher_config_defaults_match_judge_defaults():
+    from challenge.config import DEFAULTS
+    assert DEFAULTS["judge_thresholds"] == D
+
+
+CALIBRATION_SQL = Path(__file__).resolve().parents[2] / "db" / "migrations" / "20261020_challenge_judge_calibration.sql"
+GATE_KEYS = [k for k, v in D.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
+             and not k.startswith(("liveness_", "cue_"))]
+
+
+def test_calibration_migration_sets_every_gate_value_explicitly():
+    sql = CALIBRATION_SQL.read_text()
+    obj = json.loads(re.search(r"\|\| '(\{.*?\})'::jsonb", sql, re.S).group(1))
+    assert {k: obj.get(k) for k in GATE_KEYS} == {k: D[k] for k in GATE_KEYS}
+    assert set(obj) <= set(D)
+
+
+def test_migrated_competition_config_judges_with_calibrated_thresholds(conn):
+    # the seeded judge_thresholds row overrides DEFAULT_THRESHOLDS, so the j2 migration must set every gate value
+    for _ in range(2):                                # applied once by the harness; re-running must be a no-op
+        v = conn.execute("select value from competition_config where key = 'judge_thresholds'").fetchone()[0]
+        assert "depth_margin" not in v and {k: v.get(k) for k in GATE_KEYS} == {k: D[k] for k in GATE_KEYS}
+        assert merged_thresholds(v) == D
+        conn.execute(CALIBRATION_SQL.read_text())
+    for role in ("anon", "authenticated"):
+        assert conn.execute("select has_function_privilege(%s, 'ch_stamp_frozen_at()', 'execute')",
+                            (role,)).fetchone()[0] is False
+
+
+def _hips_settling(clip, side, t0, t_from=0.0):
+    """Hips 0.12 frame heights high (about -27 deg pike) from t_from until 0.6 s into the descent that starts at t0,
+    then coming down linearly onto the plank line by t0 + 0.8 s (bottom at t0 + 1.0)."""
+    h = 23 if side == "left" else 24
+    for f in clip.frames:
+        if t_from <= f.t < t0 + 0.8:
+            f.img[h, 1] -= 0.12 * min(1.0, (t0 + 0.8 - f.t) / 0.2)
+
+
+@pytest.mark.parametrize("side", SIDES)
+def test_first_rep_walk_in_pike_ignored_later_pike_kept(side):
+    # walking into the plank: hips still coming down through the first part of the first descent (px_8456661 rep 1)
+    clip = synth_pushups(n_reps=2, side=side)                     # descents start at 1.0 and 3.0 s
+    _hips_settling(clip, side, 1.0)
+    assert [v for v, _ in verdicts(clip)] == [True, True]
+    # the same hip path in a later rep is a pike (that rep is not a walk-in)
+    clip = synth_pushups(n_reps=2, side=side)
+    _hips_settling(clip, side, 3.0, t_from=3.0)
+    assert verdicts(clip) == [(True, []), (False, ["hips_pike"])]
+    # a first rep that never reaches the plank line is still a pike
+    clip = synth_pushups(n_reps=1, side=side, hip_offset=-0.15)
+    assert verdicts(clip)[0][1][0] == "hips_pike"

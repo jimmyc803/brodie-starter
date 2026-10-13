@@ -7,7 +7,9 @@ Loads every stored rep that has metrics (RPC ch_rejudge_fetch), recomputes valid
 challenge.judge.gates.judge_rep over DEFAULT_THRESHOLDS overlaid by the --thresholds JSON, and prints a diff report:
 reps whose verdict changes and, per user, points before -> after. Facts the judge does not decide are kept: reasons set
 at commit by the clock/liveness rules (after_freeze, before_start, after_count, liveness_fail) and in_challenge reps stay
-rejected; points = the rep's stored multiplier when valid, else 0. --apply writes the changed reps in ONE transaction via
+rejected; points = the rep's stored multiplier when valid, else 0. Reps whose judge_version family (the part before the
+first '.') is not the current JUDGE_VERSION are kept as stored and reported as skipped (their metrics mean different
+things, e.g. j1 shoulder_wrist_drop vs the j2 ratio). --apply writes the changed reps in ONE transaction via
 ch_rejudge_apply (which also writes the audit_log row); --actor and --reason are required with --apply.
 Needs ch_rejudge_fetch / ch_rejudge_apply from db/migrations/20261015_challenge_rejudge.sql (NEEDS-SQL is printed if absent).
 Exit: 0 ok, 2 usage / missing RPC.
@@ -48,6 +50,7 @@ class RepDiff:
     new_reasons: list[str]
     old_points: int
     new_points: int
+    skipped: str | None = None        # why the rep was not re-judged (verdict kept as stored)
 
     @property
     def changed(self) -> bool:
@@ -67,10 +70,25 @@ def metrics_from_row(row: dict[str, Any]) -> RepMetrics:
         classifier_labels=list(row.get("classifier_labels") or []), shoulder_elbow_gap=row.get("shoulder_elbow_gap"))
 
 
+def judge_family(version: Any) -> str:
+    """'j2' for 'j2' and 'j2.rejudge.20261020' (ch_rejudge_apply stamps <family>.rejudge.<date>)."""
+    return str(version or "").split(".", 1)[0]
+
+
 def rejudge_row(row: dict[str, Any], thr: dict) -> RepDiff:
-    """Recompute one stored rep. Commit-time facts (window/liveness reasons, in_challenge) are preserved."""
-    valid, reasons = judge_rep(metrics_from_row(row), thr)
+    """Recompute one stored rep. Commit-time facts (window/liveness reasons, in_challenge) are preserved.
+    Only reps whose metrics were computed by the current judge family are re-judged: j1 metrics mean different things
+    (shoulder_wrist_drop was an absolute drop, not the j2 bottom/top ratio; different judged frames), so judging them
+    with the current gates would invent verdicts. Those reps are kept as stored and reported as skipped."""
     old_reasons = list(row.get("reject_reasons") or [])
+    if judge_family(row.get("judge_version")) != JUDGE_VERSION:
+        old_valid, old_points = bool(row.get("valid")), int(row.get("points") or 0)
+        return RepDiff(rep_id=str(row["rep_id"]), call_id=str(row["call_id"]), user_id=str(row["user_id"]),
+                       display_name=row.get("display_name"), rep_number=int(row.get("rep_number") or 0),
+                       old_valid=old_valid, new_valid=old_valid, old_reasons=old_reasons,
+                       new_reasons=list(old_reasons), old_points=old_points, new_points=old_points,
+                       skipped=f"judge_version {row.get('judge_version')!r} is not {JUDGE_VERSION}: metrics not comparable")
+    valid, reasons = judge_rep(metrics_from_row(row), thr)
     extras = [r for r in old_reasons if r in COMMIT_REASONS]
     in_challenge = bool(row.get("in_challenge"))
     new_reasons = list(reasons) + [r for r in extras if r not in reasons]
@@ -111,6 +129,12 @@ def report(diffs: list[RepDiff]) -> str:
             flips[f"+{r}"] = flips.get(f"+{r}", 0) + 1
         for r in set(d.old_reasons) - set(d.new_reasons):
             flips[f"-{r}"] = flips.get(f"-{r}", 0) + 1
+    skipped: dict[str, int] = {}
+    for d in diffs:
+        if d.skipped:
+            skipped[d.skipped] = skipped.get(d.skipped, 0) + 1
+    for why, n in sorted(skipped.items()):
+        lines.append(f"skipped (kept as stored): {n} reps, {why}")
     if flips:
         lines.append("reason changes: " + ", ".join(f"{k}:{v}" for k, v in sorted(flips.items())))
     users = user_deltas(diffs)

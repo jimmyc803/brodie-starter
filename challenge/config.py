@@ -25,9 +25,9 @@ DEFAULTS: dict[str, Any] = {
     "streak_risk_hour": 20,
     "avatar_level_thresholds": [0, 25, 60, 120, 200, 300, 450, 650, 900, 1200],
     "judge_thresholds": {
-        "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 160, "knee_floor_margin": 0.04,
-        "hip_line_max_dev_deg": 15, "depth_elbow_max_deg": 90, "depth_margin": 0.05, "lockout_min_deg": 160,
-        "min_rep_s": 0.8, "max_cadence_rpm": 60,
+        "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 150, "knee_floor_margin": 0.02,
+        "hip_line_max_dev_deg": 17.5, "hip_pike_max_dev_deg": 20, "depth_elbow_max_deg": 100, "depth_drop_max": 0.75,
+        "lockout_min_deg": 150, "incline_max_deg": 9, "decline_max_deg": 23, "min_rep_s": 0.8, "max_cadence_rpm": 60,
         "classifier_veto": ["pushups - shallow", "pushups - insufficient", "pushups - elevated hips"],
         "classifier_veto_substrings": ["knee", "sag"], "liveness_window_s": [45, 150],
         "liveness_timeout_s": 4, "cue_min_gap_s": 4,

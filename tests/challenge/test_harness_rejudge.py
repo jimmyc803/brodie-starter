@@ -190,7 +190,7 @@ def row(i, user="u1", **kw):
          "min_elbow_deg_r": None, "top_elbow_deg": 175.0, "max_hip_line_dev_deg": 3.0, "min_knee_deg": 175.0,
          "knee_floor_contact": False, "shoulder_wrist_drop": 0.1, "shoulder_elbow_gap": 0.01, "min_keypoint_conf": 0.9,
          "frame_conf_frac": 0.99, "persons_in_frame": 1, "rep_duration_s": 2.0, "torso_ok": True, "side": "left",
-         "classifier_labels": ["pushups - correct"]}
+         "classifier_labels": ["pushups - correct"], "judge_version": JUDGE_VERSION}
     r.update(kw)
     return r
 
@@ -206,6 +206,23 @@ class FakeStore:
         if fn == "ch_rejudge_apply":
             return {"ok": True, "changed": len(args["p_changes"])}
         raise StoreError(f"{fn}: function does not exist")
+
+
+def test_rejudge_skips_reps_of_another_judge_family():
+    # j1 stored shoulder_wrist_drop as an absolute drop (0.1 would read as a j2 ratio far below depth_drop_max either
+    # way, so use a value that j2 would reject): such a rep must be kept as stored, not re-judged with j2 gates
+    rows = [row(1, judge_version="j1", shoulder_wrist_drop=1.2), row(2, judge_version="j1.rejudge.20261015",
+            shoulder_wrist_drop=1.2), row(3, judge_version=None, shoulder_wrist_drop=1.2),
+            row(4, judge_version=f"{JUDGE_VERSION}.rejudge.20261020", shoulder_wrist_drop=1.2)]
+    d = rj.rejudge_rows(rows, {})
+    assert [x.changed for x in d] == [False, False, False, True]
+    assert all(x.skipped and x.new_valid and x.new_points == 1 for x in d[:3]) and d[3].skipped is None
+    assert d[3].new_reasons == ["too_shallow"]
+    rep = rj.report(d)
+    assert "skipped (kept as stored): 1 reps, judge_version 'j1' is not" in rep and "verdict changed: 1" in rep
+    st = FakeStore(rows)
+    assert rj.apply_changes(st, d, {}, "v", "a", "r")["changed"] == 1
+    assert [c["rep_id"] for c in st.calls[-1][1]["p_changes"]] == ["r4"]
 
 
 def test_rejudge_row_unchanged_under_same_thresholds():
@@ -324,6 +341,7 @@ def commit(st, cid, handle, reps):
     assert r["decision"] == "accept", r
     ev_ = commit_ev(cid)
     ev_["payload"]["reps"] = reps
+    ev_["payload"]["judge_version"] = JUDGE_VERSION
     assert st.rpc("ch_commit_reps", {"p_call_id": cid, "p_payload": ev_["payload"], "p_now": T0 + timedelta(seconds=200)})["ok"]
 
 
@@ -358,7 +376,7 @@ def test_rejudge_end_to_end(st, conn, tmp_path, capsys):
     assert rj.main(["--thresholds", f, "--apply", "--actor", "admin@x.io", "--reason", "tighten sag"], st) == 0
     got = conn.execute("select rep_number, valid, reject_reasons, points, judge_version from reps order by rep_number").fetchall()
     assert [(g[0], g[1], g[2], g[3]) for g in got[:3]] == [(1, False, ["hips_sag"], 0), (2, True, [], 1), (3, False, ["hips_sag"], 0)]
-    assert got[0][4].startswith(JUDGE_VERSION + ".rejudge.") and got[1][4] == "j1"
+    assert got[0][4].startswith(JUDGE_VERSION + ".rejudge.") and got[1][4] == JUDGE_VERSION
     (a,) = conn.execute("select actor, action, reason, before, after from audit_log where action='rejudge'").fetchall()
     assert a[0] == "admin@x.io" and a[2] == "tighten sag"
     assert a[4]["reps_changed"] == 1 and a[4]["thresholds"]["hip_line_max_dev_deg"] == 10

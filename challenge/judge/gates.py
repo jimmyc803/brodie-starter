@@ -13,14 +13,17 @@ Gate definitions (metrics are defined precisely in challenge/judge/metrics.py):
                    occluded rep reports not_in_frame rather than a guessed fault.
   knees_down       min_knee_deg < knee_min_deg OR knee_floor_contact.
   hips_sag         max_hip_line_dev_deg >  hip_line_max_dev_deg   (signed: + = hips below the shoulder-ankle line).
-  hips_pike        max_hip_line_dev_deg < -hip_line_max_dev_deg.
-  too_shallow      visible-side min elbow > depth_elbow_max_deg OR shoulder_elbow_gap > depth_margin
-                   (shoulder must reach elbow height within depth_margin torso lengths; contract amendment to C5).
+  hips_pike        max_hip_line_dev_deg < -hip_pike_max_dev_deg   (j2: separate pike limit).
+  too_shallow      visible-side min elbow > depth_elbow_max_deg OR shoulder_wrist_drop > depth_drop_max
+                   (j2: drop = bottom / top shoulder-above-wrist height; the shoulder must close at least
+                   1 - depth_drop_max of its lockout height. shoulder_elbow_gap is stored but informational).
   no_lockout       top_elbow_deg < lockout_min_deg.
   too_fast         rep_duration_s < min_rep_s OR cadence_rpm > max_cadence_rpm (cadence only once 5 reps exist).
-  not_horizontal   not torso_ok.
+  not_horizontal   not torso_ok (torso_ok also folds in the incline_max_deg / decline_max_deg support-line tilt, which
+                   is evaluated when the metrics are computed, so a rejudge cannot change it; same for knee_floor_margin).
   classifier:<l>   label l (case-insensitive) is in classifier_veto or contains any classifier_veto_substrings.
-Missing threshold keys fall back to DEFAULT_THRESHOLDS.
+Missing threshold keys fall back to DEFAULT_THRESHOLDS. Values are calibrated on real footage in
+docs/challenge/CALIBRATION.md (j2).
 """
 from __future__ import annotations
 
@@ -30,11 +33,11 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from challenge.judge.metrics import RepMetrics
 
-JUDGE_VERSION = "j1"
+JUDGE_VERSION = "j2"
 DEFAULT_THRESHOLDS: dict[str, Any] = {
-    "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 160, "knee_floor_margin": 0.02,
-    "hip_line_max_dev_deg": 15, "depth_elbow_max_deg": 90, "depth_margin": 0.05, "lockout_min_deg": 160,
-    "min_rep_s": 0.8, "max_cadence_rpm": 60,
+    "min_conf": 0.5, "frame_conf_frac": 0.9, "knee_min_deg": 150, "knee_floor_margin": 0.02,
+    "hip_line_max_dev_deg": 17.5, "hip_pike_max_dev_deg": 20, "depth_elbow_max_deg": 100, "depth_drop_max": 0.75,
+    "lockout_min_deg": 150, "incline_max_deg": 9, "decline_max_deg": 23, "min_rep_s": 0.8, "max_cadence_rpm": 60,
     "classifier_veto": ["pushups - shallow", "pushups - insufficient", "pushups - elevated hips"],
     "classifier_veto_substrings": ["knee", "sag"], "liveness_window_s": [45, 150], "liveness_timeout_s": 4,
     "cue_min_gap_s": 4,
@@ -73,7 +76,7 @@ def judge_rep(m: RepMetrics, thr: dict) -> tuple[bool, list[str]]:
     if m.persons_in_frame > 1:
         r.append("multiple_people")
     elbow_vis = m.min_elbow_deg_l if m.side == "left" else m.min_elbow_deg_r if m.side == "right" else None
-    needed = (m.min_knee_deg, m.knee_floor_contact, m.max_hip_line_dev_deg, elbow_vis, m.shoulder_elbow_gap,
+    needed = (m.min_knee_deg, m.knee_floor_contact, m.max_hip_line_dev_deg, elbow_vis, m.shoulder_wrist_drop,
               m.top_elbow_deg)
     if (m.persons_in_frame < 1 or _missing(m.frame_conf_frac) or m.frame_conf_frac < t["frame_conf_frac"]
             or any(_missing(x) for x in needed)):
@@ -84,10 +87,10 @@ def judge_rep(m: RepMetrics, thr: dict) -> tuple[bool, list[str]]:
     if not _missing(m.max_hip_line_dev_deg):
         if m.max_hip_line_dev_deg > t["hip_line_max_dev_deg"]:
             r.append("hips_sag")
-        elif m.max_hip_line_dev_deg < -t["hip_line_max_dev_deg"]:
+        elif m.max_hip_line_dev_deg < -t["hip_pike_max_dev_deg"]:
             r.append("hips_pike")
-    if not _missing(elbow_vis) and not _missing(m.shoulder_elbow_gap):
-        if elbow_vis > t["depth_elbow_max_deg"] or m.shoulder_elbow_gap > t["depth_margin"]:
+    if not _missing(elbow_vis) and not _missing(m.shoulder_wrist_drop):
+        if elbow_vis > t["depth_elbow_max_deg"] or m.shoulder_wrist_drop > t["depth_drop_max"]:
             r.append("too_shallow")
     if not _missing(m.top_elbow_deg) and m.top_elbow_deg < t["lockout_min_deg"]:
         r.append("no_lockout")
