@@ -106,13 +106,16 @@ LOCK_SAMPLES = 3                           # poses before the first framing (a c
 # picture stays inside the visible band (it may run under the island's edge and the self-view: it is only video).
 LW, LH = 1280, 720
 LS_CROP_Y = 65
-LS_SAFE_X = 72
+LS_SAFE_X = 260                            # a live call (2026-10-13, image of the count ticket cut at the screen edge)
+                                           # showed FaceTime/the phone trimming up to ~250 px off each side of the card
+                                           # (a pinched or portrait-tile fill), so every overlay stays in the central
+                                           # band that survives any of the observed crops; the video itself is full-bleed
 LS_SAFE_TOP = LS_CROP_Y + 15               # 80
 LS_SAFE_BOTTOM = LH - LS_CROP_Y - 15       # 640
 LS_PIP_W, LS_PIP_H = 220, 170              # self-view keep-out: x < LS_PIP_W or x > LW - LS_PIP_W, y > LH - LS_CROP_Y - LS_PIP_H
 LS_ZOOM_MAX = 1.75                         # full-bleed: cover the canvas, zooming at most this far past the plain fit
 LS_MASCOT_H = 180
-LS_MASCOT_CX = 940                         # bottom centre-right (his art + shadow end before the right self-view keep-out)
+LS_MASCOT_CX = 870                         # bottom centre-right, inside the trimmed band (and clear of the self-view)
 LS_MASCOT_FEET = LS_SAFE_BOTTOM
 LS_COUNT_PX = (110, 230)
 LS_COUNT_W = 264                           # the count ticket, top right: x LW-LS_SAFE_X-LS_COUNT_W .. LW-LS_SAFE_X
@@ -805,13 +808,15 @@ class PushupMirror:
         self._count_at(img, state, now, cx0 + 18, cy, fit, LS_COUNT_PX, LS_COUNT_W - 64)
         # top centre: the status pill / verdict stamp (between the tickets, over the picture)
         pill = self._pill_sprite(); ph, pw = pill[1].shape[:2]
-        py = LS_SAFE_TOP + 10; px = LW // 2 - pw // 2
+        wm_right = LS_SAFE_X + wm[1].shape[1]
+        pcx = (wm_right + LW - LS_SAFE_X - LS_COUNT_W) // 2              # centred between the wordmark and the count ticket
+        py = LS_SAFE_TOP + 10; px = pcx - pw // 2
         self._label_y0 = py + ph + 8
         if self.ls_mascot is not None: self._mascot(img, state, now, self.ls_mascot, LS_MASCOT_CX, LS_MASCOT_FEET)
         s = self._stamp_sprite(state, now)
         if s is not None:
             srgb, sa, op = s; h, w_ = sa.shape[:2]
-            self._blit(img, 'stamp', srgb, sa, LW // 2 - w_ // 2, py + ph // 2 - h // 2 + 16, opacity=op)
+            self._blit(img, 'stamp', srgb, sa, pcx - w_ // 2, py + ph // 2 - h // 2 + 16, opacity=op)
         else:
             self._blit(img, 'pill', *pill, px, py)
         if self._cue_on(state, now) and self.ls_mascot is not None:   # his bubble: left of him, over the picture
