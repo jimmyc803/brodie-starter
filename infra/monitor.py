@@ -93,11 +93,18 @@ def unit_active(unit):
 
 def check_chert(now=None):
     window_min = int(os.environ.get('CHERT_JOURNAL_WINDOW_MIN', '30'))
+    lookback_min = int(os.environ.get('CHERT_JOURNAL_LOOKBACK_MIN', '1440'))
     lost_grace_min = int(os.environ.get('CHERT_LOST_ALERT_MIN', '10'))
     now = now or datetime.datetime.now(datetime.timezone.utc)
     active = unit_active(CHERT_UNIT)
     entries = journal_entries(CHERT_UNIT, window_min) if active else []
-    return chert_status(active, entries, now, window_min, lost_grace_min)
+    status = chert_status(active, entries, now, window_min, lost_grace_min)
+    if active and status[0] == 'fail' and status[1].startswith('no connected'):
+        # A healthy idle agent logs nothing (live 2026-10-13: a quiet evening emptied the 30-min window and texted
+        # a false 'unhealthy'): judge from its latest state line further back before calling silence a failure.
+        entries = journal_entries(CHERT_UNIT, lookback_min)
+        status = chert_status(active, entries, now, lookback_min, lost_grace_min)
+    return status
 
 
 def ping(name, body):
@@ -156,8 +163,17 @@ def main():
           COALESCE((SELECT (value::text)::int FROM competition_config WHERE key='in_call_timeout_extra_s'),60) + 120))),
       'failed', (SELECT count(*) FROM messages WHERE direction='out' AND status='failed'
         AND created_at > now() - interval '5 minutes'),
-      'stale', (SELECT count(*) FROM heartbeats WHERE at < now() - interval '180 seconds'));
+      'stale', (SELECT count(*) FROM heartbeats h WHERE h.at < now() - interval '180 seconds'
+        AND h.component NOT LIKE 'warn:%'
+        AND (h.component NOT LIKE 'worker:%:job' OR EXISTS (
+          SELECT 1 FROM line_state ls WHERE ls.line_id = split_part(h.component, ':', 2)
+            AND ls.state = 'in_call'))));
     """
+    # stale: the contractual rows only. A 'worker:<line>:job' row is per-call bookkeeping that lingers after the
+    # call (live 2026-10-13: a cut-off call plus the caller's daily limit left one aging all evening, texting
+    # 'Stale application heartbeat records' every minute); a wedged job DURING a call still counts, and also
+    # surfaces through the aggregate 'worker' row (only healthy beats refresh it) and the line_state stuck check.
+    # 'warn:*' rows are one-shot markers, never refreshed.
     env = pg_env(os.environ['SUPABASE_DB_URL'])
     result = subprocess.run(['psql', '-X', '-At', '-v', 'ON_ERROR_STOP=1', '-c', query],
                             env=env, capture_output=True, text=True, timeout=25, check=True)
