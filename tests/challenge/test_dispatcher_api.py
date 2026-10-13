@@ -107,12 +107,58 @@ def test_start_accept_and_reject(env):
     assert j2["user_id"] is None
 
 
+def test_calling_busy_line_auto_queues_and_texts(env):
+    c, conn, st, ob, now = env
+    a, ha = mkuser(conn)
+    b, hb = mkuser(conn)
+    assert start(c, "c-a", ha).json()["decision"] == "accept"
+    j = start(c, "c-b", hb).json()
+    assert j["decision"] == "reject" and j["reason"] == "queued" and j["cue"] == "queued" and j["position"] == 1
+    assert conn.execute("select user_id::text, status from queue").fetchall() == [(b, "waiting")]
+    assert conn.execute("select reject_reason from calls where id='c-b'").fetchone()[0] == "not_your_turn"
+    [sent] = ob.sent
+    assert sent["user_id"] == b and sent["template"] == "call_queued" and sent["dedupe_key"] == "call:c-b"
+    assert sent["ctx"]["position"] == 1 and sent["ctx"]["eta"] and sent["proactive"] is False
+    assert start(c, "c-b", hb).json() == j  # replay: same answer, still one queue entry, text deduped
+    assert conn.execute("select count(*) from queue").fetchone()[0] == 1 and len(ob.sent) == 1
+    j2 = start(c, "c-b2", hb).json()  # calling again while waiting keeps the spot
+    assert j2["reason"] == "queued" and j2["position"] == 1
+    assert conn.execute("select count(*) from queue").fetchone()[0] == 1
+
+
+def test_unregistered_caller_is_texted_join(env):
+    c, conn, st, ob, now = env
+    j = start(c, "c-new", "+19995550000").json()
+    assert j["reason"] == "not_registered" and j["cue"] == "not_signed_up"
+    assert [(s["handle"], s["template"], s["dedupe_key"]) for s in ob.sent] == [
+        ("+19995550000", "not_registered", "call:c-new")]
+
+
+def test_at_cap_caller_is_not_queued(env):
+    c, conn, st, ob, now = env
+    old = conn.execute("select value from competition_config where key = 'daily_call_cap'").fetchone()
+    conn.execute("insert into competition_config (key, value) values ('daily_call_cap', '0')"
+                 " on conflict (key) do update set value = excluded.value")
+    try:
+        _, h = mkuser(conn)
+        j = start(c, "c-cap", h).json()
+        assert j["reason"] == "at_cap" and ob.sent == []
+        assert conn.execute("select count(*) from queue").fetchone()[0] == 0
+    finally:
+        if old:
+            conn.execute("update competition_config set value = %s where key = 'daily_call_cap'", (Jsonb(old[0]),))
+        else:
+            conn.execute("delete from competition_config where key = 'daily_call_cap'")
+
+
 def test_claim_window_mode_rejects_walkin(db, conn):
     conn.execute("update line_state set state='idle', user_id=null, call_id=null, claimed_until=null,"
                  " offline_until=null, in_call_since=null")
     app = create_app(PgStore(db), FakeOutbox(), clock=lambda: T0, flags=Flags(CALLER_ID_SOURCE="claim_window"), token="tok")
+    ob = FakeOutbox()
+    app = create_app(PgStore(db), ob, clock=lambda: T0, flags=Flags(CALLER_ID_SOURCE="claim_window"), token="tok")
     j = TestClient(app).post("/calls/start", headers=H, json={"call_id": "c-walk", "line_id": "line-1"}).json()
-    assert j["decision"] == "reject" and j["reason"] == "not_your_turn"
+    assert j["decision"] == "reject" and j["reason"] == "not_your_turn" and ob.sent == []
 
 
 def test_end_and_commit_idempotent_with_postcall(env):

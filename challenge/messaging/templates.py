@@ -6,13 +6,14 @@ and opt-out enforcement belong to the outbox, not this pure renderer.
 
 
 TEMPLATES: dict[str, str] = {
-    "welcome": "You're in, {display_name}! Let's stack clean reps. Text QUEUE to get in line, STATUS for your stats.",
+    "welcome": "You're in, {display_name}! Let's stack clean reps. FaceTime Brodie anytime: if the line's busy you're put in line automatically. STATUS for your stats.",
     "join_confirm_prompt": "Clean push-ups earn points; power hour reps earn 2×. Daily call cap applies. One person, one account; 18+, US, iPhone. Reply YES to confirm you're 18+, in the US, and agree to the rules.",
     "join_bad_name": "Let's pick a clean name: 3–20 letters, numbers, or underscores. Text JOIN your_name.",
     "join_taken": "That name's already on the board. Pick another and text JOIN your_name. Your spot is waiting!",
     "queue_joined": "You're in line! Position #{position}, ETA {eta}. {calls_left} calls left today. Get warmed up!",
     "queue_line_open": "Line's open — FaceTime now! {calls_left} calls left today. Let's get clean reps!",
     "queue_at_cap": "You've hit today's call limit. Strong work showing up — come back tomorrow!",
+    "call_queued": "Line's busy, so you're in line: #{position}, ETA {eta}. We'll text you when you're up, then FaceTime back. {calls_left} calls left today.",
     "queue_already": "You're already in line: #{position}, ETA {eta}. Stay ready!",
     "queue_in_call": "You're already in a call. Focus on those clean reps — you've got this!",
     "youre_up": "You're up! FaceTime now — you've got {claim_window_s}s to claim your turn. Let's go!",

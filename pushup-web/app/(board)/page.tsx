@@ -150,9 +150,9 @@ export default async function Home() {
             <p className="font-display text-3xl uppercase">How to play</p>
             <ol className="mt-4 space-y-4">
               {[
-                ["Text JOIN + your name", "Pick the name shown on the board."],
-                ["Text QUEUE", "We text you when the line is yours."],
-                ["FaceTime and rep out", "3 minutes. Every strict rep counts."],
+                ["Text JOIN + your name", "Once. Pick the name shown on the board."],
+                ["FaceTime Brodie", "Line open? You're on. Busy? You're put in line and we text you when you're up."],
+                ["Rep out", "3 minutes. Every strict rep counts."],
               ].map(([t, d], i) => (
                 <li key={t} className="flex gap-3">
                   <span className="font-display text-5xl leading-[0.8] type-outline">{i + 1}</span>

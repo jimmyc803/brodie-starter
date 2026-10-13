@@ -152,6 +152,10 @@ Args dict keys are the SQL parameter names (`p_now`, …); datetimes passed as I
 ## C4. Dispatcher HTTP API (FastAPI, `challenge.dispatcher.app:app`)
 Auth: worker endpoints require header `X-Brodie-Token: $DISPATCHER_TOKEN`; admin endpoints require the same token plus `X-Admin-Email` (website server only, admin email verified by the site); webhooks verified per provider.
 - `POST /calls/start` `{call_id, line_id, handle?}` → `{decision, user_id?, reason, cue}`
+  Call-to-queue (chert_meta only): a `not_your_turn` reject of a known caller runs `ch_queue_join`; on ok/already/opted_out_ok the
+  response becomes `reason:'queued', cue:'queued', position` and the caller is texted `call_queued` (dedupe `call:<call_id>`).
+  A `not_registered` caller with a handle is texted `not_registered` (JOIN instructions). calls.reject_reason stays `not_your_turn`.
+  Best effort: a failure there is logged and the plain reject is returned.
 - `POST /calls/event` `{kind: 'call_started'|'call_ended'|'reps_committed', call_id, idem_key, at, payload}` → `{ok}`.
   `call_ended.payload = {ended_at, count_end_at, rep_count}`; `reps_committed.payload` = ch_commit_reps payload (dispatcher calls ch_commit_reps, then post-call processing: result text/card, rank deltas).
 - `POST /webhooks/chert` (provider-specific body) → 200; `POST /web/queue` `{action:'join'|'leave'}` + `Authorization: Bearer <supabase user jwt>` (web_only mode); `GET /web/me` same auth.

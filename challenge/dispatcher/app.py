@@ -26,6 +26,7 @@ from challenge.dispatcher.powerhour import require_secret
 from challenge.dispatcher.ratelimit import DEFAULT_PER_MIN, RateLimiter, rate_limit
 from challenge.messaging.outbox import Outbox as SendOutbox
 from challenge.messaging.providers import provider_from_env
+from challenge.scoring import eta_range, format_eta
 from challenge.store import Json, Store, StoreError, store_from_env
 
 logger = logging.getLogger("challenge.dispatcher")
@@ -123,9 +124,37 @@ def create_app(store: Store | None = None, outbox: Outbox | None = None,
 
     @app.post("/calls/start", dependencies=[Depends(auth)])
     def calls_start(body: StartIn) -> dict:
+        now = clock()
         r = rpc("ch_call_start", {"p_call_id": body.call_id, "p_line_id": body.line_id,
-                                  "p_handle": body.handle, "p_mode": flags.CALLER_ID_SOURCE, "p_now": clock()})
-        return {"decision": r["decision"], "user_id": r.get("user_id"), "reason": r["reason"], "cue": r.get("cue")}
+                                  "p_handle": body.handle, "p_mode": flags.CALLER_ID_SOURCE, "p_now": now})
+        out = {"decision": r["decision"], "user_id": r.get("user_id"), "reason": r["reason"], "cue": r.get("cue")}
+        if flags.CALLER_ID_SOURCE == "chert_meta" and out["decision"] == "reject":
+            out.update(_call_to_queue(body, out, now))
+        return out
+
+    def _call_to_queue(body: StartIn, out: dict, now: datetime) -> dict:
+        """Calling a busy line is the same as texting QUEUE: a known caller is put in line and texted
+        their spot; an unknown caller is texted how to JOIN. Only possible with caller ID (chert_meta).
+        Idempotent per call_id: a replayed start re-joins as 'already' and the text dedupes on call:<id>.
+        Best effort: a failure here never changes the start decision the worker already needs."""
+        try:
+            if out["reason"] == "not_registered" and body.handle:
+                get_outbox().enqueue(handle=body.handle, template="not_registered", ctx={},
+                                     dedupe_key=f"call:{body.call_id}", proactive=False)
+                return {}
+            if out["reason"] != "not_your_turn" or not out["user_id"]:
+                return {}
+            q = get_store().rpc("ch_queue_join", {"p_user_id": out["user_id"], "p_now": now})
+            if q["reason"] not in ("ok", "already", "opted_out_ok"):
+                return {}
+            view = get_store().rpc("ch_queue_view", {"p_now": now})
+            ctx = {**q, "eta": format_eta(*eta_range(q["position"] or 1, view["avg_cycle_s"]))}
+            get_outbox().enqueue(user_id=out["user_id"], template="call_queued", ctx=ctx,
+                                 dedupe_key=f"call:{body.call_id}", proactive=False)
+            return {"reason": "queued", "cue": "queued", "position": q["position"]}
+        except (StoreError, KeyError, TypeError) as e:
+            logger.error("call %s: auto-queue failed: %s", body.call_id, e)
+            return {}
 
     @app.post("/calls/event", dependencies=[Depends(auth)])
     def calls_event(ev: EventIn) -> dict:

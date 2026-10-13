@@ -15,6 +15,7 @@ CUES = {
     'challenge_passed': 'Challenge passed',
     'challenge_failed': 'Challenge failed — reps voided.',
     'not_your_turn': 'Not your turn — text QUEUE to Brodie to get in line.',
+    'queued': "Line's busy — you're in line. We'll text you when it's your turn.",
     'at_cap': "You've hit today's limit — come back tomorrow.",
     'not_signed_up': "You're not signed up yet — text JOIN and your name to Brodie.",
     'competition_over': 'The competition is over — thanks for playing.',
