@@ -467,6 +467,9 @@ class CoachJob:
     def end(self, reason):
         """End the job (event loop): run() wakes, cleans up and returns, then tells the framework (shutdown_ctx)."""
         if self.end_reason is None: self.end_reason = reason
+        try:
+            if getattr(self, 'comp', None) is not None: self.comp.cancel_reveal()
+        except Exception as e: log.debug('cancel_reveal: %r', e)
         if self.t_end is None: self.t_end = time.monotonic()
         self.done.set()
 
@@ -661,10 +664,10 @@ class CoachJob:
         self.comp_task = asyncio.create_task(self._run_competition(), name='competition')
         self.hb_task = asyncio.create_task(self._job_heartbeat(), name='job-heartbeat')
 
-    async def reveal_video(self, points, seconds):
+    async def reveal_video(self, seconds, wait_committed):
         """REVEAL_MODE=video (C7.v): card/fallback frame as a video track for the reveal; never raises."""
         from challenge.worker.reveal_video import publish_reveal
-        return await publish_reveal(self.room, self.call_id, points, None, seconds)
+        return await publish_reveal(self.room, self.call_id, seconds, wait_committed)
 
     async def _run_competition(self):
         try:

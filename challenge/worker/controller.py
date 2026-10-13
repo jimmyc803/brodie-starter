@@ -175,7 +175,7 @@ class CompetitionCall:
                  sleep: Callable[[float], Awaitable[Any]] | None = None,
                  commit_deadline_s: float = COMMIT_DEADLINE_S, drain_max_s: float = DRAIN_MAX_S,
                  chert_call_id: str | None = None, chert_end: Any = None,
-                 reveal: Callable[[int, float], Awaitable[Any]] | None = None):
+                 reveal: Callable[[float, Callable[[], Awaitable[dict]]], Awaitable[Any]] | None = None):
         check_modes(hangup_mode, reveal_mode)
         self.call_id, self.line_id, self.handle = str(call_id), str(line_id), handle
         self.dispatcher = dispatcher
@@ -186,7 +186,10 @@ class CompetitionCall:
         self.count_s = float(count_s if count_s is not None else DEFAULT_COUNT_S)
         self.reveal_s = float(reveal_s if reveal_s is not None else DEFAULT_REVEAL_S)
         self.reveal_mode, self.hangup_mode = reveal_mode, hangup_mode
-        self._reveal_fn = reveal                   # REVEAL_MODE=video (C7.v): async (points, seconds) -> published?
+        self._reveal_fn = reveal                   # REVEAL_MODE=video (C7.v): async (seconds, wait_committed) -> published?
+        self._reveal_task: asyncio.Future | None = None
+        self._commit_evt = asyncio.Event()         # set once the dispatcher acknowledged reps_committed
+        self.commit_result: dict = {}              # that response's authoritative points/rank, when it carries them
         self.chert_call_id, self._chert_end = chert_call_id, chert_end    # HANGUP_MODE=chert_api (C7.h)
         self.chert_hangup: str | None = None       # acknowledged | failed | no_call_id once the end-call was tried
         self.path = checkpoint_path(self.call_id, checkpoint_dir)
@@ -252,6 +255,7 @@ class CompetitionCall:
 
     def _leave(self, why: str) -> None:
         log.info("call %s: leaving the room (%s)", self.call_id, why)
+        self.cancel_reveal()
         if self._leave_fn is None:
             return
         try:
@@ -735,16 +739,27 @@ class CompetitionCall:
         return rel >= self.count_s + self.reveal_s
 
     def _start_reveal(self) -> None:
-        """REVEAL_MODE=video: run the worker's reveal hook in the background; an error never touches the timeline."""
-        if self.reveal_mode != "video" or self._reveal_fn is None or self.reveal_s <= 0:
+        """REVEAL_MODE=video: run the worker's reveal hook as a dedicated task (cancelled by cancel_reveal); an error
+        never touches the timeline."""
+        if self.reveal_mode != "video" or self._reveal_fn is None or self.reveal_s <= 0 or self._reveal_task is not None:
             return
-        pts = sum(1 for r in self.final_reps() if r["valid"])
+
+        async def _wait() -> dict:
+            await self._commit_evt.wait()
+            return self.commit_result
+
         async def _go() -> None:
             try:
-                await self._reveal_fn(pts, self.reveal_s)
+                await self._reveal_fn(self.reveal_s, _wait)
             except Exception as e:
                 log.warning("call %s: reveal video failed (%r); audio_only", self.call_id, e)
-        self._spawn(_go())
+        self._reveal_task = asyncio.ensure_future(_go())
+
+    def cancel_reveal(self) -> None:
+        """Cancel the reveal task (end, leave, room disconnect, worker shutdown); never awaits."""
+        t, self._reveal_task = self._reveal_task, None
+        if t is not None and not t.done():
+            t.cancel()
 
     def _challenge_active(self) -> bool:
         lc = self.lc
@@ -764,6 +779,7 @@ class CompetitionCall:
     async def end(self, reason: str = "end") -> dict:
         """Idempotent; concurrent callers share one run, which is shielded from their cancellation. A run that found
         the rep intake unsealed sends nothing; once seal() was called the next end() commits."""
+        self.cancel_reveal()
         if self._end_task is None or (self._end_task.done() and self._commit_deferred and self.sealed):
             self._commit_deferred = False
             self._end_task = asyncio.ensure_future(self._end(reason))
@@ -854,6 +870,9 @@ class CompetitionCall:
             else:
                 if r.get("ok"):
                     self.sent[kind] = True
+                    if kind == "reps_committed":
+                        self.commit_result = {k: r.get(k) for k in ("points", "rank") if r.get(k) is not None}
+                        self._commit_evt.set()
                 else:
                     self.last_error = f"{kind}: refused ({r.get('reason')})"
                     log.error("call %s: dispatcher refused %s (%s); checkpoint kept with committed:false", self.call_id, kind, r.get("reason"))
