@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { connection } from "next/server";
 import { Suspense } from "react";
 
+import { CoachShell } from "@/components/coach/coach-shell";
 import { CoachDashboard } from "@/components/coach/dashboard";
 import type { CoachView } from "@/lib/coach-view";
 import type { SessionView } from "@/lib/contract";
@@ -31,14 +32,15 @@ function fake(name: string, daysAgo: number, token: string, clean: boolean): Ses
 // A made-up roster of six clients, to see the dashboard with more than one client. Not linked from anywhere.
 function roster(): CoachView {
   return {
-    coach: { name: "Tristan" },
+    coach: { name: "Tristan", status: "approved" },
+    programs: 1,
     clients: [
-      { id: "ryan", name: "Ryan", next: "Day 2 - Lower body", sessions: [fake("Ryan", 0, "lab-ryan-1", false), fake("Ryan", 2, "lab-ryan-2", true)] },
-      { id: "maya", name: "Maya", next: "Day 4 - Upper body", sessions: [fake("Maya", 1, "lab-maya-1", false)] },
-      { id: "jordan", name: "Jordan", next: "Day 3 - Full body", sessions: [fake("Jordan", 0, "lab-jordan-1", true), fake("Jordan", 2, "lab-jordan-2", true), fake("Jordan", 4, "lab-jordan-3", true)] },
-      { id: "priya", name: "Priya", next: "Day 7 - Lower body", sessions: [fake("Priya", 2, "lab-priya-1", true)] },
-      { id: "sam", name: "Sam", next: null, sessions: [fake("Sam", 3, "lab-sam-1", true)] },
-      { id: "leo", name: "Leo", next: "Day 3 - Full body", sessions: [fake("Leo", 9, "lab-leo-1", false)] },
+      { id: "ryan", name: "Ryan", next: "Day 2 - Lower body", link: null, sessions: [fake("Ryan", 0, "lab-ryan-1", false), fake("Ryan", 2, "lab-ryan-2", true)] },
+      { id: "maya", name: "Maya", next: "Day 4 - Upper body", link: null, sessions: [fake("Maya", 1, "lab-maya-1", false)] },
+      { id: "jordan", name: "Jordan", next: "Day 3 - Full body", link: null, sessions: [fake("Jordan", 0, "lab-jordan-1", true), fake("Jordan", 2, "lab-jordan-2", true), fake("Jordan", 4, "lab-jordan-3", true)] },
+      { id: "priya", name: "Priya", next: "Day 7 - Lower body", link: null, sessions: [fake("Priya", 2, "lab-priya-1", true)] },
+      { id: "sam", name: "Sam", next: null, link: null, sessions: [fake("Sam", 3, "lab-sam-1", true)] },
+      { id: "leo", name: "Leo", next: "Day 3 - Full body", link: null, sessions: [fake("Leo", 9, "lab-leo-1", false)] },
     ],
   };
 }
@@ -57,5 +59,9 @@ async function Lab({ searchParams }: { searchParams: PageProps<"/lab/coach">["se
   await connection();
   const sp = await searchParams;
   const pick = (v: string | string[] | undefined) => (typeof v === "string" ? v : null);
-  return <CoachDashboard view={roster()} token="demo" base="/lab/coach" selectedClient={pick(sp.c)} selectedSession={pick(sp.s)} />;
+  return (
+    <CoachShell token="demo" coachName="Tristan" active="clients">
+      <CoachDashboard view={roster()} token="demo" base="/lab/coach" selectedClient={pick(sp.c)} selectedSession={pick(sp.s)} />
+    </CoachShell>
+  );
 }

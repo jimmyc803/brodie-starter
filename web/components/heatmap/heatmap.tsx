@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import { BODY_BASE, BODY_STROKE, neonFills, neonLayers, UNTRAINED, type Fills } from "@/lib/body/neon";
 import { VIEWBOX, type BodySide } from "@/lib/body/shapes";
@@ -9,22 +9,29 @@ import type { MuscleDetail } from "@/lib/recap";
 import { rankForScore } from "@/lib/ranks";
 import { HeatmapLegend, MuscleSwatch } from "@/components/heatmap/legend";
 import { ClipPlayer } from "@/components/heatmap/clip-player";
+import { RepReviewPlayer, type ReviewContext } from "@/components/rep-review/review-launcher";
+import { clipsForMuscle } from "@/lib/rep-review/clips.config";
 
 // Front + back body heat map (the "neon" look from /lab/heatmap). Tap a muscle to see which exercises worked it, its
 // score and whether it was a main or helper muscle. With `order`, the map reveals itself when it first shows. With
-// `clips`, each exercise in the muscle card gets a Watch button that plays that part of the workout recording.
+// `clips`, tapping a muscle plays the clip of its main exercise inline (pills switch exercises; Watch opens it full size).
+// With `review`, tapping a muscle that has a rep review clip (lib/rep-review/clips.config.ts) opens <RepReviewPlayer />.
 export function Heatmap({
   details,
   order,
   clips,
+  review,
   className,
 }: {
   details: MuscleDetail[];
   order?: Partial<Record<MuscleKey, number>>;
   clips?: ExerciseClip[];
+  review?: ReviewContext;
   className?: string;
 }) {
   const [selected, setSelected] = useState<MuscleKey | null>(null);
+  const [reviewing, setReviewing] = useState<MuscleKey | null>(null);
+  const reviewClips = reviewing ? clipsForMuscle(reviewing) : [];
   // Reveal phases: idle (dark body) -> main (main muscles light up, exercise by exercise) -> helpers (helpers fade in)
   const [phase, setPhase] = useState<"idle" | "main" | "helpers" | "done">(order ? "idle" : "done");
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
@@ -52,9 +59,12 @@ export function Heatmap({
               lit={phase !== "idle"}
               delays={reveal.delays}
               selected={selected}
-              onSelect={(m) => setSelected(m === selected ? null : m)}
+              onSelect={(m) => {
+                setSelected(m === selected ? null : m);
+                if (review && m !== selected && clipsForMuscle(m).length) setReviewing(m);
+              }}
             />
-            <figcaption className="mt-1 text-xs font-medium capitalize text-on-stage-2">{side}</figcaption>
+            <figcaption className="mt-1 text-xs font-medium uppercase tracking-widest text-zinc-500">{side}</figcaption>
           </figure>
         ))}
       </div>
@@ -63,15 +73,16 @@ export function Heatmap({
       {order ? (
         <button
           onClick={() => setPhase("idle")}
-          className="mx-auto mt-2 block rounded-full px-3 py-1 text-xs font-medium text-on-stage-2 hover:bg-fill hover:text-on-stage"
+          className="mx-auto mt-2 block text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
         >
           Replay
         </button>
       ) : null}
+      {review && reviewClips.length ? <RepReviewPlayer clips={reviewClips} {...review} onClose={() => setReviewing(null)} /> : null}
       <div aria-live="polite" className="mt-4">
-        {sel ? <MuscleCard detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
-          <p className="text-center text-sm text-on-stage-2">
-            {clips?.length ? "Tap a muscle to see what worked it — and watch the reps" : "Tap a muscle to see what worked it"}
+        {sel ? <MuscleCard key={sel.muscle} detail={sel} fill={fills[sel.muscle]?.fill ?? UNTRAINED} clips={clips} onClose={() => setSelected(null)} /> : (
+          <p className="text-center text-sm text-zinc-500">
+            {clips?.length ? "Tap a muscle to watch the exercise that worked it" : "Tap a muscle to see what worked it"}
           </p>
         )}
       </div>
@@ -103,11 +114,11 @@ function revealTimeline(details: MuscleDetail[], order?: Partial<Record<MuscleKe
 function RevealCaption({ phase, id }: { phase: "idle" | "main" | "helpers" | "done"; id: string }) {
   const show = phase !== "idle"; // stays on screen once the reveal has run
   return (
-    <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium text-on-stage" aria-hidden>
+    <div className="mt-3 flex h-6 items-center justify-center gap-4 text-sm font-medium" aria-hidden>
       <span className={`flex items-center gap-1.5 transition-opacity duration-300 ${show ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="main" id={`${id}cm`} /> Main muscles
       </span>
-      <span className={`flex items-center gap-1.5 text-on-stage-2 transition-opacity duration-300 ${phase === "helpers" || phase === "done" ? "opacity-100" : "opacity-0"}`}>
+      <span className={`flex items-center gap-1.5 text-zinc-400 transition-opacity duration-300 ${phase === "helpers" || phase === "done" ? "opacity-100" : "opacity-0"}`}>
         <MuscleSwatch kind="helper" id={`${id}ch`} /> + helpers
       </span>
     </div>
@@ -194,6 +205,37 @@ function Body({
   );
 }
 
+// Muted looping preview of one exercise inside the muscle card; loops between clip.start and clip.end like ClipPlayer.
+function InlineClip({ clip, label }: { clip: ExerciseClip; label: string }) {
+  const ref = useRef<HTMLVideoElement>(null);
+  const seekStart = () => {
+    const v = ref.current;
+    if (!v) return;
+    v.currentTime = clip.start;
+    void v.play().catch(() => {});
+  };
+  const onTime = () => {
+    const v = ref.current;
+    if (v && clip.end !== null && v.currentTime >= clip.end) seekStart();
+  };
+  return (
+    <video
+      ref={ref}
+      src={clip.url}
+      aria-label={`${label} video`}
+      className="mx-auto max-h-[280px] w-full rounded-xl bg-black object-contain"
+      playsInline
+      muted
+      autoPlay
+      loop={clip.end === null}
+      preload="auto"
+      onLoadedMetadata={seekStart}
+      onTimeUpdate={onTime}
+      onEnded={seekStart}
+    />
+  );
+}
+
 function MuscleCard({
   detail,
   fill,
@@ -206,16 +248,25 @@ function MuscleCard({
   onClose: () => void;
 }) {
   const [playing, setPlaying] = useState<{ clip: ExerciseClip; ex: MuscleDetail["exercises"][number] } | null>(null);
+  // Exercises of this muscle that have footage: main-muscle exercises first, then the most reps done.
+  const withClips = detail.exercises
+    .flatMap((ex) => {
+      const clip = clips?.find((c) => c.exercise_key === ex.key);
+      return clip ? [{ ex, clip }] : [];
+    })
+    .sort((a, b) => Number(b.ex.role === "primary") - Number(a.ex.role === "primary") || b.ex.completed - a.ex.completed);
+  const [inlineKey, setInlineKey] = useState<string | null>(null);
+  const inline = withClips.find((w) => w.ex.key === inlineKey) ?? withClips[0] ?? null;
   const rank = detail.color !== "gray" ? rankForScore(detail.score) : null;
   return (
-    <div className="rounded-[18px] bg-fill p-4 text-on-stage">
+    <div className="rounded-2xl border border-zinc-800 bg-zinc-900/80 p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
             <span className="size-3 rounded-full" style={{ background: fill }} />
             <h3 className="text-lg font-semibold">{detail.label}</h3>
           </div>
-          <p className="mt-0.5 text-xs text-on-stage-2">{detail.note}</p>
+          <p className="mt-0.5 text-xs text-zinc-400">{detail.note}</p>
         </div>
         {rank ? (
           <div className="text-right">
@@ -225,32 +276,59 @@ function MuscleCard({
             </div>
           </div>
         ) : (
-          <div className="text-right text-xs text-on-stage-2">Not trained</div>
+          <div className="text-right text-xs text-zinc-400">Not trained</div>
         )}
       </div>
+      {inline ? (
+        <div className="mt-3">
+          <InlineClip key={`${inline.ex.key}:${inline.clip.url}:${inline.clip.start}`} clip={inline.clip} label={inline.ex.name} />
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {withClips.length > 1
+              ? withClips.map((w) => (
+                  <button
+                    key={w.ex.key}
+                    onClick={() => setInlineKey(w.ex.key)}
+                    aria-pressed={w === inline}
+                    className={`rounded-full px-2.5 py-1 text-xs font-medium ${
+                      w === inline ? "bg-green-500 text-zinc-950" : "bg-zinc-800 text-zinc-300 hover:bg-zinc-700"
+                    }`}
+                  >
+                    {w.ex.name}
+                  </button>
+                ))
+              : <span className="text-xs text-zinc-400">{inline.ex.name}</span>}
+            <button
+              onClick={() => setPlaying(inline)}
+              className="ml-auto rounded-full bg-zinc-800 px-2.5 py-1 text-xs text-zinc-300 hover:bg-zinc-700"
+            >
+              ⤢ Full screen
+            </button>
+          </div>
+        </div>
+      ) : null}
       {detail.exercises.length ? (
         <ul className="mt-3 space-y-2">
           {detail.exercises.map((e) => {
             const clip = clips?.find((c) => c.exercise_key === e.key);
             return (
-              <li key={e.name} className="rounded-xl bg-fill px-3 py-2 text-sm">
+              <li key={e.name} className="rounded-xl bg-zinc-800/60 px-3 py-2 text-sm">
                 <div className="flex items-center justify-between gap-2">
                   <span className="font-medium">{e.name}</span>
                   <span className="flex items-center gap-2">
-                    <span className="tabular-nums text-on-stage-2">
+                    <span className="tabular-nums text-zinc-300">
                       {e.completed}/{e.planned} reps
                     </span>
                     {clip ? (
                       <button
                         onClick={() => setPlaying({ clip, ex: e })}
-                        className="inline-flex items-center gap-1 rounded-full bg-accent-fill px-3 py-1 text-xs font-semibold text-white hover:bg-accent-fill-hover"
+                        className="inline-flex items-center gap-1 rounded-full bg-green-500 px-2.5 py-1 text-xs font-bold text-zinc-950 hover:bg-green-400"
                       >
-                        Watch
+                        <span aria-hidden>▶</span> Watch
                       </button>
                     ) : null}
                   </span>
                 </div>
-                <div className="mt-0.5 text-xs text-on-stage-2">
+                <div className="mt-0.5 text-xs text-zinc-400">
                   {e.role === "primary" ? "Main muscle" : "Helper muscle"}
                   {e.flags.length ? ` · form flags: ${e.flags.map(([t, n]) => `${t} ×${n}`).join(", ")}` : " · no form flags"}
                 </div>
@@ -267,7 +345,7 @@ function MuscleCard({
           onClose={() => setPlaying(null)}
         />
       ) : null}
-      <button onClick={onClose} className="mt-3 w-full rounded-full py-1.5 text-center text-xs font-medium text-on-stage-2 hover:bg-fill">
+      <button onClick={onClose} className="mt-3 w-full text-center text-xs text-zinc-500 underline-offset-2 hover:underline">
         Close
       </button>
     </div>

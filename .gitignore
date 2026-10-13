@@ -14,6 +14,9 @@ models/
 *.jpg
 *.png
 !pushup-web/assets/*.png
+!web/public/brodie/*.png
+!web/app/icon.png
+!web/app/apple-icon.png
 *.pcm
 *.wav
 .env
@@ -30,3 +33,6 @@ models/
 judge_eval/clips/
 judge_eval/labels.yaml
 judge_eval/results/
+# Rep review demo clips + posters ship with the web app
+!web/public/clips/*.mp4
+!web/public/clips/*.jpg

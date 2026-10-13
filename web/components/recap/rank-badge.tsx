@@ -5,16 +5,17 @@ export function RankBadge({ r }: { r: SessionRank }) {
   const { rank, next, skipped } = r;
   const pts = r.score === null ? null : Math.floor(r.score * 100); // floor, so points never reach the next tier before the rank does
   return (
-    <section aria-label="Today's rank" className="px-5 py-4">
+    <section aria-label="Today's rank" className="rounded-[14px] border border-line bg-surface px-4 py-3.5">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="t-callout text-ink-2">Today&apos;s rank</p>
-        <p className="t-footnote tabular-nums text-ink-3">
+        <p className="text-[12.5px] font-medium text-ink-3">Today&apos;s rank</p>
+        <p className="text-[12.5px] tabular-nums text-ink-3">
           {skipped ? "No reps counted" : `Tier ${rank.tier} of ${RANKS.length}${pts !== null ? ` · ${pts} pts` : ""}`}
         </p>
       </div>
-      <p className="mt-1 flex items-center gap-2.5 t-title">
-        {skipped ? null : <span className="size-3 shrink-0 rounded-full" style={{ background: rank.color }} aria-hidden />}
-        <span style={{ color: skipped ? undefined : rank.color }}>{skipped ? "Every Brodie starts somewhere" : rank.name}</span>
+      {/* Rank colors were picked for dark cards; as text on white they're unreadable, so the name stays ink with a swatch. */}
+      <p className="mt-1 flex items-center gap-2 text-[19px] font-semibold tracking-[-0.02em] text-ink">
+        {skipped ? null : <span aria-hidden className="size-3 shrink-0 rounded-[4px]" style={{ background: rank.color }} />}
+        {skipped ? "Every Brodie starts somewhere" : rank.name}
       </p>
 
       {/* Keep every swatch in its exact rank color; outline the current tier. */}
@@ -28,7 +29,7 @@ export function RankBadge({ r }: { r: SessionRank }) {
           );
         })}
       </ol>
-      <p className="mt-2 t-footnote text-ink-2">
+      <p className="mt-2 text-xs text-ink-3">
         {!skipped && next
           ? `${Math.max(1, Math.round(next.minScore * 100) - (pts ?? 0))} pts to ${next.name}. `
           : !skipped

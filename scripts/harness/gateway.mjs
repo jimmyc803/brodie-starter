@@ -32,14 +32,31 @@ export async function createGateway(db, directory) {
       if (url.pathname.startsWith('/rest/v1/rpc/') && req.method === 'POST') {
         const fn = url.pathname.split('/').at(-1);
         const params = JSON.parse(bytes);
-        const signatures = {save_coach_program:['p_token','p_pdf_path','p_program'],assign_coach_program_day:['p_token','p_client_id','p_day_id']};
+        const signatures = {consume_program_budget:['p_action'],save_coach_program:['p_token','p_pdf_path','p_program'],assign_coach_program_day:['p_token','p_client_id','p_day_id']};
         if (!signatures[fn]) throw Error('Unsupported RPC');
         const names = signatures[fn];
         const result = await connection.query(`select ${identifier(fn)}(${names.map((n,i)=>`${identifier(n)} => $${i+1}`).join(',')}) as result`, names.map(n=>typeof params[n] === 'object' ? JSON.stringify(params[n]) : params[n]));
         return send(200,result.rows[0].result);
       }
       const table = url.pathname.split('/').at(-1);
-      if (!url.pathname.startsWith('/rest/v1/') || req.method !== 'GET' || !['coaches','clients','programs','program_days','assignments'].includes(table)) throw Error('Unsupported gateway request');
+      if (!url.pathname.startsWith('/rest/v1/') || !['coaches','clients','programs','program_days','assignments'].includes(table)) throw Error('Unsupported gateway request');
+      if (req.method === 'POST') {
+        const insertColumns = {coaches:['id','name','share_token'], clients:['id','coach_id','name','share_token']};
+        if (!insertColumns[table]) throw Error('Unsupported insert table');
+        const payload = JSON.parse(bytes);
+        const rows = Array.isArray(payload) ? payload : [payload];
+        if (rows.length !== 1 || !rows[0] || typeof rows[0] !== 'object') throw Error('Expected single onboarding row');
+        const row = rows[0], columns = Object.keys(row);
+        if (columns.length === 0 || columns.some(column => !insertColumns[table].includes(column))) throw Error('Unsupported insert columns');
+        const result = await connection.query(`insert into ${identifier(table)} (${columns.map(identifier).join(',')}) values (${columns.map((_,i)=>`$${i+1}`).join(',')}) returning ${insertColumns[table].map(identifier).join(',')}`, columns.map(column=>row[column]));
+        return send(201,req.headers.prefer?.includes('return=representation') ? (req.headers.accept?.includes('vnd.pgrst.object') ? result.rows[0] : result.rows) : null);
+      }
+      if (req.method === 'DELETE') {
+        if (table !== 'coaches' || [...url.searchParams.keys()].some(key=>key !== 'id') || !url.searchParams.get('id')?.startsWith('eq.')) throw Error('Unsupported cleanup request');
+        await connection.query('delete from coaches where id=$1', [url.searchParams.get('id').slice(3)]);
+        return send(200,[]);
+      }
+      if (!['GET','HEAD'].includes(req.method)) throw Error('Unsupported gateway method');
       // Exact PostgREST relationship projection used by the real Python worker.
       const workerProjection = 'program_day_id,clients(name),program_days(id,day_number,title,exercises,programs(coach_id,coaches(name,persona)))';
       if (table === 'assignments' && url.searchParams.get('select') === workerProjection) {
@@ -57,7 +74,7 @@ export async function createGateway(db, directory) {
           where a.client_id=$1 and a.active=true order by a.assigned_at desc limit 1`, [clientFilter.slice(3)]);
         return send(200,result.rows);
       }
-      const columns = (url.searchParams.get('select') || '*').split(',').map(identifier).join(',');
+      const columns = (url.searchParams.get('select') || '*').split(',').map(column=>identifier(column.trim())).join(',');
       const values = [], filters = [];
       for (const [key, value] of url.searchParams) {
         if (['select','order'].includes(key)) continue;
@@ -69,6 +86,7 @@ export async function createGateway(db, directory) {
       let order = '';
       if (ordering) { const [col, direction] = ordering.split('.'); if (!['asc','desc'].includes(direction)) throw Error('Bad ordering'); order=` order by ${identifier(col)} ${direction}`; }
       const result = await connection.query(`select ${columns} from ${identifier(table)}${filters.length?' where '+filters.join(' and '):''}${order}`, values);
+      if (req.headers.prefer?.includes('count=exact')) res.setHeader('content-range', `0-${Math.max(0,result.rows.length-1)}/${result.rows.length}`);
       return send(200, req.headers.accept?.includes('vnd.pgrst.object') ? result.rows[0] ?? null : result.rows);
     } catch (error) { send(400, {code:error.code || 'HARNESS',message:error.message}); }
   });

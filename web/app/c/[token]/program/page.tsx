@@ -6,45 +6,39 @@ import { readOnlyCoachToken, READ_ONLY_MESSAGE, validToken } from '@/lib/program
 import { currentAssignments } from '@/lib/currentAssignments';
 import type { ProgramExercise } from '@/lib/parseProgram';
 import { UploadForm, AssignForm } from './forms';
-import { Surface } from '@/components/ui/apple';
-import { SiteHeader } from '@/components/site-header';
+import { AddClientForm } from './client-form';
+import { ExerciseSupport } from './exercise-support';
+import { exerciseReviewBrief, supportBookingUrl } from '@/lib/programSupport';
+import { CoachShell } from '@/components/coach/coach-shell';
+import { BrodieEmpty } from '@/components/ui-kit/brodie';
+import { canManageClients } from '@/lib/coach-access';
 
 export const metadata = { title: 'Training programs | Brodie', robots: { index: false, follow: false }, referrer: 'no-referrer' as const };
 export const maxDuration = 90;
 type Day = { id: string; program_id: string; day_number: number; title: string; exercises: ProgramExercise[] };
-
-function Shell({ context, children }: { context?: React.ReactNode; children: React.ReactNode }) {
-  return <>
-    <SiteHeader context={context} />
-    <div className="mx-auto max-w-[980px] px-5 pb-16 pt-10 sm:px-6">{children}</div>
-  </>;
-}
-function Notice({ children, alert }: { children: React.ReactNode; alert?: boolean }) {
-  return <Shell><h1 className="t-display text-ink">Programs</h1><Surface as="div" className="mt-8 p-6"><p role={alert ? 'alert' : undefined} className="t-body text-ink-2">{children}</p></Surface></Shell>;
-}
 
 async function ProgramContent({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   if (!validToken(token)) notFound();
   let db;
   try { db = supabaseServer(); } catch {
-    return <Notice>Program service is not configured yet. Add the server credentials to enable uploads and assignments.</Notice>;
+    return <p className="rounded-[14px] border border-line bg-surface p-8">Program service is not configured yet. Add the server credentials to enable uploads and assignments.</p>;
   }
-  const coachResult = await db.from('coaches').select('id,name').eq('share_token', token).maybeSingle();
-  if (coachResult.error) return <Notice alert>Program service is temporarily unavailable. Please retry.</Notice>;
+  const coachResult = await db.from('coaches').select('id,name,status').eq('share_token', token).maybeSingle();
+  if (coachResult.error) return <p role="alert">Program service is temporarily unavailable. Please retry.</p>;
   const coach = coachResult.data;
   if (!coach) notFound();
   const [clientsResult, programsResult] = await Promise.all([
     db.from('clients').select('id,name').eq('coach_id', coach.id).order('name'),
     db.from('programs').select('id,title,created_at').eq('coach_id', coach.id).order('created_at', { ascending: false }),
   ]);
-  if (clientsResult.error || programsResult.error) return <Notice alert>Your programs could not be loaded. Please retry.</Notice>;
+  if (clientsResult.error || programsResult.error) return <p role="alert">Your programs could not be loaded. Please retry.</p>;
   const clients = clientsResult.data ?? [];
   const programs = programsResult.data ?? [];
   let days: Day[] = [];
   if (programs.length) {
     const result = await db.from('program_days').select('id,program_id,day_number,title,exercises').in('program_id', programs.map(p => p.id)).order('day_number');
-    if (result.error) return <Notice alert>Your training days could not be loaded. Please retry.</Notice>;
+    if (result.error) return <p role="alert">Your training days could not be loaded. Please retry.</p>;
     days = result.data as Day[];
   }
   let assignments: unknown[] = [];
@@ -58,26 +52,30 @@ async function ProgramContent({ params }: { params: Promise<{ token: string }> }
   const titles = new Map(programs.map(p => [p.id, p.title]));
   const dayLabels = days.map(day => ({ id: day.id, label: `${titles.get(day.program_id)} · Day ${day.day_number}: ${day.title}` }));
   const current = currentAssignments(clients, dayLabels, assignments);
-  const assignable = days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }));
-  return <Shell context={<Link href={`/c/${encodeURIComponent(token)}`} className="hover:text-ink">← Coach {coach.name}</Link>}>
-    <header className="mb-8"><h1 className="t-display text-ink">Programs</h1><p className="mt-2 max-w-2xl t-body text-ink-2">Upload a program PDF, check the days Brodie read from it, then pick what each client trains on their next call.</p>{readOnlyCoachToken(token) ? <p role="note" className="mt-4 max-w-2xl rounded-[14px] bg-fill px-4 py-3 t-callout text-warning">{READ_ONLY_MESSAGE}</p> : null}</header>
-    <div className="grid gap-5 md:grid-cols-2">
-      <Surface as="section" className="p-6"><p className="t-footnote text-ink-3">Step 1</p><h2 className="mb-5 mt-0.5 t-title-2 text-ink">Upload a program</h2><UploadForm token={token} /></Surface>
-      <Surface as="section" className="p-6"><p className="t-footnote text-ink-3">Step 2</p><h2 className="mb-5 mt-0.5 t-title-2 text-ink">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={assignable} /></Surface>
-    </div>
-    <section aria-labelledby="current-assignments"><Surface as="div" className="mt-5 p-6">
-      <h2 id="current-assignments" className="t-title-2 text-ink">Current assignments</h2>
-      <p className="mt-0.5 t-callout text-ink-2">The training day each client will load on their next call.</p>
-      {assignmentError ? <p role="alert" className="mt-4 t-callout text-critical">Current assignments could not be loaded. Refresh to retry.</p>
-        : current.length ? <ul className="mt-4 divide-y divide-hairline">{current.map(client => <li key={client.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6"><span className="t-headline text-ink">{client.name}</span><span className="t-callout text-ink-2">{client.assignment}</span></li>)}</ul>
-          : <p className="mt-4 t-callout text-ink-2">No clients yet. Add a client to this coach account to assign a day.</p>}
-    </Surface></section>
-    <section className="mt-12"><h2 className="t-title text-ink">Program library</h2><p className="mt-1 max-w-3xl t-callout text-ink-2">Review the parsed prescriptions before assigning. Manual exercises stay in the plan; Brodie counts supported movements. Days with only manual exercises cannot be assigned to a Brodie call.</p>
-      {!programs.length && <div className="mt-5 rounded-[18px] border border-dashed border-hairline p-10 text-center t-callout text-ink-2">Your first training plan starts with a PDF.</div>}
-      {programs.map(program => <article key={program.id} className="mt-6"><h3 className="t-title-2 text-ink">{program.title}</h3><div className="mt-4 grid gap-5 lg:grid-cols-3">{days.filter(d => d.program_id === program.id).map(day => <div key={day.id}><p className="mb-2 px-1 t-footnote text-ink-2">Day {day.day_number} · {day.title}</p><Surface as="div" className="overflow-hidden"><ul className="divide-y divide-hairline">{day.exercises.map((exercise, i) => <li key={i} className="px-4 py-3"><div className="flex items-start justify-between gap-3"><span className="t-headline text-ink">{exercise.name}</span><span className="shrink-0 t-callout tabular-nums text-ink-2">{exercise.sets} × {exercise.reps === 0 ? 'timed' : exercise.reps}</span></div><span className={`mt-1 inline-block t-caption ${exercise.supported ? 'text-positive' : 'text-ink-2'}`}>{exercise.supported ? 'Brodie counts' : 'Manual tracking'}</span>{exercise.notes && <p className="mt-1 t-footnote text-ink-3">{exercise.notes}</p>}</li>)}</ul></Surface></div>)}</div></article>)}
+  const readOnly = readOnlyCoachToken(token);
+  const canAddClients = canManageClients(token, coach.status);
+  const supportBrief = exerciseReviewBrief(programs.map(program => ({ title: program.title, days: days.filter(day => day.program_id === program.id) })));
+  const bookingUrl = supportBookingUrl(process.env.COACH_SUPPORT_BOOKING_URL);
+  return <CoachShell token={token} coachName={coach.name} active="programs">
+    <header className="mb-8"><h1 className="text-[28px] font-semibold tracking-[-0.025em] text-ink">Programs</h1><p className="mt-1 max-w-2xl text-sm text-ink-2">Upload a program PDF, check the days Brodie read from it, then pick what each client trains on their next call.</p>{readOnly ? <p role="note" className="mt-4 max-w-2xl rounded-[10px] border border-line bg-warn-soft px-4 py-3 text-sm text-warn">{READ_ONLY_MESSAGE} <Link href="/start" className="mt-3 block w-fit rounded-[10px] bg-ink px-4 py-2 font-semibold text-canvas hover:opacity-90">Apply to coach</Link></p> : <p className="mt-3 text-xs text-ink-3">Bookmark this private coach link. Anyone with it can manage your programs and clients.</p>}</header>
+    {!readOnly && <><div className="grid gap-6 md:grid-cols-2">
+      <section className="rounded-[14px] border border-line bg-surface p-6"><p className="text-sm text-ink-3">Step 1</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-ink">Upload a program</h2><UploadForm token={token} /></section>
+      <section id="assign" className="scroll-mt-6 rounded-[14px] border border-line bg-surface p-6"><p className="text-sm text-ink-3">Step 2</p><h2 className="mb-5 mt-0.5 text-lg font-semibold text-ink">Assign the next session</h2><AssignForm token={token} hasPrograms={programs.length > 0} clients={clients} days={days.filter(d => d.exercises.some(e => e.supported && e.exercise_key && e.reps > 0 && e.sets > 0)).map(d => ({ id: d.id, label: `${titles.get(d.program_id)} · Day ${d.day_number}: ${d.title}` }))} /></section>
+    </div><section className="mt-6 rounded-[14px] border border-line bg-surface p-6"><h2 className="text-lg font-semibold">Add a client</h2>{canAddClients ? <><p className="mb-4 mt-1 text-sm text-ink-2">Create a client here, then choose their next training day above.</p><AddClientForm token={token} /></> : <p className="mt-1 text-sm text-ink-2">Adding clients unlocks once your coach application is approved. You can upload and review PDFs in your sandbox now.</p>}</section></>}
+    <section aria-labelledby="current-assignments-title" className="mt-6 rounded-[14px] border border-line bg-surface p-6">
+      <h2 id="current-assignments-title" className="text-lg font-semibold text-ink">Current assignments</h2>
+      <p className="mt-0.5 text-sm text-ink-3">The training day each client will load on their next call.</p>
+      {assignmentError ? <p role="alert" className="mt-4 text-sm text-bad">Current assignments could not be loaded. Refresh to retry.</p>
+        : current.length ? <ul className="mt-5 divide-y divide-line">{current.map(client => <li key={client.id} className="flex flex-col gap-1 py-3 sm:flex-row sm:justify-between sm:gap-6"><span className="font-medium text-ink">{client.name}</span><span className="text-sm text-ink-2">{client.assignment}</span></li>)}</ul>
+          : <p className="mt-4 text-sm text-ink-2">No clients yet. Add a client to this coach account to assign a day.</p>}
     </section>
-  </Shell>;
+    <section className="mt-10"><h2 className="text-lg font-semibold text-ink">Program library</h2><p className="mt-0.5 max-w-3xl text-sm text-ink-3">Review each exercise, set, rep and note against your PDF before assigning. Every exercise stays in your program. During a call, Brodie tracks only supported movements; exercises marked “No video tracking” are omitted from the automated workout. Days with no tracked exercises stay in your library but cannot be assigned to a video call.</p>
+      {!programs.length && <BrodieEmpty title="Your first training plan starts with a PDF." className="mt-5"><p className="mt-1 text-sm text-ink-2">Upload it above and Brodie reads the days, sets and reps.</p></BrodieEmpty>}
+      {programs.map(program => <article key={program.id} className="mt-4 rounded-[14px] border border-line bg-surface p-6"><h3 className="text-lg font-semibold text-ink">{program.title}</h3><div className="mt-5 grid gap-5 lg:grid-cols-3">{days.filter(d => d.program_id === program.id).map(day => <div key={day.id} className="rounded-[10px] border border-line bg-canvas p-4"><p className="text-xs text-ink-3">Day {day.day_number}</p><h4 className="mt-0.5 font-semibold text-ink">{day.title}</h4><ul className="mt-4 space-y-4">{day.exercises.map((exercise, i) => <li key={i} className="text-sm"><div className="flex items-start justify-between gap-3"><span className="font-medium text-ink">{exercise.name}</span><span className="shrink-0 tabular-nums text-ink-2">{exercise.sets} × {exercise.reps === 0 ? 'timed' : exercise.reps}</span></div><span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-xs ${exercise.supported ? 'bg-good-soft text-good' : 'bg-idle-soft text-ink-2'}`}>{exercise.supported ? 'Video tracking' : 'No video tracking'}</span>{exercise.notes && <p className="mt-1 text-xs leading-relaxed text-ink-3">{exercise.notes}</p>}</li>)}</ul></div>)}</div></article>)}
+    </section>
+    {supportBrief && <ExerciseSupport brief={supportBrief} bookingUrl={bookingUrl} />}
+  </CoachShell>;
 }
 export default function ProgramPage({ params }: { params: Promise<{ token: string }> }) {
-  return <main className="min-h-screen bg-canvas text-ink"><Suspense fallback={<p role="status" className="p-6 text-ink-2">Loading your training programs…</p>}><ProgramContent params={params} /></Suspense></main>;
+  return <main className="flex min-h-screen flex-1 flex-col bg-canvas text-ink"><Suspense fallback={<p role="status" className="p-8 text-ink-2">Loading your training programs…</p>}><ProgramContent params={params} /></Suspense></main>;
 }

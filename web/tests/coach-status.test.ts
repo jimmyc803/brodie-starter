@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { sampleSessionView } from "@/lib/session-view";
 
 import { sortSummaries, summarizeClient } from "@/lib/coach-status";
 import type { SessionView } from "@/lib/contract";
@@ -57,5 +58,20 @@ describe("coach triage status", () => {
       summarizeClient({ id: "r", name: "R", sessions: [at(2)] }, NOW),
     ]);
     expect(list.map((s) => s.id)).toEqual(["r", "o", "i"]);
+  });
+});
+
+describe("summary numbers for the client table", () => {
+  it("exposes the latest session's reps and clean %", () => {
+    const v = sampleSessionView();
+    const s = summarizeClient({ id: "x", name: "Ryan", sessions: [v] }, Date.parse(v.session.started_at));
+    expect(s.reps).toMatch(/^\d+\/\d+$/);
+    expect(s.cleanPct).toBeGreaterThanOrEqual(0);
+    expect(s.cleanPct).toBeLessThanOrEqual(100);
+  });
+  it("is null with no sessions", () => {
+    const s = summarizeClient({ id: "x", name: "New", sessions: [] });
+    expect(s.reps).toBeNull();
+    expect(s.cleanPct).toBeNull();
   });
 });
