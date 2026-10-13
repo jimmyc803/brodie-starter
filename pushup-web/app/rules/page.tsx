@@ -124,7 +124,7 @@ export default async function RulesPage() {
         <Bullets
           items={[
             "Each call lasts 3:15. You get 3:00 to do reps (setup happens inside it), then a 15 second reveal.",
-            "FaceTime Brodie to get in line: if the line is busy you're queued automatically and we text you your spot. Texting QUEUE works too. Fewest counted calls today goes first; ties are first-come, first-served.",
+            "Two ways to get in line: text QUEUE, or just FaceTime Brodie (if the line is busy you're queued automatically). Either way we text you your spot. Fewest counted calls today goes first; ties are first-come, first-served.",
             "When you're up you have 90 seconds to FaceTime in, or you lose your spot.",
             "Line empty and idle? Walk right in.",
             "Calling while someone else is up ends that call with nothing recorded, but you keep (or get) your spot in line.",

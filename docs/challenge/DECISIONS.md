@@ -34,7 +34,7 @@ Source of record: `.orch/DECISIONS.md` (internal log). This page explains each d
 | D-19 | Ghost second-person false rejects remain on front-view stock clips (9% of reps; 0 of 14 on side-view); the ship gate stays INCOMPLETE until real side-view clips exist | No side-view two-person footage to tune on |
 | D-20 | Liveness redesigned: distinguishable challenges (lift-hold, double-tap, freeze), a quiet window before the cue, an unprompted-motion flag, "present but unverifiable" = fail, camera-motion invalidation | Review showed a periodic-tap replay passed about 100% |
 | D-22 | The raffle is cancelled; prizes are 1st place plus the top-3 group call with a UFC fighter | User decision 2026-10-12; all raffle config, views, admin and copy removed |
-| D-23 | Calling the line puts you in the queue: a busy-line call by a known caller auto-joins the queue and texts the spot; QUEUE texting still works | User request 2026-10-12 (less friction). Needs caller ID, so active only with CALLER_ID_SOURCE=chert_meta; claim_window keeps the plain reject |
+| D-23 | Calling the line puts you in the queue: a busy-line call by a known caller auto-joins the queue and texts the spot; QUEUE texting still works; site and texts present both equally | User request 2026-10-12 (less friction). Needs caller ID, so active only with CALLER_ID_SOURCE=chert_meta; claim_window keeps the plain reject |
 
 ## Decisions you may be asked to make
 - Launch with the ship gate INCOMPLETE (D-19), or wait for clips? See `BLOCKERS.md` B3.

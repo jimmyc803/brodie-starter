@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 const STEPS = [
   ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board after JOIN."],
   ["Confirm", "Reply to confirm you're 18+ and accept the rules."],
-  ["FaceTime Brodie", "Line open? You're on. Busy? You're put in line automatically and we text you your spot."],
+  ["Text QUEUE or just FaceTime", "Either one gets you in line, and we text you your spot. If the line's open when you FaceTime, you're on right away."],
   ["Rep out", "When we text you're up, call back within 90 seconds and do strict push-ups on camera."],
 ] as const;
 
@@ -38,9 +38,9 @@ function MessagesMock() {
               Reply YES to confirm you&apos;re 18+, in the US, and agree to the rules.
             </p>
             <p className={`${bubble} self-end rounded-br-md bg-accent font-semibold text-on-accent`}>YES</p>
-            <p className="my-1 self-center font-mono text-[0.6875rem] tracking-wide text-ink-3 uppercase">FaceTime · Brodie · 0:04</p>
+            <p className={`${bubble} self-end rounded-br-md bg-accent font-semibold text-on-accent`}>QUEUE</p>
             <p className={`${bubble} self-start rounded-bl-md bg-surface-3 text-ink`}>
-              Line&apos;s busy, so you&apos;re in line: #2, about 8 min. We&apos;ll text you when you&apos;re up.
+              You&apos;re #2 in line, about 8 min. We&apos;ll text you when you&apos;re up.
             </p>
           </div>
         </div>

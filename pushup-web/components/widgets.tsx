@@ -57,7 +57,7 @@ function LineTicker({ line: rawLine, phase }: { line: LineStatus | null; phase: 
         : walkIn
           ? "Nobody waiting. FaceTime in now."
           : line && line.stateSummary !== "closed"
-            ? "FaceTime Brodie to grab a spot. We text you when you're up."
+            ? "Text QUEUE or just FaceTime to grab a spot. We text you when you're up."
             : "The line reopens soon. Watch this space.";
   return (
     <div className="card relative overflow-hidden lg:col-span-4">
