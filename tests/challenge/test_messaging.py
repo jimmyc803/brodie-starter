@@ -26,6 +26,10 @@ from challenge.messaging.templates import render
     ("help", "HELP", ""), ("", "UNKNOWN", ""), ("...", "UNKNOWN", ""),
     ("hi", "UNKNOWN", ""), ("que", "UNKNOWN", ""),
     ("totally-unrelated", "UNKNOWN", ""), ("JOIN", "JOIN", ""),
+    ("delete my data", "DELETE", ""), ("DELETE", "DELETE", ""), ("Delete Data", "DELETE", ""),
+    ("delete me", "DELETE", ""), ("  \"Delete   my data.\"  ", "DELETE", ""),
+    ("delete my data!!", "DELETE", ""), ("delete everything", "UNKNOWN", "everything"),
+    ("deleet my data", "UNKNOWN", "my data"), ("delete my data, stop", "STOP", "my data, stop"),
 ])
 def test_commands(body, kind, arg):
     command = parse(body)
@@ -315,7 +319,7 @@ def test_web_only_does_not_send(caplog):
 KEYS = """welcome join_confirm_prompt join_bad_name join_taken queue_joined queue_line_open
 queue_at_cap queue_already queue_in_call youre_up missed_slot queue_update left_queue status
 top rules power help stop_ack start_ack unknown post_call rank_drop streak_risk ph_announce
-ph_warn ph_start daily_recap ending_soon final_results not_registered call_queued""".split()
+ph_warn ph_start daily_recap ending_soon final_results not_registered call_queued delete_request""".split()
 PROACTIVE = """welcome youre_up missed_slot queue_update post_call rank_drop streak_risk
 ph_announce ph_warn ph_start daily_recap ending_soon final_results""".split()
 CTX = {

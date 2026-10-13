@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 from typing import Any
 
 from challenge.config import Config
@@ -43,6 +44,20 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
             template = {"expired": "link_expired", "handle_owned": "link_owned"}.get(result["reason"], "link_bad_code")
     elif command.kind == "HELP":
         template = "help"
+    elif command.kind == "DELETE":
+        # Request only (no automatic delete). Durable record: the queued 'delete_request' messages row,
+        # keyed per handle per ET day so repeats add neither a second reply nor a second team alert.
+        day = now.astimezone(ET).date().isoformat()
+        digest = hashlib.sha256(inbound.handle.encode()).hexdigest()
+        who = user.get("display_name") or (f"user {user_id}" if user_id else f"unjoined handle #{digest[:8]}")
+        for team in cfg.get("team_alert_handles") or []:
+            outbox.enqueue(handle=team, template="alert",
+                           ctx={"condition": "delete_request",
+                                "detail": f"Data deletion requested by {who}; delete within 30 days."},
+                           dedupe_key=f"delete_alert:{digest}:{day}:{team}", proactive=False)
+        outbox.enqueue(user_id=user_id, handle=inbound.handle, template="delete_request", ctx=ctx,
+                       dedupe_key=f"delete_request:{digest}:{day}", proactive=False)
+        return
     elif command.kind in ("STOP", "START"):
         if user_id:
             store.rpc("ch_set_opt", {"p_user_id": user_id,

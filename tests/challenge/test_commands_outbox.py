@@ -362,3 +362,59 @@ def test_queue_in_call_and_at_cap(env):
                                   "p_count_end_at": now + timedelta(seconds=40), "p_rep_count": 0, "p_now": now + timedelta(seconds=40)})
     clock["now"] = T0 + timedelta(hours=1)
     assert command(env, "QUEUE")[0] == "queue_at_cap"
+
+
+# ---------------------------------------------------------------- data-deletion request
+
+TEAM = "+15555550999"
+
+
+def _team(env):
+    from psycopg.types.json import Jsonb
+    env[0].execute("update competition_config set value=%s where key='team_alert_handles'", (Jsonb([TEAM]),))
+
+
+def _delete_rows(conn, template):
+    return conn.execute("select handle, ctx from messages where direction='out' and template=%s order by id",
+                        (template,)).fetchall()
+
+
+@pytest.mark.parametrize("body", ["delete my data", "DELETE", "delete data", "Delete me!", " delete  my data. "])
+def test_delete_request_unjoined_handle(env, body):
+    from challenge.messaging.templates import render
+    conn = env[0]
+    _team(env)
+    assert command(env, body)[0] == "delete_request"
+    reply = _delete_rows(conn, "delete_request")
+    assert [r[0] for r in reply] == [HANDLE]  # durable record: one queued messages row
+    text = render("delete_request", {}, False)
+    assert "30 days" in text and "leaderboard" in text and "STOP" in text
+    alerts = _delete_rows(conn, "alert")
+    assert len(alerts) == 1 and alerts[0][0] == TEAM
+    assert alerts[0][1]["condition"] == "delete_request"
+    assert "unjoined" in alerts[0][1]["detail"]
+    assert "5555550123" not in json.dumps(alerts[0][1])
+
+
+def test_delete_request_joined_uses_display_name_and_is_idempotent_per_day(env):
+    conn, _, _, _, _, clock = env
+    _team(env)
+    register(env)
+    conn.execute("delete from messages where template in ('delete_request','alert')")
+    assert command(env, "delete my data")[0] == "delete_request"
+    assert command(env, "DELETE")[0] == "delete_request"
+    assert len(_delete_rows(conn, "delete_request")) == 1
+    alerts = _delete_rows(conn, "alert")
+    assert len(alerts) == 1
+    assert "Athlete" in alerts[0][1]["detail"] and "5555550123" not in json.dumps(alerts[0][1])
+    clock["now"] = T0 + timedelta(days=1)
+    command(env, "delete me")
+    assert len(_delete_rows(conn, "delete_request")) == 2 and len(_delete_rows(conn, "alert")) == 2
+
+
+def test_delete_request_does_not_delete_or_opt_out(env):
+    conn = env[0]
+    uid = register(env)
+    command(env, "delete my data")
+    assert conn.execute("select joined_at is not null, opted_out_at is null from clients where id=%s", (uid,)).fetchone() == (True, True)
+    assert command(env, "delete everything")[0] == "unknown"

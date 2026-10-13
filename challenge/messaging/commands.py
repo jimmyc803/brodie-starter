@@ -8,7 +8,7 @@ from typing import Literal
 
 CommandKind = Literal[
     "JOIN", "YES", "QUEUE", "STATUS", "TOP", "LEAVE", "RULES", "POWER",
-    "HELP", "STOP", "START", "LINK", "UNKNOWN",
+    "HELP", "STOP", "START", "LINK", "DELETE", "UNKNOWN",
 ]
 
 
@@ -31,6 +31,8 @@ _ALIASES: dict[str, CommandKind] = {
 _FUZZY_COMMANDS: tuple[CommandKind, ...] = (
     "QUEUE", "STATUS", "LEAVE", "RULES", "POWER", "HELP", "JOIN",
 )
+# Data-deletion request: "delete", "delete my data", "delete data", "delete me" (exact; anything else is UNKNOWN).
+_DELETE_ARGS = {"", "my data", "data", "me"}
 _STOP_WORDS = {"STOP", "STOPALL", "QUIT", "CANCEL", "UNSUBSCRIBE", "END"}
 _EDGES = string.whitespace + string.punctuation.replace("_", "") + "“”‘’…—–"
 _BLOCKED = ("fuck", "shit", "bitch", "cunt", "asshole", "motherfucker", "nigger", "nigga", "faggot", "fag", "kike", "chink", "tranny")
@@ -57,6 +59,10 @@ def parse(body: str) -> Command:
     arg = parts[1].strip(_EDGES) if len(parts) > 1 else ""
     if word in _STOP_WORDS or re.search(r"\bstop\b", text, re.IGNORECASE):
         return Command("STOP", arg)
+    if word == "DELETE":
+        if " ".join(arg.lower().split()) in _DELETE_ARGS:
+            return Command("DELETE")
+        return Command("UNKNOWN", arg)
     kind = _COMMANDS.get(word) or _ALIASES.get(word)
     if kind is None and len(word) >= 4:
         candidates = {
