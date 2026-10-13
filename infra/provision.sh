@@ -58,7 +58,7 @@ for action in add remove; do
 done
 if ! aws s3api head-bucket --bucket "$BACKUP_BUCKET" --expected-bucket-owner "$account" 2>/dev/null; then
   args=(); [[ $AWS_DEFAULT_REGION == us-east-1 ]] || args=(--create-bucket-configuration "LocationConstraint=$AWS_DEFAULT_REGION")
-  aws s3api create-bucket --bucket "$BACKUP_BUCKET" "${args[@]}" >/dev/null
+  aws s3api create-bucket --bucket "$BACKUP_BUCKET" ${args[@]+"${args[@]}"} >/dev/null
 fi
 aws s3api put-public-access-block --bucket "$BACKUP_BUCKET" --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
 aws s3api put-bucket-versioning --bucket "$BACKUP_BUCKET" --versioning-configuration Status=Enabled
@@ -92,7 +92,7 @@ instance=$(aws ec2 describe-instances --filters "Name=tag:Name,Values=$NAME" Nam
 if [[ $instance == None ]]; then
   ami=$(aws ssm get-parameter --name /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id --query Parameter.Value --output text)
   subnet_args=(); [[ -z ${SUBNET_ID:-} ]] || subnet_args=(--subnet-id "$SUBNET_ID")
-  instance=$(aws ec2 run-instances --image-id "$ami" --instance-type "$INSTANCE_TYPE" --key-name "$NAME" --security-group-ids "$sg" "${subnet_args[@]}" --iam-instance-profile "Name=$NAME" --metadata-options HttpTokens=required,HttpEndpoint=enabled --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":80,"VolumeType":"gp3","Encrypted":true}}]' --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" --client-token "$NAME" --query 'Instances[0].InstanceId' --output text)
+  instance=$(aws ec2 run-instances --image-id "$ami" --instance-type "$INSTANCE_TYPE" --key-name "$NAME" --security-group-ids "$sg" ${subnet_args[@]+"${subnet_args[@]}"} --iam-instance-profile "Name=$NAME" --metadata-options HttpTokens=required,HttpEndpoint=enabled --block-device-mappings '[{"DeviceName":"/dev/sda1","Ebs":{"VolumeSize":80,"VolumeType":"gp3","Encrypted":true}}]' --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$NAME}]" --client-token "$NAME" --query 'Instances[0].InstanceId' --output text)
 fi
 state=$(aws ec2 describe-instances --instance-ids "$instance" --query 'Reservations[0].Instances[0].State.Name' --output text)
 if [[ $state == stopping ]]; then aws ec2 wait instance-stopped --instance-ids "$instance"; state=stopped; fi
