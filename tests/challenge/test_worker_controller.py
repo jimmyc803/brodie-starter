@@ -562,6 +562,8 @@ def test_worker_competition_mode_routing(monkeypatch):
     monkeypatch.setenv("DISPATCHER_URL", "http://d")
     monkeypatch.setenv("DISPATCHER_TOKEN", "t")
     monkeypatch.setenv("HANGUP_MODE", "chert_api")
+    monkeypatch.delenv("CHERT_FACETIME_TOKEN", raising=False)
+    monkeypatch.delenv("CHERT_PROJECT_ID", raising=False)
     assert "chert_api" in worker.check_competition(a)
     monkeypatch.setenv("HANGUP_MODE", "leave_room")
     monkeypatch.delenv("DISPATCHER_TOKEN")

@@ -122,3 +122,68 @@ def test_missing_env_and_from_env(monkeypatch):
         ChertEndClient.from_env()
     monkeypatch.setenv("CHERT_FACETIME_TOKEN", TOKEN)
     assert missing_env() == [] and ChertEndClient.from_env().attempts == 3
+
+
+def test_trickling_response_hits_absolute_deadline():
+    # Headers arrive, then the body trickles one byte per 0.1s: each read beats httpx's inactivity timeout, so only
+    # the absolute per-attempt deadline can stop it (Codex rv-35 P2).
+    import socket
+
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+    stop = threading.Event()
+
+    def serve():
+        srv.settimeout(0.2)
+        while not stop.is_set():
+            try:
+                conn, _ = srv.accept()
+            except OSError:
+                continue
+
+            def trickle(c=conn):
+                try:
+                    c.recv(65536)
+                    c.sendall(b"HTTP/1.1 202 Accepted\r\nContent-Length: 1000\r\n\r\n")
+                    while not stop.is_set():
+                        c.sendall(b"x")
+                        time.sleep(0.1)
+                except OSError:
+                    pass
+                finally:
+                    c.close()
+            threading.Thread(target=trickle, daemon=True).start()
+    threading.Thread(target=serve, daemon=True).start()
+    try:
+        c = ChertEndClient(TOKEN, PROJECT, base_url=f"http://127.0.0.1:{srv.getsockname()[1]}/api", timeout=0.5)
+
+        async def sleep(dt):
+            pass
+        t0 = time.monotonic()
+        ok = asyncio.run(c.end_call("call-9", sleep))
+        assert ok is False
+        assert time.monotonic() - t0 < 3 * 0.5 + 1.5
+    finally:
+        stop.set()
+        srv.close()
+
+
+@pytest.mark.parametrize("token,project", [("ftk_bad\nSECRET_TOKEN", PROJECT), (TOKEN, "proj id"), ("ftk_\x00x", PROJECT)])
+def test_header_unsafe_credentials_rejected_without_echo(token, project, caplog):
+    caplog.set_level(logging.DEBUG)
+    with pytest.raises(ValueError) as ei:
+        ChertEndClient(token, project, base_url="http://127.0.0.1:9/api")
+    assert "SECRET_TOKEN" not in str(ei.value) and token not in str(ei.value) and project not in str(ei.value)
+    assert "SECRET_TOKEN" not in caplog.text
+
+
+def test_malformed_call_id_is_not_sent(mock):
+    m = mock([202])
+    c = ChertEndClient(TOKEN, PROJECT, base_url=m.url)
+
+    async def sleep(dt):
+        pass
+    for bad in ("", "../admin", "a/b", "x" * 200, None):
+        assert asyncio.run(c.end_call(bad, sleep)) is False
+    assert m.requests == []
