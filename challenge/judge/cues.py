@@ -29,6 +29,8 @@ CUES = {
     'power_hour': "It's power hour! Every rep counts double!",
     'hang_up': "That's a wrap! You can hang up now.",
     'welcome': "You're on! Side view, head to toe in frame. Let's go!",
+    'camera_off': "I can't see you! Turn your camera on so I can count.",
+    'try_again': "Something glitched on my end. Hang up and call back in a minute!",
 }
 
 # Reject reason -> cue key. None: no spoken cue for that reason.

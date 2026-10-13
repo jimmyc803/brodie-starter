@@ -228,7 +228,7 @@ def test_fail_closed_sends_call_ended_before_the_delete(tmp_path, monkeypatch):
         await h.settle()
         await run_to_end(h)
     run(go())
-    assert said == ["competition_over"] and h.job.end_reason == "dispatcher_unreachable"
+    assert said == ["try_again"] and h.job.end_reason == "dispatcher_unreachable"
     assert len(h.lk.deleted) == 1 and h.lk.deleted[0][1] == ["call_ended"]
     assert h.events("call_ended")[0]["payload"]["rep_count"] == 0
 
@@ -432,7 +432,7 @@ def test_fail_closed_ended_is_best_effort(tmp_path):
         ok = await r.call.start()
         return r, ok
     r, ok = run(go())
-    assert ok is False and len(r.left) == 1 and r.keys() == ["competition_over"]
+    assert ok is False and len(r.left) == 1 and r.keys() == ["try_again"]
 
 
 def test_call_locked_fail_closed_sends_no_end(tmp_path):
@@ -445,7 +445,7 @@ def test_call_locked_fail_closed_sends_no_end(tmp_path):
             lk.release()
         return r, ok
     r, ok = run(go())
-    assert ok is False and r.call.reason == "call_locked" and r.keys() == ["competition_over"]
+    assert ok is False and r.call.reason == "call_locked" and r.keys() == ["try_again"]
     assert r.disp.events() == [] and len(r.left) == 1
 
 

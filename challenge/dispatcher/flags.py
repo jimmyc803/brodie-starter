@@ -13,7 +13,7 @@ logger = logging.getLogger("challenge.dispatcher")
 _FALLBACKS = {
     "CALLER_ID_SOURCE": ("chert_meta", "claim-window attribution; walk-ins are rejected"),
     "MESSAGING_PROVIDER": ("chert", "no real iMessage delivery"),
-    "HANGUP_MODE": ("leave_room", "hangup not verified; relies on time's-up cue"),
+    "HANGUP_MODE": (("leave_room", "delete_room"), "hangup not verified; relies on time's-up cue"),
     "REVEAL_MODE": ("video", "audio-only reveal"),
     "CARD_DELIVERY": ("attachment", "result card sent as a link"),
 }
@@ -39,7 +39,8 @@ class Flags(BaseModel):
         return {k: getattr(self, k) for k in _FALLBACKS}
 
     def fallbacks(self) -> dict[str, str]:
-        return {k: why for k, (primary, why) in _FALLBACKS.items() if getattr(self, k) != primary}
+        return {k: why for k, (primary, why) in _FALLBACKS.items()
+                if getattr(self, k) not in (primary if isinstance(primary, tuple) else (primary,))}
 
     def log_startup(self) -> None:
         for k, v in self.model_dump().items():

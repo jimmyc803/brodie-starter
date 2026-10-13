@@ -71,11 +71,11 @@ C2_METRIC_KEYS = ("min_elbow_deg_l", "min_elbow_deg_r", "top_elbow_deg", "max_hi
 DEFAULT_COUNT_S = 180          # competition_config call_count_s default (used only when the dispatcher sends none)
 DEFAULT_REVEAL_S = 15          # competition_config call_reveal_s default
 START_DEADLINE_S = 8.0         # the whole /calls/start retry loop (P1-2: a slow or lost answer is retried, same call id)
-FAIL_CUE = "competition_over"  # fail closed: the caller hears this instead of silence (an existing, rendered phrase)
+FAIL_CUE = "try_again"  # fail closed: the caller hears this instead of silence
 FAIL_CUE_S = 3.0               # fail closed: let the cue play before the hang-up
 FAIL_ENDED_S = 5.0             # fail closed: the best-effort call_ended is given this long
 FAIL_ENDED_REASONS = frozenset({"dispatcher_unreachable", "accept_without_user", "call_setup_failed"})
-NO_VIDEO_CUE = "not_in_frame"  # P0-3: an accepted call without a video track (no rendered "camera on" phrase exists)
+NO_VIDEO_CUE = "camera_off"  # P0-3: an accepted call without a video track
 REJECT_LEAVE_S = 3.5           # leave this long after t0 on a reject (+ <= 1.5 s cue tail in the worker = 5 s)
 WELCOME_GAP_S = 4.0            # power_hour cue after the welcome
 CHECK_TEXTS_AFTER_S = 1.5      # check_texts after time_up

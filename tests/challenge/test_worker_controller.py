@@ -235,8 +235,8 @@ def test_dispatcher_down_at_start_fails_closed(tmp_path):
     r, ok = run(go())
     assert ok is False and r.call.decision == "error"
     assert r.alerts == ["dispatcher_unreachable"]
-    # P1-2: the short competition_over cue instead of silence (never a misleading not_your_turn), then the hang-up
-    assert r.keys() == ["competition_over"] and "not_your_turn" not in r.keys()
+    # P1-2: the short try_again cue instead of silence (never a misleading not_your_turn), then the hang-up
+    assert r.keys() == ["try_again"] and "not_your_turn" not in r.keys()
     assert r.said[0][0] >= ctl.START_DEADLINE_S - 0.5                # retried for the whole widened deadline first
     assert len(r.left) == 1 and r.left[0][0] <= ctl.START_DEADLINE_S + ctl.FAIL_CUE_S + ctl.FAIL_ENDED_S + 0.5
     starts = [p for p in r.disp.paths() if p == "/calls/start"]
@@ -1068,7 +1068,7 @@ def test_accept_without_user_or_setup_error_fails_closed(tmp_path):
     # P1-2: the fail cue plays, then the leave (FAIL_CUE_S later); a best-effort call_ended (0 reps) frees the line
     assert ok_a is False and a.call.decision == "error" and a.left == [(ctl.FAIL_CUE_S, "accept_without_user")]
     assert ok_b is False and b.call.decision == "error" and b.left == [(ctl.FAIL_CUE_S, "call_setup_failed")]
-    assert a.keys() == ["competition_over"] and b.keys() == ["competition_over"]
+    assert a.keys() == ["try_again"] and b.keys() == ["try_again"]
     assert res_b == {"recorded": False, "committed": False, "decision": "error"}
     assert a.call.on_rep(rep_ev(), t=T0 + 1) is None
     for r in (a, b):
