@@ -62,7 +62,7 @@ Run:
   GEMINI_API_KEY=... .venv/bin/python -m facetime.worker --voice gemini dev                                      # + GEMINI_LIVE_MODEL, GEMINI_VOICE
 The flags before the LiveKit subcommand are ours; `dev`, `start`, `connect`, `download-files` and their options are the LiveKit Agents CLI's.
 """
-import argparse, asyncio, collections, json, logging, os, sys, threading, time
+import argparse, asyncio, collections, json, logging, math, os, sys, threading, time
 from livekit import rtc
 from livekit.agents import AutoSubscribe, JobContext, JobProcess, WorkerOptions, cli
 from facetime import DATA, AUDIO_TRACK_NAME
@@ -176,6 +176,27 @@ def consumer(fn):
 
 def truthy(s):
     return str(s or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def pose_diag(rgb, lm):
+    """One line of numbers about what the coach sees (never pixels): the picture's content box inside the frame (black bars
+    trimmed), the pose's box, body angle from horizontal (0 = plank, 90 = standing), elbow angles and key-joint visibility."""
+    import numpy as np
+    h, w = rgb.shape[:2]; lit = rgb.max(axis=2) > 24
+    cols = np.where(lit.any(axis=0))[0]; rows = np.where(lit.any(axis=1))[0]
+    box = f'content x {cols[0]/w:.2f}-{cols[-1]/w:.2f} y {rows[0]/h:.2f}-{rows[-1]/h:.2f}' if len(cols) and len(rows) else 'content none (black)'
+    if lm is None: return f'{w}x{h} {box}; no pose'
+    a = np.asarray(lm, dtype=float); xy = a[:, :2] * [w, h]; vis = a[:, 3]
+    mid = lambda i, j: (xy[i] + xy[j]) / 2
+    sh, hp, an = mid(11, 12), mid(23, 24), mid(27, 28)
+    def ang(v): return abs(math.degrees(math.atan2(abs(v[1]), abs(v[0]) + 1e-9)))
+    def elbow(s_, e, wr):
+        u, v = xy[s_] - xy[e], xy[wr] - xy[e]; return math.degrees(math.acos(max(-1, min(1, u @ v / (np.linalg.norm(u) * np.linalg.norm(v) + 1e-9)))))
+    good = vis[[0, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28]]
+    pb = a[vis > 0.5, :2]
+    pbox = f'pose x {pb[:,0].min():.2f}-{pb[:,0].max():.2f} y {pb[:,1].min():.2f}-{pb[:,1].max():.2f}' if len(pb) else 'pose box n/a'
+    return (f'{w}x{h} {box}; {pbox}; torso {ang(hp - sh):.0f}deg body {ang(an - sh):.0f}deg; elbows L {elbow(11, 13, 15):.0f} R {elbow(12, 14, 16):.0f}; '
+            f'vis head {vis[0]:.2f} sh {vis[11]:.2f}/{vis[12]:.2f} wr {vis[15]:.2f}/{vis[16]:.2f} hip {vis[23]:.2f}/{vis[24]:.2f} ank {vis[27]:.2f}/{vis[28]:.2f} min {good.min():.2f}')
 
 
 def build_parser():
@@ -901,6 +922,10 @@ class CoachJob:
                 finally:
                     self.feed_busy = False
             self.processed += 1; self.last_proc_wall = time.time()
+            if self.comp is not None and time.monotonic() - getattr(self, 'diag_t', 0.0) >= 1.0:
+                self.diag_t = time.monotonic()
+                try: print(f'[posediag] {pose_diag(rgb, getattr(self.pipe, "last_landmarks", None))}', flush=True)
+                except Exception as e: print(f'[posediag] failed: {e!r}', flush=True)
             if self.a.max_s and t_mono - self.first_frame_t >= self.a.max_s:
                 print(f'[worker] --max-s {self.a.max_s} reached', flush=True); self.loop.call_soon_threadsafe(self.end, 'max_s reached'); break
 
