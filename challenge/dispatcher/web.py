@@ -157,6 +157,7 @@ def _me_payload(r: dict[str, Any], email: str | None, caller_id_source: str) -> 
         "calls_today": r.get("calls_today", 0),
         "calls_left": r.get("calls_left", 0),
         "daily_call_cap": r.get("daily_call_cap"),
+        "uncapped": bool(r.get("uncapped")),  # team member: no daily cap (calls_left still counts to the cap)
         "streak": r.get("streak", 0),
         "avatar_level": r.get("avatar_level", 1),
         "opted_out": bool(r.get("opted_out")),

@@ -8,7 +8,7 @@ from typing import Literal
 
 CommandKind = Literal[
     "JOIN", "YES", "QUEUE", "STATUS", "TOP", "LEAVE", "RULES", "POWER",
-    "HELP", "STOP", "START", "LINK", "DELETE", "UNKNOWN",
+    "HELP", "STOP", "START", "LINK", "LIFE", "DELETE", "UNKNOWN",
 ]
 
 
@@ -22,6 +22,9 @@ _COMMANDS: dict[str, CommandKind] = {
     "JOIN": "JOIN", "YES": "YES", "QUEUE": "QUEUE", "STATUS": "STATUS",
     "TOP": "TOP", "LEAVE": "LEAVE", "RULES": "RULES", "POWER": "POWER",
     "HELP": "HELP", "STOP": "STOP", "START": "START",
+    # LIFE: team-only health report (D-40). Exact match only, never fuzzy: it is one edit from LINE
+    # (an alias for QUEUE) and from LIKE/LIVE, so a competitor's typo must not reach it.
+    "LIFE": "LIFE", "HEALTH": "LIFE",
     "LINK": "LINK",  # LINK <6-digit code>: verify a web account's FaceTime handle (D-25). Exact match only, never fuzzy.
 }
 _ALIASES: dict[str, CommandKind] = {
@@ -102,14 +105,19 @@ def split_join_arg(arg: str) -> JoinArg:
             ref = ref or value.upper()
         else:
             src = src or value.lower()
+    # The leftover words are the display name, joined by single spaces: "JOIN stan lee" is "stan lee" (D-41).
     return JoinArg(" ".join(words).strip(_EDGES), ref, src)
 
 
 def validate_display_name(name: str) -> tuple[bool, str]:
+    """The same rule as ch_valid_display_name (D-41): 3-20 characters of letters, numbers and underscores in
+    space-separated words, so "stan lee" is a name but " stan", "stan  lee" and "stan-lee" are not."""
     if not 3 <= len(name) <= 20:
         return False, "Use 3–20 characters."
-    if re.fullmatch(r"[A-Za-z0-9_]+", name) is None:
-        return False, "Use only letters, numbers, and underscores."
-    if any(word in name.lower() for word in _BLOCKED):
+    if re.fullmatch(r"[A-Za-z0-9_]+( [A-Za-z0-9_]+)*", name) is None:
+        return False, "Use only letters, numbers, underscores, and single spaces."
+    # Checked with the spaces removed too: since D-41 a name can hold spaces, and "f uck" would otherwise pass.
+    flat = name.lower().replace(" ", "")
+    if any(word in name.lower() or word in flat for word in _BLOCKED):
         return False, "Pick a name without profanity or slurs."
     return True, ""

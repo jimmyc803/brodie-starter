@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 };
 
 const STEPS = [
-  ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board at the end, like JOIN Marcus_T. Use 3 to 20 letters, numbers or underscores, no spaces."],
+  ["Text JOIN + your name", "Tap the button and send the pre-filled text. Add the name you want on the board at the end, like JOIN Marcus_T. Use 3 to 20 letters, numbers, underscores or spaces."],
   ["Reply YES", "YES confirms you're 18+, in the US, and accept the official rules."],
   ["Text QUEUE", "Get in line. We text you your spot, then again when it's your turn."],
   ["FaceTime and rep", "When we text you're up, FaceTime Brodie within 90 seconds, keep your camera on, and do strict push-ups. Brodie hangs up at 3:15."],

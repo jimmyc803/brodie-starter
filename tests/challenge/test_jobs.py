@@ -526,3 +526,46 @@ def test_job_claim_and_queue_update_bucket_are_atomic(env):
     assert store.rpc("ch_queue_update_notify", other)["duplicate"] is True
     assert store.rpc("ch_job_get", {"p_key": f"qpos:{uid}"}) == {"position": 3}  # loser did not touch state
     assert n_msgs(conn, "queue_update") == 1
+
+
+# ---------------------------------------------------------------- live line watch (D-42)
+
+def test_line_watch_announces_pickup_and_hangup(env):
+    conn, store, cfg, provider, jobs, clock = env
+    conn.execute("update competition_config set value=%s where key='team_alert_handles'", (Jsonb([TEAM]),))
+    t = D
+    uid, h = mkuser(conn, name="Stan Lee")
+    assert jobs.alerts.watch_lines(t) == []                       # idle line: nothing to say, nothing written
+    assert conn.execute("select count(*) from ch_job_state").fetchone()[0] == 0
+
+    assert store.rpc("ch_call_start", {"p_call_id": "c-watch", "p_line_id": "line-1", "p_handle": h,
+                                       "p_mode": "chert_meta", "p_now": t})["decision"] == "accept"
+    assert jobs.alerts.watch_lines(t) == ["line_live:line-1"]
+    assert jobs.alerts.watch_lines(t + timedelta(seconds=10)) == []   # still in the call: announced once
+    rows = conn.execute("select handle, template, ctx from messages where template='line_live'").fetchall()
+    assert len(rows) == 1 and rows[0][0] == TEAM
+    assert (rows[0][2]["who"], rows[0][2]["line_id"], rows[0][2]["queue_len"]) == ("Stan Lee", "line-1", 0)
+
+    end = t + timedelta(seconds=185)
+    store.rpc("ch_call_end", {"p_call_id": "c-watch", "p_ended_at": end, "p_count_end_at": end,
+                              "p_rep_count": 0, "p_now": end})
+    assert jobs.alerts.watch_lines(end) == ["line_done:line-1"]
+    ctx = conn.execute("select ctx from messages where template='line_done'").fetchone()[0]
+    assert (ctx["who"], ctx["duration"]) == ("Stan Lee", "3m")       # the name survives the line being cleared
+    jobs.outbox.run_once(end + timedelta(seconds=1))
+    bodies = [m["body"] for m in provider.sent]
+    assert any(b.startswith("LIVE: Stan Lee is on the line now") for b in bodies)
+    assert any(b.startswith("Line free again: Stan Lee was on for 3m") for b in bodies)
+
+
+def test_line_watch_can_be_turned_off_without_losing_track(env):
+    conn, store, cfg, provider, jobs, clock = env
+    conn.execute("update competition_config set value=%s where key='team_alert_handles'", (Jsonb([TEAM]),))
+    conn.execute("insert into competition_config (key, value) values ('team_line_alerts','false'::jsonb)"
+                 " on conflict (key) do update set value=excluded.value")
+    t = D
+    uid, h = mkuser(conn)
+    assert store.rpc("ch_call_start", {"p_call_id": "c-off", "p_line_id": "line-1", "p_handle": h,
+                                       "p_mode": "chert_meta", "p_now": t})["decision"] == "accept"
+    assert jobs.alerts.watch_lines(t) == ["line_live:line-1"]        # the transition is still tracked
+    assert n_msgs(conn, "line_live") == 0                            # but nothing is sent

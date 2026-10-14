@@ -9,9 +9,9 @@ team_alert_handles (env ADMIN_ALERT_HANDLES overrides when set); quiet hours byp
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
-import os
 import re
 from datetime import datetime
 from typing import Any
@@ -20,6 +20,7 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from challenge.config import alert_handles
 from challenge.dispatcher.ratelimit import rate_limit
 from challenge.judge.gates import DEFAULT_THRESHOLDS, JUDGE_VERSION, merged_thresholds
 from challenge.messaging.templates import LINK_FIELDS, TEMPLATES, render
@@ -35,6 +36,7 @@ REASON_MAX = 500
 ALERT_DEDUPE_S = 600
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _ALERT_KIND = re.compile(r"^[A-Za-z0-9_.:@/-]{1,64}$")
+_ALERT_DIGITS = re.compile(r"\d+")  # dedupe ignores counters inside an alert message (see internal_alert)
 
 
 # ------------------------------------------------------------------ shared helpers
@@ -242,19 +244,6 @@ class AlertIn(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
 
 
-def alert_handles(cfg: dict[str, Any]) -> list[str]:
-    """competition_config.team_alert_handles; env ADMIN_ALERT_HANDLES (comma list), when set, overrides it."""
-    env = os.environ.get("ADMIN_ALERT_HANDLES", "")
-    raw = env.split(",") if env.strip() else cfg.get("team_alert_handles") or []
-    if not isinstance(raw, list):
-        raw = []
-    out: list[str] = []
-    for h in raw:
-        if isinstance(h, str) and h.strip() and h.strip() not in out:
-            out.append(h.strip())
-    return out
-
-
 @internal_router.post("/alert", dependencies=[Depends(worker_token)])
 def internal_alert(a: AlertIn, request: Request) -> dict:
     kind = (a.kind or a.component or "").strip()
@@ -267,12 +256,20 @@ def internal_alert(a: AlertIn, request: Request) -> dict:
         raise HTTPException(503, "no alert handles configured")
     now = _now(request)
     bucket = int(now.timestamp() // ALERT_DEDUPE_S)
-    body = f"Brodie alert [{kind}]: {a.message.strip()}"
+    message = a.message.strip()
+    # The message is part of the dedupe key, not just the kind: infra/alert.sh sends every host check under one
+    # kind ('infra'), so a kind-only key let whichever check ran first in monitor.py's order silently swallow
+    # every other infra problem for the whole 10-minute bucket (live 2026-10-13: a stale-heartbeat row hid both
+    # the Chert agent being down and the missing token expiry). Numbers are normalized away first: a message
+    # that counts ("lost 11 min ago") must not become a new text every minute.
+    digest = hashlib.sha256(_ALERT_DIGITS.sub("#", message).encode()).hexdigest()[:12]
+    body = f"Brodie alert [{kind}]: {message}"
     enqueued = 0
     for h in handles:
         res = _rpc(store, "ch_outbox_enqueue", {
             "p_handle": h, "p_user_id": None, "p_template": "alert", "p_body": body, "p_media_url": None,
-            "p_dedupe_key": f"alert:{kind}:{bucket}:{h}", "p_not_before": now, "p_now": now, "p_ctx": None})
+            "p_dedupe_key": f"alert:{kind}:{digest}:{bucket}:{h}", "p_not_before": now, "p_now": now,
+            "p_ctx": None})
         enqueued += 0 if res.get("duplicate") else 1
     logger.warning("alert %s: %d/%d enqueued", kind, enqueued, len(handles))
     return {"ok": True, "recipients": len(handles), "enqueued": enqueued, "deduped": enqueued == 0}

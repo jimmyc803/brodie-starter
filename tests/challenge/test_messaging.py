@@ -75,7 +75,8 @@ def test_standalone_stop_overrides_other_commands(body):
 @pytest.mark.parametrize(("arg", "expected"), [
     ("Marcus_T", JoinArg("Marcus_T")),
     ("", JoinArg("")),
-    ("Marcus T", JoinArg("Marcus T")),                      # unchanged: still an invalid two-word name
+    ("Marcus T", JoinArg("Marcus T")),                      # a two-word name: "JOIN stan lee" is "stan lee" (D-41)
+    ("  stan   lee  ", JoinArg("stan lee")),                # runs of whitespace collapse to one space
     ("ref_code", JoinArg("ref_code")),                      # underscore: a valid display name, not a tag
     ("ref-k7x2qb Marcus_T", JoinArg("Marcus_T", "K7X2QB")),  # the site pre-fills the tag before the name
     ("Marcus_T REF:K7X2QB", JoinArg("Marcus_T", "K7X2QB")),
@@ -97,14 +98,18 @@ def test_join_with_tags_parses_as_join():
     assert parse("JOIN ref-K7X2QB stop").kind == "STOP"
 
 
-@pytest.mark.parametrize("name", ["Amy", "Coach_12", "_name_", "A" * 20])
+@pytest.mark.parametrize("name", ["Amy", "Coach_12", "_name_", "A" * 20,
+                                  "stan lee", "Stan Lee", "a b c", "Big Mike_2"])
 def test_valid_names(name):
     assert validate_display_name(name) == (True, "")
 
 
 @pytest.mark.parametrize("name", [
-    "", "ab", "a" * 21, "two names", "na-me", "éclair", "abc\n", "🙂abc",
+    "", "ab", "a" * 21, "na-me", "éclair", "abc\n", "🙂abc",
+    "stan  lee", " stan lee", "stan lee ", "a" * 18 + " bc",   # no double, leading or trailing space; 20 max
+    "stan\tlee", "two names that are far too long",
     "xxFuCkxx", "Shit123", "faggot123", "nigger123", "asshole99",
+    "f uck", "S h i t", "fag got",   # spaces do not smuggle a slur past the filter (D-41)
 ])
 def test_invalid_names(name):
     ok, reason = validate_display_name(name)

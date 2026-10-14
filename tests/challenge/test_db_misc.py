@@ -15,6 +15,7 @@ from db.test.harness import MIGRATIONS, connect
 
 ET = ZoneInfo("America/New_York")
 MIGRATION = MIGRATIONS / "20261013_challenge_misc.sql"
+REPS_MIGRATION = MIGRATIONS / "20261027_challenge_admin_reps.sql"
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=ET)
 RPCS = ["ch_queue_position", "ch_join_start", "ch_join_confirm", "ch_user_by_handle", "ch_set_opt", "ch_user_status",
         "ch_leaderboard", "ch_rank_deltas", "ch_config_get", "ch_config_set", "ch_admin_void_call",
@@ -88,6 +89,11 @@ def test_migration_idempotent_and_execute_service_role_only(pg_cluster, db):
     name = db.split("dbname=")[1].split()[0]
     pg_cluster.apply_file(name, MIGRATION)
     pg_cluster.apply_file(name, MIGRATION)
+    # Re-applying this file resurrects the 4-arg ch_admin_adjust that 20261027 replaced with the reps-aware one, and
+    # a 4-argument named call would then be ambiguous. Re-apply that migration (twice: idempotent) so the module
+    # database ends on the current definition.
+    pg_cluster.apply_file(name, REPS_MIGRATION)
+    pg_cluster.apply_file(name, REPS_MIGRATION)
     with connect(db) as c:
         rows = c.execute(
             "select p.proname, p.prosecdef, has_function_privilege('anon', p.oid, 'execute'),"
@@ -128,7 +134,9 @@ def test_join_flow_happy_path(tx):
     assert tx.execute("select kind from client_handles where handle='bob@example.com'").fetchone()[0] == "email"
 
 
-@pytest.mark.parametrize("name", ["ab", "a" * 21, "bad name", "bad-name", "émile", "", None])
+# "bad name" is valid since D-41 (see test_db_names_with_spaces.py); a space at an edge or doubled is not.
+@pytest.mark.parametrize("name", ["ab", "a" * 21, "bad  name", " bad name", "bad name ", "a" * 19 + " b",
+                                 "bad-name", "émile", "", None])
 def test_join_start_bad_name(tx, name):
     r = rpc(tx, "ch_join_start", p_handle="+15550002", p_display_name=name, p_now=NOW)
     assert r == {"ok": False, "reason": "bad_name"}
@@ -362,12 +370,54 @@ def test_admin_void_unvoid_adjust_audited(tx):
     assert v[0][3]["void_reason"] == "cheat" and v[0][4] == "cheat"
     assert audit(tx, "unvoid_call")[0][3]["void"] is False
     r = adjust(tx, uid, -3)
-    assert r["ok"] and r["points"] == 7
+    assert r["ok"] and r["points"] == 7 and r["valid_reps"] == 7 and r["reps_delta"] == -3
     a = audit(tx, "adjust_points")[0]
-    assert a[2] == {"points": 10} and a[3]["points"] == 7 and a[3]["delta"] == -3
+    assert a[2] == {"points": 10, "valid_reps": 10}
+    assert a[3]["points"] == 7 and a[3]["delta"] == -3 and a[3]["valid_reps"] == 7 and a[3]["reps_delta"] == -3
     assert rpc(tx, "ch_admin_void_call", p_call_id="missing", p_reason="r", p_actor="a")["reason"] == "not_found"
     assert rpc(tx, "ch_admin_adjust", p_user_id=uuid.uuid4(), p_points=1, p_reason="r", p_actor="a")["reason"] == \
         "not_found"
+
+
+def test_admin_adjust_moves_valid_reps(tx):
+    """An adjustment carries a reps delta: by default it mirrors the points, so the board never shows 45 pts / 52 reps."""
+    uid = make_user(tx, "repfix")
+    make_call(tx, uid, et(2026, 10, 14, 9, 0), 10)
+    assert (rpc(tx, "ch_user_status", p_user_id=uid, p_now=NOW)["points"],
+            rpc(tx, "ch_user_status", p_user_id=uid, p_now=NOW)["valid_reps"]) == (10, 10)
+
+    # default (no p_reps): reps move with the points
+    assert adjust(tx, uid, 5)["valid_reps"] == 15
+    s = rpc(tx, "ch_user_status", p_user_id=uid, p_now=NOW)
+    assert (s["points"], s["valid_reps"]) == (15, 15)
+
+    # explicit 0: a points-only correction leaves the rep count alone
+    r = rpc(tx, "ch_admin_adjust", p_user_id=uid, p_points=4, p_reps=0, p_reason="power hour fix", p_actor="a@x.com")
+    assert (r["points"], r["valid_reps"], r["reps_delta"]) == (19, 15, 0)
+
+    # explicit reps: a rep-only correction leaves points alone (points delta 0 is allowed when reps move)
+    r = rpc(tx, "ch_admin_adjust", p_user_id=uid, p_points=0, p_reps=-5, p_reason="miscount", p_actor="a@x.com")
+    assert (r["points"], r["valid_reps"]) == (19, 10)
+
+    # every public reader agrees, and the big board tile is just their sum
+    assert tx.execute("select points, valid_reps from ch_user_stats where user_id=%s", (uid,)).fetchone() == (19, 10)
+    assert tx.execute("select points, valid_reps from leaderboard_public where display_name='repfix'").fetchone() == \
+        (19, 10)
+    assert tx.execute("select valid_reps from user_public where display_name='repfix'").fetchone()[0] == 10
+    assert rpc(tx, "ch_leaderboard", p_limit=10, p_now=NOW)[0]["valid_reps"] == 10
+    assert tx.execute("select ch_valid_reps(%s)", (uid,)).fetchone()[0] == 10
+
+    # a correction bigger than the earned reps floors at 0 rather than going negative
+    rpc(tx, "ch_admin_adjust", p_user_id=uid, p_points=0, p_reps=-999, p_reason="wipe reps", p_actor="a@x.com")
+    assert tx.execute("select ch_valid_reps(%s)", (uid,)).fetchone()[0] == 0
+    assert tx.execute("select valid_reps from ch_user_stats where user_id=%s", (uid,)).fetchone()[0] == 0
+
+    # per-day reporting stays judged-reps-only: an adjustment belongs to a user, not to an ET day
+    assert tx.execute("select valid_reps from user_daily_public where display_name='repfix'").fetchall() == [(10,)]
+
+    # a no-op (no points, no reps) is still refused
+    raises(tx, psycopg.errors.InvalidParameterValue, "ch_admin_adjust",
+           p_user_id=uid, p_points=0, p_reps=0, p_reason="nothing", p_actor="a@x.com")
 
 
 def test_admin_ban_unban_audited(tx):

@@ -33,6 +33,7 @@ import {
   isAllowlisted,
   optionalReason,
   parsePoints,
+  parseRepsDelta,
   requireAdmin,
   requireReason,
 } from "@/lib/admin";
@@ -366,6 +367,33 @@ describe("reason validation", () => {
     ]);
     expect(optionalReason("  typo   fix ")).toBe("typo fix");
     expect(() => optionalReason("x".repeat(501))).toThrow(AdminInputError);
+  });
+
+  it("score adjustments move valid reps: blank reps = same delta, explicit reps decouples", async () => {
+    cookieJar.set(ACCESS_COOKIE, "tok-boss");
+    // Blank reps -> p_reps null -> the RPC mirrors the points delta onto valid reps.
+    expect(await adjustScore(PREV, form({ user_id: USER, points: "+5", reason: "miscount" }))).toMatchObject({ ok: true });
+    expect(rpcCalls()[0].body).toMatchObject({ p_user_id: USER, p_points: 5, p_reps: null });
+
+    // An explicit 0 is a points-only correction; the rep count must not move.
+    calls.length = 0;
+    expect(await adjustScore(PREV, form({ user_id: USER, points: "+5", reps: "0", reason: "power hour fix" })))
+      .toMatchObject({ ok: true });
+    expect(rpcCalls()[0].body).toMatchObject({ p_points: 5, p_reps: 0 });
+
+    // ...and a reps-only correction is allowed to leave points alone.
+    calls.length = 0;
+    expect(await adjustScore(PREV, form({ user_id: USER, points: "0", reps: "-3", reason: "rep miscount" })))
+      .toMatchObject({ ok: true });
+    expect(rpcCalls()[0].body).toMatchObject({ p_points: 0, p_reps: -3 });
+
+    expect(parseRepsDelta("")).toBeNull();
+    expect(parseRepsDelta(" 0 ")).toBe(0);
+    expect(parseRepsDelta("-12")).toBe(-12);
+    expect(() => parseRepsDelta("1.5")).toThrow(AdminInputError);
+    expect(await adjustScore(PREV, form({ user_id: USER, points: "0", reason: "nothing" }))).toMatchObject({
+      status: 400,
+    });
   });
 
   it("validates other inputs", async () => {

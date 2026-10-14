@@ -76,6 +76,7 @@ export type AdminUser = {
   opted_out_at: string | null;
   is_team: boolean;
   points: number | null;
+  valid_reps: number | null;
   rank: number | null;
 };
 
@@ -89,10 +90,10 @@ export async function searchUsers(q: string): Promise<AdminUser[]> {
   const base =
     "clients?select=id,display_name,joined_at,banned_at,ban_reason,opted_out_at,is_team&joined_at=not.is.null&limit=50";
   const byName = term
-    ? serviceSelect<Omit<AdminUser, "points" | "rank">>(
+    ? serviceSelect<Omit<AdminUser, "points" | "valid_reps" | "rank">>(
         `${base}&display_name=ilike.${encodeURIComponent(`*${term}*`)}&order=display_name.asc`,
       )
-    : serviceSelect<Omit<AdminUser, "points" | "rank">>(`${base}&order=joined_at.desc`);
+    : serviceSelect<Omit<AdminUser, "points" | "valid_reps" | "rank">>(`${base}&order=joined_at.desc`);
   // Exact handle lookup (phone/email) so admins can find a texter by number.
   const handle = q.trim();
   const byHandle =
@@ -103,18 +104,23 @@ export async function searchUsers(q: string): Promise<AdminUser[]> {
   let all = rows;
   if (h?.user_id && !rows.some((r) => r.id === h.user_id)) {
     all = [
-      ...(await serviceSelect<Omit<AdminUser, "points" | "rank">>(
+      ...(await serviceSelect<Omit<AdminUser, "points" | "valid_reps" | "rank">>(
         `clients?select=id,display_name,joined_at,banned_at,ban_reason,opted_out_at,is_team&id=eq.${encodeURIComponent(h.user_id)}`,
       )),
       ...rows,
     ];
   }
-  const board = await serviceRpc<{ user_id: string; rank: number; points: number }[]>("ch_leaderboard", {
+  const board = await serviceRpc<{ user_id: string; rank: number; points: number; valid_reps: number }[]>("ch_leaderboard", {
     p_limit: null,
     p_now: new Date().toISOString(),
   });
   const byId = new Map((board ?? []).map((b) => [b.user_id, b]));
-  return all.map((u) => ({ ...u, points: byId.get(u.id)?.points ?? null, rank: byId.get(u.id)?.rank ?? null }));
+  return all.map((u) => ({
+    ...u,
+    points: byId.get(u.id)?.points ?? null,
+    valid_reps: byId.get(u.id)?.valid_reps ?? null,
+    rank: byId.get(u.id)?.rank ?? null,
+  }));
 }
 
 // ------------------------------------------------------------------ metrics

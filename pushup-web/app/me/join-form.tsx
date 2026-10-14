@@ -36,14 +36,14 @@ export function JoinForm({ email }: { email: string | null }) {
             required
             minLength={3}
             maxLength={20}
-            pattern="[A-Za-z0-9_]{3,20}"
+            pattern="[A-Za-z0-9_]+( [A-Za-z0-9_]+)*"
             autoComplete="nickname"
             autoCapitalize="none"
             spellCheck={false}
             placeholder="Marcus_T"
             className={fieldCls}
           />
-          <p className="text-sm text-ink-3">3–20 letters, numbers or underscores. Public.</p>
+          <p className="text-sm text-ink-3">3–20 letters, numbers, underscores or spaces. Public.</p>
         </div>
         <div className="space-y-2">
           <label htmlFor="join-handle" className="eyebrow block">

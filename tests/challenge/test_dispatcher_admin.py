@@ -267,6 +267,18 @@ def test_internal_alert_dedupe_and_handles(env, monkeypatch, caplog):
     assert r["recipients"] == 1 and r["enqueued"] == 1
     assert conn.execute("select handle from messages order by id desc limit 1").fetchone()[0] == "+15550000009"
     assert c.post("/internal/alert", headers=TOK, json={"message": "no kind"}).status_code == 400
+    monkeypatch.delenv("ADMIN_ALERT_HANDLES")
+    # Two different infra problems in one dedupe window are two texts: every host check shares the kind 'infra',
+    # so a kind-only key let the first one of the bucket swallow the rest (live 2026-10-13).
+    first = c.post("/internal/alert", headers=TOK, json={"component": "infra", "message": "Stale heartbeats"}).json()
+    second = c.post("/internal/alert", headers=TOK, json={"component": "infra", "message": "Chert agent unhealthy"}).json()
+    again = c.post("/internal/alert", headers=TOK, json={"component": "infra", "message": "Stale heartbeats"}).json()
+    assert (first["enqueued"], second["enqueued"], again["deduped"]) == (2, 2, True)
+    # A counting message is still one text: the digest ignores digits, or "lost 11 min ago" would text every minute.
+    counting = {"component": "infra", "message": "Connection to Chert lost 11 min ago without recovery"}
+    assert c.post("/internal/alert", headers=TOK, json=counting).json()["enqueued"] == 2
+    counting["message"] = "Connection to Chert lost 12 min ago without recovery"
+    assert c.post("/internal/alert", headers=TOK, json=counting).json()["deduped"] is True
     logged = "\n".join(r.getMessage() for r in caplog.records)
     assert "worker_down" in logged and "no heartbeat" not in logged and "disk" not in logged
 

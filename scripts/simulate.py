@@ -388,6 +388,9 @@ class Sim:
                 for r in self.st.q("select id, banned_at, opted_out_at, joined_at from clients")}
 
     def eligible(self, queue: list[dict], clients: dict, lines: dict, t: datetime, exclude: set[int]) -> list[dict]:
+        """The model mirrors ch_tick step 3 for ordinary contestants. It does not model clients.is_team (no team
+        account is ever simulated): a team member has no cap (D-38) and sorts first (D-43), so marking a simulated
+        user team would make this model disagree with the database."""
         holders = {l["user_id"] for l in lines.values() if l["state"] in ("claimed", "in_call")}
         out = [q for q in queue if q["status"] == "waiting" and q["id"] not in exclude
                and not clients[q["user_id"]]["banned"] and not clients[q["user_id"]]["opted_out"]

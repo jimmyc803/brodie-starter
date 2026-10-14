@@ -26,7 +26,7 @@ const STEPS: [string, React.ReactNode][] = [
   [
     "Text JOIN + your name",
     <>
-      Send <Code>JOIN your_name</Code> to Brodie, for example <Code>JOIN Marcus_T</Code>. Names are 3 to 20 letters, numbers or underscores, no spaces.
+      Send <Code>JOIN your_name</Code> to Brodie, for example <Code>JOIN Marcus_T</Code>. Names are 3 to 20 letters, numbers, underscores or spaces.
     </>,
   ],
   [
@@ -72,7 +72,7 @@ function Code({ children }: { children: React.ReactNode }) {
 }
 
 const COMMANDS: [string, string][] = [
-  ["JOIN name", "Sign up with a display name (3 to 20 letters, numbers or underscores)."],
+  ["JOIN name", "Sign up with a display name (3 to 20 letters, numbers, underscores or spaces)."],
   ["YES", "Confirm you are 18+, in the US, and accept the rules."],
   ["QUEUE (Q, LINE)", "Get in line, or find out the line is open. Also turns texts back on after STOP."],
   ["STATUS (S, ME)", "Your points, valid reps, rank, calls left today, streak, queue spot and today's power hour."],

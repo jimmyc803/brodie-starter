@@ -159,7 +159,11 @@ export function MeDashboard({ initial }: { initial: RegisteredMe }) {
 
       <dl className="grid grid-cols-2 gap-3">
         <Stat label="Today's points" value={String(me.points_today)} accent />
-        <Stat label="Calls left today" value={`${me.calls_left}`} hint={`of ${cap} · resets midnight ET`} />
+        {me.uncapped ? (
+          <Stat label="Calls left today" value="No cap" hint={`${me.calls_today} today · team · first in line`} />
+        ) : (
+          <Stat label="Calls left today" value={`${me.calls_left}`} hint={`of ${cap} · resets midnight ET`} />
+        )}
         <Stat label="Total points" value={String(me.points)} hint={me.rank ? `${ordinalRank(me.rank)} of ${me.total_users}` : "Unranked"} />
         <Stat
           label="Day streak"

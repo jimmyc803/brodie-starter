@@ -1,6 +1,7 @@
 """Live competition config with defaults. Values come from rpc ch_config_get, cached for ttl_s."""
 from __future__ import annotations
 
+import os
 import time
 from typing import Any, Callable
 
@@ -41,6 +42,7 @@ DEFAULTS: dict[str, Any] = {
     "site_url": "https://brodie-pushups.vercel.app",
     "brodie_number": None,
     "team_alert_handles": [],
+    "team_line_alerts": True,  # D-42: text the team handles when a line picks up and hangs up
     "challenge_coach_id": None,
     "outbound_rate_per_min": 20,
 }
@@ -75,3 +77,20 @@ class Config:
         if key in self._data:
             return self._data[key]
         return DEFAULTS[key]
+
+
+def alert_handles(cfg: Any) -> list[str]:
+    """Team handles for infra alerts, from a Config or a plain config dict.
+
+    competition_config.team_alert_handles; env ADMIN_ALERT_HANDLES (comma list), when set, overrides it.
+    Competitors are never reachable this way: no alert path reads anything but this list.
+    """
+    env = os.environ.get("ADMIN_ALERT_HANDLES", "")
+    raw = env.split(",") if env.strip() else cfg.get("team_alert_handles") or []
+    if not isinstance(raw, list):
+        raw = []
+    out: list[str] = []
+    for handle in raw:
+        if isinstance(handle, str) and handle.strip() and handle.strip() not in out:
+            out.append(handle.strip())
+    return out

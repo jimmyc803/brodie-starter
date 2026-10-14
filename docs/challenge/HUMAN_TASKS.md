@@ -95,6 +95,10 @@ Follow the device-login URL on your laptop. Credentials stay in brodie's home di
 (ISO-8601 with timezone, e.g. `2026-10-20T00:00:00-04:00`) in SSM (command in RUNBOOK "Secrets and bootstrap") so the
 token-expiry alert works.
 
+STILL NOT SET as of 2026-10-13: the monitor texts "Chert token expiry unknown; configure CHERT_TOKEN_EXPIRES_AT after
+device login" because of it. That reminder is now throttled to one text a day (D-40), but until the value is set there
+is no warning before the token actually expires and takes the line down.
+
 Send James these questions (answers decide the flags; until answered the safe defaults apply: D-07 in `DECISIONS.md`):
 1. Does `chert_call` (the metadata at call start) include the caller's handle/phone/email? -> `CALLER_ID_SOURCE=chert_meta` if yes, else `claim_window`.
    ANSWERED 2026-10-13: Chert (Gary) will pass the caller's handle, but it is not shipped yet and has no date; James

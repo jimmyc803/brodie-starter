@@ -20,6 +20,7 @@ import {
   parseJsonValue,
   parseOptionalJsonObject,
   parsePoints,
+  parseRepsDelta,
   parseQueueId,
   parseText,
   parseUuid,
@@ -42,6 +43,8 @@ function done(r: ActionResult): ActionResult {
   if (r.ok) refresh();
   return r;
 }
+
+const signed = (n: number) => `${n > 0 ? "+" : ""}${n}`;
 
 // ------------------------------------------------------------------ login / logout
 
@@ -216,15 +219,25 @@ export async function adjustScore(_prev: Prev, fd: FormData): Promise<ActionResu
   return done(
     await runAdminAction(async ({ email }) => {
       const userId = parseUuid(fd.get("user_id"));
-      const points = parsePoints(fd.get("points"));
+      // Reps follow the points unless the admin typed a reps delta of their own (blank -> null -> server default).
+      const reps = parseRepsDelta(fd.get("reps"));
+      const points = parsePoints(fd.get("points"), reps !== null && reps !== 0);
+      if (points === 0 && (reps === null || reps === 0)) {
+        throw new AdminInputError("Points must be non-zero.");
+      }
       const reason = optionalReason(fd.get("reason"));
       const res = await serviceRpc<Record<string, unknown>>("ch_admin_adjust", {
         p_user_id: userId,
         p_points: points,
+        p_reps: reps,
         p_reason: reason,
         p_actor: email,
       });
-      return rpcOutcome(res, `Adjusted ${points > 0 ? "+" : ""}${points}; total now ${String(res?.points ?? "?")}.`);
+      return rpcOutcome(
+        res,
+        `Adjusted ${signed(points)} pts, ${signed(Number(res?.reps_delta ?? reps ?? points))} reps; ` +
+          `now ${String(res?.points ?? "?")} pts / ${String(res?.valid_reps ?? "?")} valid reps.`,
+      );
     }),
   );
 }

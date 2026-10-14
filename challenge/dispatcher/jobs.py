@@ -13,7 +13,7 @@ import os
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
-from challenge.dispatcher.alerts import Alerts
+from challenge.dispatcher.alerts import Alerts, LINE_WATCH_EVERY
 from challenge.dispatcher.powerhour import PowerHours, fmt_range
 from challenge.store import Json, Store, StoreError
 from challenge.timeutil import ET, et_day, in_quiet_hours, parse_ts
@@ -121,6 +121,8 @@ class Jobs:
             ("postcall", lambda: self.postcall_sweep(now) if self._due("postcall", now, POSTCALL_EVERY) else None),
             ("queue_updates", lambda: self.queue_updates(now) if self._due("queue", now, QUEUE_UPDATE_EVERY) else None),
             ("alerts", lambda: self.alerts.check(now) if self._due("alerts", now, ALERTS_EVERY) else None),
+            ("line_watch", lambda: self.alerts.watch_lines(now)
+             if self._due("line_watch", now, LINE_WATCH_EVERY) else None),
             ("heartbeat", lambda: self.heartbeat(now) if self._due("heartbeat", now, HEARTBEAT_EVERY) else None),
         ]
         if include_outbox:

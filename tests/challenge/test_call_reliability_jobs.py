@@ -241,9 +241,11 @@ def test_journal_entries_parses_json_lines(monitor, monkeypatch):
     assert seen[0][:5] == ("journalctl", "-u", "chert-agent", "--since", "-30min")
 
 
-def _run_main(monitor, monkeypatch, *, active, entries, journal_error=None):
+def _run_main(monitor, monkeypatch, *, active, entries, journal_error=None, kinds=None):
     alerts, pings = [], []
-    monkeypatch.setattr(monitor, "alert", alerts.append)
+    # Each check names itself (D-40); `kinds` collects those names when a caller cares.
+    monkeypatch.setattr(monitor, "alert", lambda message, kind="infra": (alerts.append(message),
+                                                                        kinds.append(kind) if kinds is not None else None))
     monkeypatch.setattr(monitor, "ping", lambda name, body: pings.append(name))
     monkeypatch.setattr(monitor, "unit_active", lambda unit: active.get(unit, True))
 
@@ -286,10 +288,14 @@ def test_monitor_main_pings_when_chert_connected(monitor, monkeypatch):
 
 
 def test_monitor_main_alerts_on_real_chert_failures(monitor, monkeypatch):
-    alerts, pings = _run_main(monitor, monkeypatch, active={"chert-agent": False}, entries=[])
+    kinds = []
+    alerts, pings = _run_main(monitor, monkeypatch, active={"chert-agent": False}, entries=[], kinds=kinds)
     assert alerts == ["Chert agent unhealthy: chert-agent unit is not active"] and "HC_WORKER_URL" not in pings
+    assert kinds == ["chert"]   # its own kind, so it cannot be deduped away by another check (D-40)
     alerts, pings = _run_main(monitor, monkeypatch, active={}, entries=[], journal_error=OSError("journal gone"))
     assert len(alerts) == 1 and "chert check failed" in alerts[0] and "HC_WORKER_URL" not in pings
+    kinds = []
     alerts, pings = _run_main(monitor, monkeypatch, active={"brodie-worker": False},
-                              entries=[(dt.datetime.now(dt.timezone.utc), "Connected to Chert.")])
+                              entries=[(dt.datetime.now(dt.timezone.utc), "Connected to Chert.")], kinds=kinds)
     assert alerts == ["Worker down: brodie-worker unit is not active"] and "HC_WORKER_URL" not in pings
+    assert kinds == ["worker"]

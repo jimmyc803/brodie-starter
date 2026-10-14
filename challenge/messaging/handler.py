@@ -5,10 +5,11 @@ from datetime import datetime
 import hashlib
 from typing import Any
 
-from challenge.config import Config
+from challenge.config import Config, alert_handles
+from challenge.dispatcher.alerts import health_report
 from challenge.dispatcher.postcall import Outbox
 from challenge.messaging.commands import parse, split_join_arg, validate_display_name
-from challenge.messaging.providers import Inbound
+from challenge.messaging.providers import Inbound, normalize_handle
 from challenge.scoring import eta_range, format_eta
 from challenge.store import Store
 from challenge.timeutil import ET, parse_ts
@@ -32,7 +33,14 @@ def handle_inbound(store: Store, cfg: Config, outbox: Outbox, inbound: Inbound,
         end = parse_ts(power["ends_at"]).astimezone(ET).strftime("%I:%M %p")
         return f"{start}–{end}"
 
-    if command.kind == "LINK":
+    if command.kind == "LIFE":
+        # Team-only (D-40): the same handles that already get the alert texts. Anyone else gets the ordinary
+        # unknown-command reply, so a competitor can neither read infra internals nor learn the command exists.
+        team = {normalize_handle(h) or h for h in alert_handles(cfg)}
+        if (normalize_handle(inbound.handle) or inbound.handle) in team:
+            ctx.update(health_report(store, cfg, now))
+            template = "life"
+    elif command.kind == "LINK":
         # D-25: proves the texter owns this handle; binds it to the web account that issued the code.
         ctx["me_url"] = site + "/me"
         result = store.rpc("ch_web_link", {"p_handle": inbound.handle, "p_code": command.arg, "p_now": now})

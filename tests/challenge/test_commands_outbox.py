@@ -446,3 +446,80 @@ def test_delete_request_does_not_delete_or_opt_out(env):
     command(env, "delete my data")
     assert conn.execute("select joined_at is not null, opted_out_at is null from clients where id=%s", (uid,)).fetchone() == (True, True)
     assert command(env, "delete everything")[0] == "unknown"
+
+
+# ---------------------------------------------------------------- LIFE health report (D-40)
+
+
+def _life(env, handle=TEAM):
+    return command(env, "LIFE", handle=handle)
+
+
+def test_life_is_team_only(env):
+    """A competitor (or anyone not on the alert list) gets the ordinary unknown reply, never infra internals."""
+    _team(env)
+    template, ctx = command(env, "LIFE")           # HANDLE, not TEAM
+    assert template == "unknown" and "verdict" not in ctx
+    assert command(env, "HEALTH")[0] == "unknown"
+
+
+def test_life_reports_the_line_and_the_queue(env):
+    from challenge.messaging.templates import render
+    conn, _, _, _, _, clock = env
+    _team(env)
+    assert _life(env)[1]["verdict"] == "needs a look"      # no worker heartbeat at all is not "working"
+    conn.execute("insert into heartbeats (component, at) values ('worker', %s)"
+                 " on conflict (component) do update set at=excluded.at", (clock["now"],))
+    template, ctx = _life(env)
+    assert template == "life"
+    assert ctx["verdict"] == "looks up and working"
+    assert ctx["issues"] == "no alerts firing"
+    assert "line-1 idle" in ctx["lines"] and ctx["queue_len"] == 0 and ctx["worker"] == "0s"
+    text = render("life", ctx, False)
+    assert text.startswith("Brodie looks up and working.") and len(text) <= 320
+
+
+def test_life_surfaces_a_stale_worker_heartbeat_as_an_alert(env):
+    conn, store, _, _, _, clock = env
+    _team(env)
+    conn.execute("insert into heartbeats (component, at) values ('worker', %s)"
+                 " on conflict (component) do update set at=excluded.at", (clock["now"] - timedelta(minutes=10),))
+    ctx = _life(env)[1]
+    assert ctx["verdict"] == "needs a look"
+    assert "worker_heartbeat" in ctx["issues"] and "600s old" in ctx["issues"]
+    assert ctx["worker"] == "10m"
+
+
+def test_life_says_off_the_clock_outside_the_window(env):
+    conn, store, _, _, _, clock = env
+    _team(env)
+    conn.execute("insert into heartbeats (component, at) values ('worker', %s)"
+                 " on conflict (component) do update set at=excluded.at", (clock["now"],))
+    clock["now"] = T0 + timedelta(days=90)
+    ctx = _life(env)[1]
+    assert ctx["verdict"] == "is off the clock"
+    assert ctx["issues"] == "no alerts firing"     # conditions() is silent outside the window, and so is LIFE
+    assert "ended" in ctx["window"]
+
+
+# ---------------------------------------------------------------- display names with spaces (D-41)
+
+
+def test_join_accepts_a_name_with_spaces(env):
+    conn, store, _, _, _, _ = env
+    assert command(env, "JOIN stan lee")[0] == "join_confirm_prompt"
+    assert command(env, "YES")[0] == "welcome"
+    assert conn.execute("select display_name from clients").fetchone()[0] == "stan lee"
+    assert store.rpc("ch_user_by_handle", {"p_handle": HANDLE})["display_name"] == "stan lee"
+    # the lower() uniqueness index still applies across the space
+    assert command(env, "JOIN Stan Lee", handle="+15555550124")[0] == "join_taken"
+
+
+@pytest.mark.parametrize("body,template", [
+    ("JOIN stan  lee", "join_confirm_prompt"),             # collapsed to one space, then valid
+    ("JOIN a b", "join_confirm_prompt"),                   # 3 characters is the floor, the space counted
+    ("JOIN stan-lee", "join_bad_name"),
+    ("JOIN this name is far too long", "join_bad_name"),
+])
+def test_join_name_spacing_rules(env, body, template):
+    assert command(env, body)[0] == template

@@ -74,12 +74,25 @@ export function parseUuid(v: unknown, label = "User id"): string {
   return s.toLowerCase();
 }
 
-export function parsePoints(v: unknown): number {
+export function parsePoints(v: unknown, allowZero = false): number {
   const s = str(v).trim();
   if (!/^[+-]?\d{1,6}$/.test(s)) throw new AdminInputError("Points must be a whole number.");
   const n = Number.parseInt(s, 10);
-  if (n === 0) throw new AdminInputError("Points must be non-zero.");
+  if (n === 0 && !allowZero) throw new AdminInputError("Points must be non-zero.");
   if (Math.abs(n) > 100_000) throw new AdminInputError("Points adjustment is out of range (max ±100000).");
+  return n;
+}
+
+/**
+ * Reps delta on a score adjustment. Blank means "move the rep count with the points" (the server's default); an
+ * explicit number - including 0, for a points-only correction - decouples the two.
+ */
+export function parseRepsDelta(v: unknown): number | null {
+  const s = str(v).trim();
+  if (!s) return null;
+  if (!/^[+-]?\d{1,6}$/.test(s)) throw new AdminInputError("Reps must be a whole number.");
+  const n = Number.parseInt(s, 10);
+  if (Math.abs(n) > 100_000) throw new AdminInputError("Reps adjustment is out of range (max ±100000).");
   return n;
 }
 

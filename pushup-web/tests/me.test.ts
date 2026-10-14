@@ -274,6 +274,9 @@ describe("me view helpers", () => {
     const idle = { ...ME, queue: { status: null, position: null, eta: null } } as RegisteredMe;
     expect(mePhase({ ...idle, line_open: true })).toBe("open");
     expect(mePhase({ ...idle, calls_left: 0 })).toBe("at_cap");
+    // a team member (clients.uncapped) is never at cap, however many calls they have made today
+    expect(mePhase({ ...idle, calls_left: 0, uncapped: true })).toBe("idle");
+    expect(mePhase({ ...idle, calls_left: 0, uncapped: true, line_open: true })).toBe("open");
     expect(mePhase({ ...idle, frozen: true })).toBe("closed");
     expect(mePhase({ ...ME, banned: true })).toBe("banned");
     expect(mePhase(idle)).toBe("idle");

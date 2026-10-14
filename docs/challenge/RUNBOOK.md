@@ -244,6 +244,36 @@ if unavailable/non-2xx, SES email is the fallback. Until that application
 endpoint is integrated, SES is the delivery path. Configure team_alert_handles
 through the audited config RPC for the messaging adapter.
 
+Each check sends its own name as the alert kind (`infra/alert.sh '<message>'
+'<kind>'`: chert, worker, dispatcher, line, outbound, heartbeat, chert_token,
+crashloop:<unit>), and the dispatcher's 10-minute dedupe key now includes the
+message as well as the kind (D-40). Before that, every host check shared the
+kind `infra`, so whichever check ran first in `monitor.py` silently swallowed
+every other host problem for the whole window - on 2026-10-13 a stale
+heartbeat row hid both the Chert agent being down and the missing token
+expiry. The "token expiry unknown" reminder is throttled to one text a day
+through `/var/lib/brodie/alert.chert_token_unset` (it is a config gap, not an
+outage): set CHERT_TOKEN_EXPIRES_AT in SSM after a `chert login --device` (see
+"Secrets and bootstrap") and it stops.
+
+While a call is happening the team handles also get two texts per call (D-42):
+"LIVE: <name> is on the line now (<line>)" at pickup and "Line free again:
+<name> was on for 3m" at hang-up, each with the number waiting. Turn it off
+without a deploy:
+
+```sql
+SELECT ch_config_set('team_line_alerts', 'false'::jsonb, 'too noisy', 'you@example.com', now());
+```
+
+Text `LIFE` (or `HEALTH`) to Brodie from a number in team_alert_handles for a
+health report on demand (D-40): verdict, any alert condition currently true,
+every active line with its state and age, the worker heartbeat age, queue
+length, failed outbound texts in the last 15 minutes, and the competition
+window. It is the database-side view, the same `ch_jobs_health` row and the
+same conditions the alert texts use, so the two can never disagree; the Chert
+journal, the systemd units and the token expiry stay with the host monitor.
+Anyone not on the alert list gets the ordinary "didn't catch that" reply.
+
 CloudWatch alarms cover EC2 CPU >=85%, status failure >=1, memory/disk >=85%
 for three minutes, including missing metrics. Check CWAgent InstanceId
 aggregates and confirm SNS subscription. Long-running services auto-restart
@@ -314,6 +344,17 @@ SELECT ch_config_set('daily_call_cap', '5'::jsonb, 'admin@example.com', 'approve
 SELECT ch_admin_ban('00000000-0000-0000-0000-000000000000'::uuid, 'reviewed abuse', 'admin@example.com');
 SELECT ch_admin_unban('00000000-0000-0000-0000-000000000000'::uuid, 'appeal upheld', 'admin@example.com');
 SELECT ch_admin_void_call('call-id', 'invalid setup reviewed', 'admin@example.com');
+-- Team / test account: excluded from the growth metrics, exempt from daily_call_cap (C7.t, D-38) AND popped
+-- first from the queue (C7.p, D-43). The admin console's users page has the same toggle ("Mark team").
+SELECT id, display_name, is_team FROM clients WHERE display_name = 'Their_Name';
+-- By phone number instead (handles are stored as typed, so match on the last 10 digits):
+SELECT c.id, c.display_name, c.is_team, h.handle FROM clients c JOIN client_handles h ON h.client_id = c.id
+ WHERE regexp_replace(h.handle, '[^0-9]', '', 'g') LIKE '%4845876944';
+SELECT ch_admin_set_team('00000000-0000-0000-0000-000000000000'::uuid, true,
+                         'team member: line testing', 'admin@example.com', now());
+SELECT ch_admin_set_team('00000000-0000-0000-0000-000000000000'::uuid, false,
+                         'done testing', 'admin@example.com', now());
+SELECT id, display_name FROM clients WHERE is_team;   -- who has no cap and priority right now
 SELECT ch_config_set('competition_frozen', 'true'::jsonb, 'admin@example.com', 'early freeze approved');
 ```
 

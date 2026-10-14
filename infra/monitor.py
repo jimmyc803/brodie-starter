@@ -12,8 +12,36 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from pgenv import pg_env  # noqa: E402
 
 
-def alert(message):
-    subprocess.run(['bash', '/opt/brodie/current/infra/alert.sh', message], check=True)
+STATE_DIR = '/var/lib/brodie'
+
+
+def alert(message, kind='infra'):
+    """Text the team. `kind` lands in the alert subject and in the dispatcher's dedupe key, so two different
+    host problems in the same 10-minute window are two texts, not one."""
+    subprocess.run(['bash', '/opt/brodie/current/infra/alert.sh', message, kind], check=True)
+
+
+def throttled(name, seconds, now=None, state_dir=STATE_DIR):
+    """True when `name` was alerted less than `seconds` ago; otherwise stamp it and return False.
+
+    For conditions that are real but not urgent (a missing config value), which the dispatcher's 10-minute
+    dedupe would otherwise text about every 10 minutes forever.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    path = os.path.join(state_dir, 'alert.' + name)
+    try:
+        with open(path) as stream:
+            last = datetime.datetime.fromisoformat(stream.read().strip())
+    except (FileNotFoundError, ValueError, OSError):
+        last = None
+    if last is not None and (now - last).total_seconds() < seconds:
+        return True
+    try:
+        with open(path, 'w') as stream:
+            stream.write(now.isoformat())
+    except OSError:
+        pass  # unwritable state dir: alert every run rather than going quiet
+    return False
 
 
 def command(*args):
@@ -123,17 +151,17 @@ def main():
             raise ValueError('Dispatcher health unhealthy')
         ping('HC_DISPATCHER_URL', 'dispatcher and database healthy')
     except Exception:
-        alert('Dispatcher erroring or missed dispatcher heartbeat')
+        alert('Dispatcher erroring or missed dispatcher heartbeat', 'dispatcher')
 
     worker_ok = unit_active('brodie-worker')
     if not worker_ok:
-        alert('Worker down: brodie-worker unit is not active')
+        alert('Worker down: brodie-worker unit is not active', 'worker')
     try:
         chert, detail = check_chert()
     except Exception as exc:  # journal unreadable: report it, never pass silently
         chert, detail = 'fail', f'chert check failed: {exc}'
     if chert == 'fail':
-        alert('Chert agent unhealthy: ' + detail)
+        alert('Chert agent unhealthy: ' + detail, 'chert')
     elif chert == 'pending':
         print('chert: ' + detail, flush=True)
     if worker_ok and chert == 'ok':
@@ -148,7 +176,7 @@ def main():
         except FileNotFoundError:
             previous = 0
         if count - previous >= 3:
-            alert(unit + ' crash loop: at least three restarts in one minute')
+            alert(unit + ' crash loop: at least three restarts in one minute', 'crashloop:' + unit)
         with open(path, 'w') as stream:
             stream.write(str(count))
 
@@ -179,20 +207,23 @@ def main():
                             env=env, capture_output=True, text=True, timeout=25, check=True)
     status = json.loads(result.stdout)
     if status['stuck']:
-        alert('line_state stuck past recovery deadline')
+        alert('line_state stuck past recovery deadline', 'line')
     if status['failed'] >= int(os.environ.get('OUTBOUND_FAILURE_ALERT_COUNT', '5')):
-        alert('Outbound failure spike over the last five minutes')
+        alert('Outbound failure spike over the last five minutes', 'outbound')
     if status['stale']:
-        alert('Stale application heartbeat records')
+        alert('Stale application heartbeat records', 'heartbeat')
     expiry = os.environ.get('CHERT_TOKEN_EXPIRES_AT')
     if expiry:
         expires = datetime.datetime.fromisoformat(expiry.replace('Z', '+00:00'))
         if expires.tzinfo is None:
             raise ValueError('CHERT_TOKEN_EXPIRES_AT must include a timezone')
-        if expires - datetime.datetime.now(datetime.timezone.utc) < datetime.timedelta(hours=24):
-            alert('Chert token expires within 24 hours; renew device login')
-    else:
-        alert('Chert token expiry unknown; configure CHERT_TOKEN_EXPIRES_AT after device login')
+        if (expires - datetime.datetime.now(datetime.timezone.utc) < datetime.timedelta(hours=24)
+                and not throttled('chert_token_expiring', 6 * 3600)):
+            alert('Chert token expires within 24 hours; renew device login', 'chert_token')
+    elif not throttled('chert_token_unset', 24 * 3600):
+        # A config gap, not an outage: it is worth one text a day, not one every ten minutes until someone
+        # sets CHERT_TOKEN_EXPIRES_AT (live 2026-10-13: it was the loudest line in the owner's alert thread).
+        alert('Chert token expiry unknown; configure CHERT_TOKEN_EXPIRES_AT after device login', 'chert_token')
 
 
 if __name__ == '__main__':

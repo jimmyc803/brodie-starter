@@ -132,7 +132,7 @@ export default async function RulesPage() {
         </P>
         <Bullets
           items={[
-            "Display names are 3 to 20 characters: letters, numbers and underscores only (no spaces). Names with profanity or slurs are refused, and names are unique.",
+            "Display names are 3 to 20 characters: letters, numbers, underscores and single spaces. Names with profanity or slurs are refused, and names are unique.",
             "Brodie replies with a summary and asks you to reply YES. Your entry is complete when you reply YES. Joining means you accept these rules, the Terms and the Privacy Policy.",
             "You will then get a welcome text. You are on the public board after your first valid rep.",
           ]}
@@ -264,7 +264,7 @@ export default async function RulesPage() {
           items={[
             "Cheating isn't allowed: holding up pre-recorded or replayed video, filming a screen, having someone else do your reps, tricking the camera or the judge, using multiple accounts or phones to gain an advantage, harassing others, or abusing the service.",
             "The Sponsor may disqualify anyone who cheats or breaks these rules, remove their points, and withhold their prize.",
-            "Admins may void a call, adjust a score, or ban an account, including after a re-check of stored rep measurements. Every change needs a written reason and is recorded in an audit log.",
+            "Admins may void a call, adjust a score, or ban an account, including after a re-check of stored rep measurements. A score adjustment moves your valid rep count by the same amount unless the admin corrects only the points. Every change needs a written reason and is recorded in an audit log.",
             "Because the judge is automated, the Sponsor may re-run stored rep measurements through a corrected version of the judge. Scores may change as a result.",
           ]}
         />

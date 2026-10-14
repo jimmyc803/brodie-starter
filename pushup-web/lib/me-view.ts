@@ -19,6 +19,8 @@ export type Me =
       calls_today: number;
       calls_left: number;
       daily_call_cap: number | null;
+      /** Team member: exempt from the daily cap. calls_left still counts against daily_call_cap. */
+      uncapped?: boolean;
       streak: number;
       avatar_level: number;
       opted_out: boolean;
@@ -53,7 +55,7 @@ export function mePhase(me: RegisteredMe): Phase {
   if (me.in_call) return "in_call";
   if (me.queue.status === "waiting" || me.queue.status === "notified") return "waiting";
   if (me.frozen || !me.started) return "closed";
-  if (me.calls_left <= 0) return "at_cap";
+  if (!me.uncapped && me.calls_left <= 0) return "at_cap";
   if (me.line_open) return "open";
   return "idle";
 }
@@ -97,7 +99,7 @@ export function ordinalRank(rank: number | null): string {
 }
 
 const JOIN_REASONS: Record<string, string> = {
-  bad_name: "Names are 3–20 letters, numbers or underscores (and keep it clean).",
+  bad_name: "Names are 3–20 letters, numbers, underscores or spaces (and keep it clean).",
   taken: "That name is taken. Try another.",
   bad_handle: "Enter the phone number or Apple ID email you FaceTime from.",
   closed: "Registration is closed.",

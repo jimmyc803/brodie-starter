@@ -8,7 +8,7 @@ and opt-out enforcement belong to the outbox, not this pure renderer.
 TEMPLATES: dict[str, str] = {
     "welcome": "You're in, {display_name}! Let's stack clean reps. Text QUEUE to get in line, STATUS for your stats. Bring a friend with your invite link:",
     "join_confirm_prompt": "Clean push-ups earn points; power hour reps earn 2×. Daily call cap applies. One person, one account; 18+, US, iPhone. Reply YES to confirm you're 18+, in the US, and agree to the rules.",
-    "join_bad_name": "Let's pick a clean name: 3–20 letters, numbers, or underscores. Text JOIN your_name.",
+    "join_bad_name": "Let's pick a clean name: 3–20 letters, numbers, underscores or spaces. Text JOIN your name.",
     "join_taken": "That name's already on the board. Pick another and text JOIN your_name. Your spot is waiting!",
     "queue_joined": "You're in line! #{position}, ETA {eta}. {calls_left} calls left today. When we text \"you're up\", you'll have 90s to FaceTime Brodie. Get warmed up!",
     "queue_line_open": "Line's open — FaceTime Brodie right now! {calls_left} calls left today. You get 3:00 to rep once Brodie answers.",
@@ -40,11 +40,16 @@ TEMPLATES: dict[str, str] = {
     "ending_soon": "The challenge ends {ends_at}! Time for one more strong finish. Text QUEUE and make those clean reps count!",
     "final_results": "That's a wrap! {points} points, rank #{rank}. You showed up and put in the work. Check the final board:",
     "alert": "BRODIE ALERT [{condition}] {detail}",
+    # Live line watch (D-42), team handles only: one text when a call starts, one when it ends.
+    "line_live": "LIVE: {who} is on the line now ({line_id}). {queue_len} waiting.",
+    "line_done": "Line free again: {who} was on for {duration}. {queue_len} waiting.",
+    # LIFE: team-only health report (D-40). Front-loaded on purpose: render() truncates at 320 characters.
+    "life": "Brodie {verdict}. Alerts: {issues}. Line: {lines}. Worker beat: {worker}. Queue: {queue_len} waiting. Texts: {out_failed}/{out_total} failed in 15m. Window: {window}.",
     "link_ok": "Linked! This number now belongs to {display_name} on the board. Texts and caller ID are on. Text QUEUE to get in line.",
     "link_bad_code": "That code didn't match. Copy the 6-digit code from your page on the site and text LINK 123456 from the number you FaceTime with.",
     "link_expired": "That code expired. Get a fresh one on your page on the site, then text LINK and the new code.",
     "link_owned": "This number is already linked to another Brodie account. Keep using that account (text STATUS to see it), or link a different number on the site.",
-    "not_registered": "Let's get you on the board! Text JOIN your_name to sign up. Use 3–20 letters, numbers, or underscores.",
+    "not_registered": "Let's get you on the board! Text JOIN your name to sign up. Use 3–20 letters, numbers, underscores or spaces.",
 }
 
 PROACTIVE_TEMPLATES = frozenset({
