@@ -18,10 +18,17 @@ instances also need a separately validated driver/CUDA installation.
 | Code transport | bare repo `/srv/brodie.git` on the instance; push with `git push brodie-ec2:/srv/brodie.git <branch>:refs/heads/release`, then `sudo -u brodie git -C /opt/brodie pull --ff-only` |
 | Assets not in git | `data/cues_audio_v2` (default voice bank), `data/cues_audio_gemini` (old Puck bank, fallback), `data/models`, `models/` (pose .task files): `rsync -az --rsync-path="sudo rsync" <dir> brodie-ec2:/opt/brodie/...` then `chown -R brodie:brodie`. deploy.sh symlinks `data/` and `models/` into each release. Cue bank: `rsync -az --rsync-path="sudo rsync" data/cues_audio_v2 brodie-ec2:/opt/brodie/data/ && ssh brodie-ec2 'sudo chown -R brodie:brodie /opt/brodie/data/cues_audio_v2'` BEFORE deploying code that changes cue texts (the worker picks the bank covering the most of its vocabulary; a string missing from every bank is silent). Startup logs `[cues] bank .../cues_audio_v2: N clips, covers N/N`. Pin a bank with `CUE_AUDIO_DIR` in /etc/brodie/env. |
 
-**Migrations:** the server role cannot run DDL. Apply a new migration from the operator machine
-(`supabase db query --linked -f db/migrations/<file>.sql`), then record it:
+**Migrations:** the server role cannot run DDL, so a deploy carrying an unapplied migration fails in the
+migration step (before any service is stopped) with `must be owner of table clients`. Apply a new migration from
+the operator machine as the project's `postgres` role - `supabase db query --linked -f db/migrations/<file>.sql`,
+or `PGPASSWORD=$SUPABASE_DB_PASSWORD psql "postgresql://postgres.tqfilmqvbhrywjstmyhu@aws-0-us-east-1.pooler.supabase.com:5432/postgres" -f <file>`
+(password in `~/.beat-muse-supabase.secrets`) - then record it:
 `insert into schema_migrations(name, sha256) values ('<file>', '<sha256 of file bytes>')`. Deploy only verifies
-recorded checksums. Several migration files contain their own `begin;`/`commit;`, so never wrap them in an outer
+recorded checksums. A file WITHOUT its own `begin;` can half-apply when a later statement is refused: on 2026-10-13 the failed
+deploy left `ch_valid_display_name` created and owned by `brodie_ops`, which then made the postgres-role retry
+fail with `must be owner of function` (postgres is a member of brodie_ops but inherits nothing and may not SET
+ROLE to it). Drop such an orphan as brodie_ops from the server, then re-apply the file as postgres.
+Several migration files contain their own `begin;`/`commit;`, so never wrap them in an outer
 transaction expecting a rollback.
 
 **Agent name:** the challenge registers as LiveKit agent `brodie-challenge` (SSM `AGENT_NAME`), never the team's
@@ -148,8 +155,11 @@ bash scripts/deploy.sh --dry-run # safe on an operator laptop, no credentials
 # Initial bootstrap only: no dispatcher exists to answer health yet.
 sudo env DEPLOY_HOLD_MAX_S=0 python3 /opt/brodie/infra/with-env.py \
   bash /opt/brodie/scripts/deploy.sh --force
-# Subsequent deployments use the tooling from the active release:
-sudo python3 /opt/brodie/current/infra/with-env.py bash /opt/brodie/current/scripts/deploy.sh
+# Subsequent deployments use the tooling from the active release. Run it from /opt/brodie: the venv build
+# calls `uv` as the brodie user, and uv looks for a uv.toml in the working directory and its parents, so a cwd
+# of /home/ubuntu (mode 750, not traversable by brodie) fails the build with
+# "failed to open file `/home/ubuntu/uv.toml`: Permission denied". Over SSH, cd first:
+cd /opt/brodie && sudo python3 /opt/brodie/current/infra/with-env.py bash /opt/brodie/current/scripts/deploy.sh
 sudo systemctl status brodie-worker chert-agent brodie-dispatcher --no-pager
 curl --fail https://your-domain/health
 # Restore the previous release, without rebuilding dependencies:
