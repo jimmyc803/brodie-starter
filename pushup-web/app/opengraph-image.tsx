@@ -1,5 +1,6 @@
 import { ImageResponse } from "next/og";
 import { getCompetition } from "@/lib/data";
+import { prizePool } from "@/lib/mappers";
 
 export const alt = "Brodie Push-Up Challenge: strict reps, live board";
 export const size = { width: 1200, height: 630 };
@@ -8,7 +9,8 @@ export const contentType = "image/png";
 export const revalidate = 300;
 
 export default async function OpengraphImage() {
-  const firstPrize = await getCompetition().then((c) => c?.firstPrize ?? "$500").catch(() => "$500");
+  const comp = await getCompetition().catch(() => null);
+  const pool = prizePool(comp?.firstPrize ?? "$500", comp?.drawingPrize ?? "$500");
   return new ImageResponse(
     (
       <div
@@ -44,7 +46,7 @@ export default async function OpengraphImage() {
           <span>·</span>
           <span>Judged live on FaceTime</span>
           <span>·</span>
-          <span style={{ background: "#ffd83a", padding: "0 10px" }}>{`${firstPrize} to 1st`}</span>
+          <span style={{ background: "#ffd83a", padding: "0 10px" }}>{`${pool} in prizes`}</span>
         </div>
       </div>
     ),

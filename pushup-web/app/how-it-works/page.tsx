@@ -90,6 +90,7 @@ export default async function HowItWorksPage() {
   const comp = await getCompetition();
   const end = formatEtDeadline(comp?.windowEnd ?? null) ?? "Tue Oct 20 · 11:59 PM ET";
   const prize = comp?.firstPrize ?? "$500";
+  const drawingPrize = comp?.drawingPrize ?? "$500";
   const fighter = ufcFighterCopy(comp?.ufcFighter);
 
   return (
@@ -307,9 +308,20 @@ export default async function HowItWorksPage() {
           </Faq>
           <Faq q="What are the prizes?">
             <P>
-              1st place wins {prize}. The top 3 get a group call with {fighter}. The challenge ends {end}, then the top 3 do a verification call before
-              anything is paid. Details in the <Link href="/rules#prizes" className="font-semibold text-accent underline">rules</Link>.
+              The top scorer wins {prize}, and another {drawingPrize} goes to a random drawing. The top 3 get a group call with {fighter}. The
+              challenge ends {end}, then the top 3 do a verification call before anything is paid. Details in the{" "}
+              <Link href="/rules#prizes" className="font-semibold text-accent underline">rules</Link>.
             </P>
+          </Faq>
+          <Faq q="How does the drawing work?">
+            <P>
+              Every valid rep earns you one ticket, so 40 reps is 40 tickets and 4 reps is 4. One ticket is drawn at random after the
+              challenge ends, and whoever holds it wins {drawingPrize}. More reps means a better chance, but anyone with at least one
+              valid rep can win. Power hour doubles your points, not your tickets.
+            </P>
+          </Faq>
+          <Faq q="Can one person win both prizes?">
+            <P>Yes. Ranking 1st doesn&apos;t take your tickets out of the drawing, and being drawn doesn&apos;t affect your rank.</P>
           </Faq>
           <Faq q="Is my video recorded?">
             <P>

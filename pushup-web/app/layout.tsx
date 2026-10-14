@@ -54,7 +54,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         >
           Skip to content
         </a>
-        <Ticker firstPrize={comp?.firstPrize ?? "$500"} />
+        <Ticker firstPrize={comp?.firstPrize ?? "$500"} drawingPrize={comp?.drawingPrize ?? "$500"} />
         <header className="sticky top-0 z-30 border-b-2 border-ink bg-canvas/95 backdrop-blur-sm">
           <nav aria-label="Main" className="mx-auto flex max-w-6xl items-center justify-between gap-2 px-4 py-2 sm:px-6">
             <Logo />

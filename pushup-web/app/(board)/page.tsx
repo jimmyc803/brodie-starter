@@ -9,7 +9,7 @@ import { ArrowRightIcon, CrownIcon } from "@/components/ui/icons";
 import { LiveDot, Widgets } from "@/components/widgets";
 import { getCompetition, getLeaderboard, getLineStatus, getPowerHour } from "@/lib/data";
 import { competitionPhase, smsLink } from "@/lib/format";
-import { ufcFighterCopy } from "@/lib/mappers";
+import { prizePool, ufcFighterCopy } from "@/lib/mappers";
 
 export const dynamic = "force-dynamic";
 
@@ -84,8 +84,9 @@ export default async function Home() {
         <dl className="grid grid-cols-3 border-2 border-ink bg-surface lg:col-span-2">
           {[
             ["Athletes", `${rows.length.toLocaleString("en-US")}${more}`],
-            ["Valid reps", `${totalReps.toLocaleString("en-US")}${more}`],
-            ["1st prize", comp?.firstPrize ?? "$500"],
+            // Valid reps are also the tickets in the drawing, so this tile doubles as the size of the drum.
+            ["Reps / tickets", `${totalReps.toLocaleString("en-US")}${more}`],
+            ["Prize pool", prizePool(comp?.firstPrize, comp?.drawingPrize)],
           ].map(([k, v], i) => (
             <div key={k} className={`px-3 py-3 sm:px-6 sm:py-4 ${i > 0 ? "border-l-2 border-ink" : ""} ${i === 2 ? "bg-yellow" : ""}`}>
               <dt className="eyebrow text-ink">{k}</dt>
@@ -139,8 +140,12 @@ export default async function Home() {
             <p className="bg-ink px-5 py-2 font-display text-xl tracking-wide text-canvas uppercase">The purse</p>
             <div className="relative px-5 pt-4 pb-5">
               <div aria-hidden className="halftone-fade absolute -top-6 -right-8 size-40 [--dot:var(--color-pink)]" />
-              <p className="eyebrow relative text-ink">1st place</p>
+              <p className="eyebrow relative text-ink">Top scorer</p>
               <p className="relative font-display text-7xl leading-none overprint">{comp?.firstPrize ?? "$500"}</p>
+              <div className="perf relative my-4" />
+              <p className="eyebrow relative text-ink">Random drawing</p>
+              <p className="relative font-display text-7xl leading-none overprint">{comp?.drawingPrize ?? "$500"}</p>
+              <p className="relative mt-1 text-sm leading-tight font-semibold">Every valid rep is one ticket</p>
               <div className="perf relative my-4" />
               <p className="eyebrow relative text-ink">Top 3</p>
               <p className="relative mt-1 text-lg leading-tight font-semibold">Group call with {ufcFighterCopy(comp?.ufcFighter)}</p>

@@ -1,6 +1,7 @@
 """Python mirror of the SQL scoring rules (CONTRACTS C2 derived rules), used for tests and previews."""
 from __future__ import annotations
 
+import hashlib
 import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -81,3 +82,48 @@ def eta_range(position: int, avg_cycle_s: float, remaining_s: float = 0) -> tupl
 
 def format_eta(lo: int, hi: int) -> str:
     return f"~{lo}–{hi} min"
+
+
+# ---- the weighted random drawing (prizes: one prize to the top scorer, one drawn from tickets) ----
+# One ticket per valid rep, so every rep carries the same weight wherever it lands in the set: there is no
+# rank cliff where a rep stops being worth anything. Points are NOT tickets - power hour doubles points for the
+# leaderboard, but a rep is still one ticket, so the drawing cannot be farmed by calling inside one hour.
+
+
+def tickets(valid_reps) -> int:
+    """Tickets earned by a caller's valid reps: one each, floored, never negative."""
+    if not valid_reps:
+        return 0
+    return max(0, int(valid_reps))
+
+
+def total_tickets(entrants: Iterable[dict[str, Any]]) -> int:
+    return sum(tickets(e.get("valid_reps")) for e in entrants)
+
+
+def win_probability(valid_reps, total: int) -> float:
+    """A caller's chance of being drawn. 0 when nothing is in the drum (no division by zero on an empty draw)."""
+    t = total_tickets([{"valid_reps": valid_reps}]) if not isinstance(valid_reps, int) else tickets(valid_reps)
+    return (t / total) if total > 0 else 0.0
+
+
+def draw_winner(entrants: Iterable[dict[str, Any]], seed: str) -> dict[str, Any] | None:
+    """Draw one winner, weighted by tickets. None when no entrant holds a ticket.
+
+    Reproducible from `seed` alone: entrants are sorted by public_id so the arriving row order cannot change the
+    result, tickets are laid out as consecutive ranges, and the pick is SHA-256(seed) reduced over the total. Record
+    the seed with the result and anyone can recompute the same winner, which is what makes a dispute answerable.
+    """
+    rows = sorted((str(e.get("public_id")), tickets(e.get("valid_reps")), e) for e in entrants)
+    rows = [r for r in rows if r[1] > 0]
+    total = sum(t for _, t in ((pid, t) for pid, t, _ in rows))
+    if total <= 0:
+        return None
+    pick = int(hashlib.sha256(seed.encode("utf-8")).hexdigest(), 16) % total
+    acc = 0
+    for pid, t, e in rows:
+        acc += t
+        if pick < acc:
+            return {"public_id": pid, "display_name": e.get("display_name"), "tickets": t,
+                    "total_tickets": total, "probability": t / total, "seed": seed, "pick": pick}
+    raise AssertionError("unreachable: pick < total")

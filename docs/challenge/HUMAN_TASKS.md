@@ -16,7 +16,7 @@ Quick index: 1 AWS, 2 Chert login + James, 3 Supabase, 4 Vercel, 5 domain, 6 adm
 | 3d | Custom SMTP | OPEN. Built-in email sends about 2 per hour; SES still in the sandbox. Until it is verified people join by iMessage text |
 | 4, 5 | Vercel, sslip.io | Done: https://brodie-pushups.vercel.app and https://3.13.177.157.sslip.io |
 | 7 | Alert handles | Done (one entry, the owner's number) |
-| 9 | Prizes | 1st place plus top-3 group call with a UFC fighter (no raffle). OPEN: top-3 verification call and logistics |
+| 9 | Prizes | Top scorer, plus an equal cash prize drawn at random from tickets (one per valid rep, D-47), plus top-3 group call with a UFC fighter. OPEN: top-3 verification call and logistics; set `drawing_prize` in competition_config; keep the draw seed with the final results |
 | 10 | Judge clips | OPEN (optional): run the j3 real-clip gate or accept launching without it |
 | 11 | Cue audio | Bank v2 rendered; re-render and rsync if the cue text changes |
 | 12 | Live testers | Blocked by the FaceTime outage (14); remove tester data before the public push |

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { filterByName, mapCompetition, mapLeaderboardRow, mapLineStatus, mapPowerHour, ufcFighterCopy } from "@/lib/mappers";
+import { filterByName, mapCompetition, mapLeaderboardRow, mapLineStatus, mapPowerHour, prizePool, ufcFighterCopy } from "@/lib/mappers";
 
 describe("mappers", () => {
   it("maps leaderboard rows and never carries handles", () => {
@@ -46,6 +46,20 @@ describe("mappers", () => {
     expect(c.frozen).toBe(true);
     expect(c.ufcFighter).toBeNull();
     expect(c.firstPrize).toBe("$100");
+    expect(c.drawingPrize).toBe("$100");
+  });
+  it("maps the drawing prize alongside the top-scorer prize", () => {
+    expect(mapCompetition({ first_prize: "$500", drawing_prize: "$500" })).toMatchObject({
+      firstPrize: "$500",
+      drawingPrize: "$500",
+    });
+  });
+  it("totals the two cash prizes for the headline, and never invents a total", () => {
+    expect(prizePool("$500", "$500")).toBe("$1,000");
+    expect(prizePool("$1,000", "$250")).toBe("$1,250");
+    // Free-text config: anything unparseable falls back to the top-scorer prize rather than a wrong sum.
+    expect(prizePool("$500", "a group call")).toBe("$500");
+    expect(prizePool(null, null)).toBe("$500");
   });
   it("falls back to generic UFC copy until a fighter is set", () => {
     expect(ufcFighterCopy(null)).toBe("a UFC fighter");

@@ -71,10 +71,12 @@ export function SiteNav({ joinHref }: { joinHref: string | null }) {
   );
 }
 
-const TICKER = (prize: string) => [
+const TICKER = (prize: string, drawingPrize: string) => [
   "Strict reps only",
   "Ends Tue Oct 20",
-  `${prize} to 1st`,
+  `${prize} to the top scorer`,
+  `${drawingPrize} drawn from the tickets`,
+  "Every rep is a ticket",
   "FaceTime the line",
   "Judged live, every rep",
   "Power hour pays 2×",
@@ -83,8 +85,8 @@ const TICKER = (prize: string) => [
 ];
 
 /** Fight-bill crawl across the top of every page. Decorative; the same facts live on the page. */
-export function Ticker({ firstPrize }: { firstPrize: string }) {
-  const items = TICKER(firstPrize);
+export function Ticker({ firstPrize, drawingPrize }: { firstPrize: string; drawingPrize: string }) {
+  const items = TICKER(firstPrize, drawingPrize);
   const run = (
     <span className="flex shrink-0 items-center">
       {items.map((t) => (

@@ -8,7 +8,7 @@ cap 5/day, claim window 90 s, call 180 + 15 s, offline gap 180 s, quiet hours 23
 window_end Sun 2026-10-18 23:59:59 ET; the last `--days` ET days of the window are simulated plus the morning after.
 Users behave as seeded random agents (arrivals, JOIN/YES, QUEUE, 15 % no-shows, late answers, walk-ins, rogue and
 capped callers, STOP / LEAVE mid-queue, admin bans, short / zero-rep / crashed calls, reps in the reveal, power-hour
-and midnight / window_end spanning calls). The raffle is cancelled (D-22) and not simulated.
+and midnight / window_end spanning calls). The random drawing (D-47) is not simulated here; its draw is unit-tested in tests/challenge/test_drawing.py.
 
 Reproduce: `PYTHONPATH=src:. .venv/bin/python scripts/simulate.py --users 60 --days 2 --lines 1 --seed 1`
 (and `--lines 2`). Exit code 0 iff every check passes.

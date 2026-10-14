@@ -47,6 +47,7 @@ export function mapCompetition(r: Raw): CompetitionPublic {
     frozen: r.frozen === true,
     ufcFighter: strOrNull(r.ufc_fighter),
     firstPrize: str(r.first_prize, "$100"),
+    drawingPrize: str(r.drawing_prize, "$100"),
     brodieNumber: strOrNull(r.brodie_number),
     siteUrl: strOrNull(r.site_url),
   };
@@ -56,6 +57,23 @@ export function mapCompetition(r: Raw): CompetitionPublic {
 export function ufcFighterCopy(name: string | null | undefined): string {
   const n = name?.trim();
   return n ? n : "a UFC fighter";
+}
+
+/**
+ * Headline total of the two cash prizes, e.g. "$500" + "$500" -> "$1,000". Both are free-text config, so anything
+ * that is not a plain dollar amount falls back to showing the top-scorer prize rather than inventing a total.
+ */
+export function prizePool(first: string | null | undefined, drawing: string | null | undefined): string {
+  const amount = (s: string | null | undefined): number | null => {
+    const m = s?.trim().match(/^\$([\d,]+)$/);
+    if (!m) return null;
+    const n = Number(m[1].replace(/,/g, ""));
+    return Number.isFinite(n) ? n : null;
+  };
+  const a = amount(first);
+  const b = amount(drawing);
+  if (a === null || b === null) return (first ?? "").trim() || "$500";
+  return `$${(a + b).toLocaleString("en-US")}`;
 }
 
 /** Case-insensitive display-name filter for the "find me" box. */

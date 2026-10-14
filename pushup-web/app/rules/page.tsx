@@ -38,6 +38,7 @@ export default async function RulesPage() {
   const start = formatEtDeadline(comp?.windowStart ?? null) ?? "Mon Oct 12 · 8:00 PM ET";
   const end = formatEtDeadline(comp?.windowEnd ?? null) ?? "Tue Oct 20 · 11:59 PM ET";
   const prize = comp?.firstPrize ?? "$500";
+  const drawingPrize = comp?.drawingPrize ?? "$500";
   const fighter = ufcFighterCopy(comp?.ufcFighter);
 
   return (
@@ -67,7 +68,8 @@ export default async function RulesPage() {
             <strong>Runs {start} to {end}.</strong> Then the board is &ldquo;FINAL, pending verification&rdquo;.
           </>,
           <>
-            <strong>1st place wins {prize}.</strong> Top 3 get a group call with {fighter}, after a verification call.
+            <strong>Top scorer wins {prize}, and {drawingPrize} goes to a random drawing</strong> where every valid rep is one
+            ticket. Top 3 get a group call with {fighter}, after a verification call.
           </>,
           <>
             <strong>No video or audio is ever stored.</strong> The board shows display names only.
@@ -221,6 +223,10 @@ export default async function RulesPage() {
               time to see today&apos;s). Texts respect quiet hours, so check the site or text POWER if you didn&apos;t get one.
             </>,
             <>
+              <strong>Tickets.</strong> Separately from points, each valid rep earns one ticket in the random drawing. Power hour
+              does not double tickets: a 2× rep is still one ticket. Your ticket count equals your valid reps, shown on the board.
+            </>,
+            <>
               <strong>Ties.</strong> If two people have the same total, whoever reached that total first ranks higher.
             </>,
           ]}
@@ -240,10 +246,14 @@ export default async function RulesPage() {
       </Section>
 
       <Section id="prizes" index="09" title="Prizes">
-        <ul className="grid gap-2 sm:grid-cols-2">
+        <ul className="grid gap-2 sm:grid-cols-3">
           <li className="card bg-pink p-5">
-            <p className="eyebrow text-ink">1st place</p>
+            <p className="eyebrow text-ink">Top scorer</p>
             <p className="mt-2 font-display text-7xl leading-none">{prize}</p>
+          </li>
+          <li className="card bg-yellow p-5">
+            <p className="eyebrow text-ink">Random drawing</p>
+            <p className="mt-2 font-display text-7xl leading-none">{drawingPrize}</p>
           </li>
           <li className="card p-5">
             <p className="eyebrow">Top 3</p>
@@ -252,9 +262,12 @@ export default async function RulesPage() {
         </ul>
         <Bullets
           items={[
-            `The 1st place prize is ${prize} in US dollars, paid by the Sponsor once verification is complete. The winner provides the details needed to pay them and is responsible for any taxes.`,
+            `The top-scorer prize is ${prize} in US dollars, awarded to the entrant ranked 1st at the freeze, paid by the Sponsor once verification is complete. The winner provides the details needed to pay them and is responsible for any taxes.`,
+            `The random-drawing prize is ${drawingPrize} in US dollars, awarded to one entrant drawn at random from all tickets after the freeze. Each valid rep is one ticket, so the more valid reps you make, the better your chance; power hour multiplies points, not tickets. An entrant with no valid reps holds no tickets and cannot be drawn.`,
+            `The same entrant can win both cash prizes: being drawn does not remove you from the ranking, and ranking 1st does not remove your tickets from the drawing.`,
+            `The drawing is run once, after the freeze and after verification, using a published method: tickets are laid out in order of entrant id and the winner is selected with a recorded random seed, so the Sponsor (or anyone given the seed) can recompute the same result. The seed and the ticket totals are kept with the final results record.`,
             `The group call is a video call between the top 3 verified finishers and ${fighter}. Its date depends on everyone's availability. If the named fighter becomes unavailable, the Sponsor may substitute another UFC fighter. It has no cash value.`,
-            "Prizes are not transferable. There are no other prizes; in particular there is no raffle.",
+            "No purchase or payment of any kind is required to enter or win, and no payment improves your chance of winning. Prizes are not transferable. There are no prizes other than those listed above.",
           ]}
         />
       </Section>

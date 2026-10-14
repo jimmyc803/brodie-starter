@@ -40,7 +40,8 @@ def test_view_column_order_and_barrier(tx):
     cols = [r[0] for r in tx.execute(
         "select column_name from information_schema.columns where table_name = 'competition_public' "
         "order by ordinal_position")]
+    # Later migrations append to this view; existing columns must keep their order (20261028 added drawing_prize).
     assert cols == ["window_start", "window_end", "frozen", "brodie_number",
-                    "site_url", "avatar_level_thresholds", "ufc_fighter", "first_prize"]
+                    "site_url", "avatar_level_thresholds", "ufc_fighter", "first_prize", "drawing_prize"]
     opts = tx.execute("select reloptions from pg_class where relname = 'competition_public'").fetchone()[0]
     assert "security_barrier=true" in opts

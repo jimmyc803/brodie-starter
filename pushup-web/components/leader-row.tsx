@@ -41,7 +41,10 @@ export function LeaderRow({ row }: { row: LeaderboardRow }) {
             <span aria-hidden className="dot-leader hidden h-2 min-w-6 flex-1 sm:block" />
           </span>
           <span className="mt-0.5 flex flex-wrap items-center gap-1.5 font-mono text-[0.7rem] text-ink-2 uppercase">
-            <span className="tabular-nums">{row.validReps.toLocaleString("en-US")} reps</span>
+            {/* Valid reps are also the drawing tickets (one each, D-47), so the row names both off the one number. */}
+            <span className="tabular-nums" title={`${row.validReps.toLocaleString("en-US")} valid reps = ${row.validReps.toLocaleString("en-US")} drawing tickets`}>
+              {row.validReps.toLocaleString("en-US")} reps / tickets
+            </span>
             <StreakChip days={row.streak} />
             {row.badges.map((b) => (
               <span key={b} className="hidden border border-ink px-1 py-px text-[0.65rem] font-bold text-ink sm:inline">

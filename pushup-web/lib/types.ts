@@ -28,6 +28,7 @@ export type CompetitionPublic = {
   frozen: boolean;
   ufcFighter: string | null;
   firstPrize: string;
+  drawingPrize: string;
   brodieNumber: string | null;
   siteUrl: string | null;
 };
