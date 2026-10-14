@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from challenge.judge import DEFAULT_THRESHOLDS, RepMetrics, judge_rep
-from challenge.judge.metrics import ELBOW_WORLD_GAP_DEG, _straighter
+from challenge.judge.metrics import _SideFrame, _depth_elbow
 from challenge.judge.synth import synth_pushups
 from facetime.pipeline import FramePipeline
 
@@ -47,6 +47,21 @@ def test_front_view_still_works_at_the_live_frame_rate(camera, fps):
     pipe, reps = run(clip(camera, fps=fps))
     assert pipe.coach.rc.count == 6 and sum(v['valid'] for v in reps) == 6, \
         (camera, fps, pipe.coach.rc.count, [v['reject_reasons'] for v in reps])
+
+
+@pytest.mark.parametrize("camera", [(90, 0), (90, 10), (90, 35), (90, 50), (75, 10), (45, 20), None])
+# 85-110 deg: honest reps, comfortably inside depth_elbow_max_deg (125). 118 is left out on purpose - it is
+# within frame noise of the limit at an angled view, so it is a boundary case, not a leniency claim.
+@pytest.mark.parametrize("depth", [85.0, 100.0, 110.0])
+def test_honest_mid_depth_reps_accepted_from_a_phone_in_front(camera, depth):
+    """D-46: not just very deep reps. A 100 deg push-up filmed front-on from floor level used to be rejected EVERY
+    time (0 of 45) while the same rep side-on passed always, because the image elbow reads a bent arm as straight."""
+    frames = synth_pushups(n_reps=5, rep_s=1.3, lead_in_s=2.0, fps=6.0, noise=0.01, seed=1, depth=depth,
+                           **({} if camera is None else {"camera": camera})).frames
+    pipe, reps = run(frames)
+    assert pipe.coach.rc.count == 5 and len(reps) == 5, (camera, depth, pipe.coach.rc.count)
+    assert all(v['valid'] for v in reps), (camera, depth, [v['reject_reasons'] for v in reps],
+                                           [v['metrics']['min_elbow_deg_l'] for v in reps])
 
 
 @pytest.mark.parametrize("camera", FRONT)
@@ -97,10 +112,16 @@ def test_a_straight_arm_cannot_be_passed_by_the_drop():
                      {'depth_elbow_veto_deg': 100}) == (True, [])
 
 
-def test_the_depth_elbow_takes_the_world_angle_only_when_clearly_straighter():
-    assert _straighter(8.0, 142.0, ELBOW_WORLD_GAP_DEG) == 142.0      # front view: a straight arm looks bent
-    assert _straighter(80.0, 82.0, ELBOW_WORLD_GAP_DEG) == 80.0       # agreement within noise keeps the image angle
-    assert _straighter(80.0, 60.0, ELBOW_WORLD_GAP_DEG) == 80.0       # never deepened by the world angle
-    assert _straighter(80.0, None, ELBOW_WORLD_GAP_DEG) == 80.0       # no world landmarks: the image angle alone
-    assert _straighter(None, 142.0, ELBOW_WORLD_GAP_DEG) == 142.0
-    assert _straighter(None, None, ELBOW_WORLD_GAP_DEG) is None
+def test_the_depth_elbow_is_the_world_angle_in_both_directions():
+    """D-46: a front-on lens distorts the image elbow both ways, so the 3-D angle decides whenever there is one."""
+    def sf(img, world):
+        return _SideFrame(vis=1.0, conf_min=1.0, elbow_side=img, elbow_w=world)
+    assert _depth_elbow(sf(8.0, 142.0)) == 142.0     # a straight arm that reads as a deep bend: not a rep
+    assert _depth_elbow(sf(165.0, 100.0)) == 100.0   # a real 100 deg rep that reads as a locked arm: a rep
+    assert _depth_elbow(sf(80.0, 82.0)) == 80.0      # agreement within the gap keeps the image angle
+    assert _depth_elbow(sf(80.0, 96.0)) == 96.0      # world straighter by more than the gap: the world angle (D-45)
+    assert _depth_elbow(sf(110.0, 90.0)) == 110.0    # world deeper but the image DID see a bend: trust the image,
+    assert _depth_elbow(sf(155.0, 90.0)) == 90.0     # ... unless the image saw no bend at all (D-46)
+    assert _depth_elbow(sf(80.0, None)) == 80.0      # no world landmarks: the image angle alone
+    assert _depth_elbow(sf(None, 142.0)) == 142.0
+    assert _depth_elbow(sf(None, None)) is None

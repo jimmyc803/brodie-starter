@@ -337,3 +337,46 @@ Front-on, which is what was asked for, works at every pitch.
 DB config: migration `db/migrations/20261027_challenge_judge_j5.sql` adds `depth_elbow_veto_deg` 10 to
 competition_config.judge_thresholds and restates j4's values. A missing key falls back to the code default, so the veto
 is live with or without it.
+
+### j5 front-view leniency (owner request, same day)
+
+The owner then asked for the front view to be *more lenient*, because most callers will prop the phone on the floor in
+front of them. Measuring honest reps by depth and camera (5 reps, 6 fps, noise 0.004-0.02, 3 seeds, 45 reps per cell)
+found the opposite of leniency:
+
+| depth | side-on | front, propped on the floor |
+|------:|--------:|----------------------------:|
+| 85 deg  | 45/45 | 39/45 |
+| 100 deg | 45/45 | **0/45** |
+| 110 deg | 45/45 | **0/45** |
+
+A textbook 100 deg push-up filmed front-on from floor level was rejected *every single time* as too_shallow. The first
+j5 pass had only measured 75 deg reps from the front, which pass, so it looked fine.
+
+Cause: a lens in front of the lifter distorts the image elbow in BOTH directions. D-45 handled one (an arm pointing at
+the lens reads as a deep bend when it is straight). The other is the mirror image - a genuinely bent arm whose forearm
+points at the lens projects short and reads nearly straight, 155-173 deg for a real 100 deg rep - and `_straighter`
+deliberately ignored that direction, so the foreshortened reading was stored and the rep was called shallow.
+
+Fix (`_depth_elbow`, metrics.py), per frame:
+- world straighter than the image by more than `ELBOW_WORLD_GAP_DEG` (15) -> the world angle (D-45).
+- world deeper AND the image at or above `IMAGE_STRAIGHT_DEG` (150) -> the world angle (D-46): the image saw no bend
+  at all while the 3-D angle did, which is foreshortening, not a shallow rep.
+- otherwise the image angle. **A bend the image did see always wins**, because world depth is noisy on real footage:
+  trusting it generally accepted a rep of the real knee-push-up clip (px_6286173), breaking a never-accept category.
+
+Result: honest 70-118 deg reps are 45/45 from a front phone flat on the floor and propped at 35 and 50 deg, matching
+side-on, and half reps are still rejected from every front angle. Real footage is unchanged - clean acceptance, 36
+off-angle reps accepted, no cheat accepted (judge_eval/check_real_clips.py, 5 passed).
+
+Two things were tried and reverted, both caught by the real-footage gate:
+- Making the world elbow authoritative in general (no image override): accepted a real knee push-up.
+- Choosing the rep window from the world elbow instead of the image one: moved the judged frames on real footage and
+  accepted that same knee rep. The window only has to bracket the rep; the world angle is needed for the depth
+  reading inside it.
+- Dropping the 15 deg gap in the strict direction cost one real off-angle rep (36 -> 35). The gap stays.
+
+Residual: at a straight front view propped 20-25 deg up, the realtime counter sometimes counts a phantom rep during
+the walk-in to plank (the judge rejects it at 176 deg, so it scores nothing, but the windows then straddle reps and
+the caller is credited about 4 of 5). Every other front pitch measured (0, 5, 10, 15, 30, 40) and every other yaw is
+30/30. That is RepCounter2, not the judge, and was left alone during the live competition.

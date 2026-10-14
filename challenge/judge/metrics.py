@@ -62,9 +62,9 @@ height units over frames with both confident (its last value is used while the h
   dev      image and world (world_hip_dev_deg: 3-D angle, sign from the hip's offset along world y) combined by
            _agree: the smaller magnitude when both have the same sign, 0 when they disagree (a perspective bend).
   elbow_w  world shoulder-elbow-wrist angle. top_elbow_deg is the larger of the image and world 2nd-highest
-           values; j5: min_elbow_deg_l/_r take the world angle when it is straighter than the image one by more
-           than ELBOW_WORLD_GAP_DEG (the same _straighter rule as the knee: a phone in front of the lifter
-           foreshortens arms pointing at it, so a locked-out arm can read as a deep bend in the image).
+           values; j5: min_elbow_deg_l/_r ARE the world angle whenever there is one (_depth_elbow), because a phone
+           in front of the lifter distorts the image elbow in both directions - an arm pointing at the lens reads
+           bent when it is straight, and reads straight when it is bent (D-45, D-46).
 Metric definitions (sel = judged frames, see above; n = len(sel)):
   side                  'left'|'right': side whose six keypoints have the higher mean visibility over the window
                         (ties -> left); 'none' when no frame has landmarks.
@@ -73,9 +73,9 @@ Metric definitions (sel = judged frames, see above; n = len(sel)):
   min_keypoint_conf     min over sel of the min visible-side keypoint conf (frames without landmarks = 0).
   persons_in_frame      2nd-highest per-frame person count: > 1 iff >= 2 frames of the rep report more than one person.
   min_elbow_deg_l / _r  2nd-lowest filtered elbow angle of that side over frames where its shoulder, elbow and wrist
-                        are confident (the depth gate uses the better side). j5: each frame's angle is the image
-                        one, replaced by the world one when that is straighter by more than ELBOW_WORLD_GAP_DEG,
-                        so the stored depth does not depend on where the camera stands.
+                        are confident (the depth gate uses the better side). j5: each frame's angle is the WORLD
+                        elbow when the frame has world landmarks, else the image elbow, so the stored depth is the
+                        same measurement from any camera (D-45, D-46).
   top_elbow_deg         2nd-highest visible-side elbow angle over the whole window (the lockout); the other side's
                         when the visible side's arm is never confident.
   min_knee_deg          2nd-lowest visible-side knee angle (None without a confident hip, knee and ankle).
@@ -126,7 +126,6 @@ TOP_SLACK_DEG = 10.0      # rep-start rule: a "top" frame has filtered elbow >= 
 CONTACT_OFF = 1.0         # kc of a frame whose knee is not bent (above any knee_floor_margin)
 KNEE_CONTACT_MAX_DEG = 160.0  # knee angle below which a knee near the floor line counts as contact (CALIBRATION.md)
 KNEE_WORLD_GAP_DEG = 15.0     # j4: the world knee angle replaces the image one when it is straighter by more than this
-ELBOW_WORLD_GAP_DEG = 15.0    # j5: likewise for the depth elbow (a front view foreshortens a straight arm into a bend)
 EMA_ALPHA = 0.1
 _EPS = 1e-9
 
@@ -393,6 +392,9 @@ class RepMetricsAccumulator:
         """Indices of the window frames the rep is judged on (module docstring, rep window)."""
         n = len(F)
         thr = float(self.thr["lockout_min_deg"]) - TOP_SLACK_DEG
+        # the IMAGE elbow, deliberately: choosing the window from the world elbow instead moved the judged frames on
+        # real footage and accepted a knee push-up (judge_eval, D-46). The window only has to bracket the rep; the
+        # depth reading inside it is where the world angle is needed.
         e = [f.elbow_side for f in F]
         tops = [i for i, v in enumerate(e) if v is not None and v >= thr]
         lows = [i for i, v in enumerate(e) if v is not None and v < thr]
@@ -457,10 +459,8 @@ class RepMetricsAccumulator:
             top = top_w                              # j4: a foreshortened lockout reads straight in world landmarks
         arm_frames = sum(1 for i in sel if wl[i].arm or wr[i].arm)
         return RepMetrics(
-            min_elbow_deg_l=_kth_low([_straighter(wl[i].elbow_side, wl[i].elbow_w, ELBOW_WORLD_GAP_DEG)
-                                      for i in sel if wl[i].elbow_side is not None]),
-            min_elbow_deg_r=_kth_low([_straighter(wr[i].elbow_side, wr[i].elbow_w, ELBOW_WORLD_GAP_DEG)
-                                      for i in sel if wr[i].elbow_side is not None]),
+            min_elbow_deg_l=_kth_low([_depth_elbow(wl[i]) for i in sel if wl[i].elbow_side is not None]),
+            min_elbow_deg_r=_kth_low([_depth_elbow(wr[i]) for i in sel if wr[i].elbow_side is not None]),
             top_elbow_deg=top, max_hip_line_dev_deg=dev,
             min_knee_deg=_kth_low([f.knee for f in S]),
             knee_floor_contact=contact,
@@ -495,6 +495,33 @@ def _world_side(world: np.ndarray | None, ix: tuple[int, ...]) -> np.ndarray | N
 
 def _finite(x: float | None) -> float | None:
     return x if x is not None and math.isfinite(x) else None
+
+
+ELBOW_WORLD_GAP_DEG = 15.0    # j5: the world elbow replaces a MORE BENT image elbow only past this much difference
+IMAGE_STRAIGHT_DEG = 150.0    # j5: an image elbow at or above this claims the arm never bent (see _depth_elbow)
+
+
+def _depth_elbow(sf: "_SideFrame") -> float | None:
+    """The frame's elbow angle for the DEPTH metric. A lens in front of the lifter distorts the image elbow BOTH ways,
+    so the world angle (a 3-D joint angle, the same from any camera) decides in either direction - but only where the
+    image reading cannot be trusted, because real world landmarks are noisy in depth and j4's rule is to use them only
+    where they cannot invent a rep:
+      world straighter by more than ELBOW_WORLD_GAP_DEG -> the world angle (D-45: an arm pointing at the lens reads as
+                                          a deep bend, and the drop cannot pass it either; see the gates' depth veto).
+                                          The gap matters: without it, world-depth noise on real off-angle footage
+                                          shaved a rep off the judge_eval off-angle acceptance.
+      world deeper, image >= IMAGE_STRAIGHT_DEG -> the world angle (D-46: the image saw no bend AT ALL while the 3-D
+                                          angle did, which is foreshortening, not a shallow rep - a 100 deg push-up
+                                          filmed front-on from floor level used to be rejected every time).
+      world deeper, image bent         -> the image angle. The image did see the bend, so believe it rather than let a
+                                          noisy world depth deepen a rep (real knee push-ups were accepted this way).
+    """
+    img, world = sf.elbow_side, sf.elbow_w
+    if world is None:
+        return img
+    if img is None or world - img > ELBOW_WORLD_GAP_DEG or img >= IMAGE_STRAIGHT_DEG:
+        return world
+    return img
 
 
 def _straighter(img: float | None, world: float | None, gap: float = KNEE_WORLD_GAP_DEG) -> float | None:
