@@ -295,3 +295,45 @@ Residuals:
 DB config: migration `db/migrations/20261023_challenge_judge_j4.sql` (not yet applied) sets knee_min_deg 145,
 hip_knee_min_deg 120, lockout_min_deg 130 and decline_max_deg 65, along with the unchanged gate values.
 cue_repeat_gap_s comes from the code default.
+
+## j5 front-view depth (owner request, 2026-10-13)
+
+The owner asked that the judge work with the phone standing in front of the person doing push-ups, not only side-on.
+Counting was already fine: clean 75-deg reps at 10 fps count 6 of 6 and are accepted at yaw 90 (straight front) with
+pitch 0, 10, 20, 35 and 50, at yaw 75 and 60, and from behind the feet at yaw -90 pitch 0-10. The defect was the other
+way round - the first j4 residual above, measured: from a raised front phone 140-deg **half reps were accepted**, 5 of
+6 at yaw 90 / pitch 35 and all of them at pitch 50.
+
+Why. The depth gate passes a rep when the image elbow reaches `depth_elbow_max_deg` **or** `shoulder_wrist_drop`
+reaches `depth_drop_max`. The drop (the shoulder's height above the wrist at the bottom as a fraction of that at the
+lockout) exists because a front or diagonal view foreshortens the elbow. But perspective from a phone in front of the
+lifter also shrinks the shoulder's image travel: per-rep medians for a half rep ran 0.92 side-on, 0.89 at yaw 90 pitch
+20, 0.84 at pitch 35 and 0.67 at pitch 50 - under the 0.88 limit, so the crutch passed exactly the reps it was not
+meant to. The image elbow is no help there either (a half rep reads 42 deg at yaw 90 pitch 50). The world elbow is: it
+is a 3-D angle, so it measured 82 deg on every deep rep and 142 deg on every half rep, at every camera tried.
+
+j5. JUDGE_VERSION is "j5"; `REJUDGE_FAMILIES` is j2, j3, j4 and j5.
+- `min_elbow_deg_l/_r` are now per frame the image elbow, replaced by the world elbow when that is straighter by more
+  than `ELBOW_WORLD_GAP_DEG` (15) - the same `_straighter` rule j4 already uses for the knee. Foreshortening can only
+  make an arm look more bent than it is, so the straighter reading is the honest one.
+- New threshold `depth_elbow_veto_deg` (10): the drop cannot pass a rep whose min elbow is beyond
+  `depth_elbow_max_deg` + this. Inside that band (125-135) the drop still rescues a rep, because a near-miss elbow
+  really can be foreshortening; past it the arm stayed straight and no camera trick changes that.
+- Nothing else moved: the drop metric, its limit, the lockout, the hip and knee gates and every other threshold are
+  j4's. A deep rep is accepted exactly where it was before.
+
+Result (tests/challenge/test_judge_j5_front_view.py): clean reps still count 6 of 6 and are accepted at every front
+angle (also at 4 and 6 fps), and no half rep is accepted at any of them - including yaw 90 pitch 35 and 50, where the
+same clip is still accepted with the veto turned off (`depth_elbow_veto_deg` 1000), which is what pins the leak.
+
+Rejudge. j4 stored an image-only min elbow, which a front view foreshortens downward, so the j5 veto can only turn a
+stored j4 rep invalid, never valid - re-judging still never accepts more than the live judge would have. Admins should
+know that re-judging pre-j5 reps can therefore drop front-view half reps that were accepted live.
+
+Residual (unchanged from j4, deliberately): a raised camera **behind the feet** (negative yaw, pitch >= 20) still
+counts nothing - that is RepCounter2's prone gate, not the judge, and loosening it would let standing callers count.
+Front-on, which is what was asked for, works at every pitch.
+
+DB config: migration `db/migrations/20261027_challenge_judge_j5.sql` adds `depth_elbow_veto_deg` 10 to
+competition_config.judge_thresholds and restates j4's values. A missing key falls back to the code default, so the veto
+is live with or without it.

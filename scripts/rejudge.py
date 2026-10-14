@@ -8,8 +8,10 @@ challenge.judge.gates.judge_rep over DEFAULT_THRESHOLDS overlaid by the --thresh
 reps whose verdict changes and, per user, points before -> after. Facts the judge does not decide are kept: reasons set
 at commit by the clock/liveness rules (after_freeze, before_start, after_count, liveness_fail) and in_challenge reps stay
 rejected; points = the rep's stored multiplier when valid, else 0. Reps whose judge_version family (the part before the
-first '.') is not in gates.REJUDGE_FAMILIES (j2, j3) are kept as stored and reported as skipped (their metrics mean different
-things, e.g. j1 shoulder_wrist_drop vs the j2 ratio). --apply writes the changed reps in ONE transaction via
+first '.') is not in gates.REJUDGE_FAMILIES (j2, j3, j4, j5) are kept as stored and reported as skipped (their metrics mean different
+things, e.g. j1 shoulder_wrist_drop vs the j2 ratio). A j4 rep re-judged under j5 can turn invalid, never valid:
+its stored min elbow is the image reading, which a front view foreshortens into a false depth (D-45).
+--apply writes the changed reps in ONE transaction via
 ch_rejudge_apply (which also writes the audit_log row); --actor and --reason are required with --apply.
 Needs ch_rejudge_fetch / ch_rejudge_apply from db/migrations/20261015_challenge_rejudge.sql (NEEDS-SQL is printed if absent).
 Exit: 0 ok, 2 usage / missing RPC.

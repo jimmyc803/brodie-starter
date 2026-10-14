@@ -24,6 +24,10 @@ feet, ankles or knees outside the frame (or the occluded far side) never reject 
                    > depth_elbow_max_deg AND shoulder_wrist_drop > depth_drop_max (either one suffices; a front or
                    diagonal view foreshortens the elbow angle but still shows the shoulder travel). A missing signal
                    cannot pass the rep on its own; only when both are missing is the gate skipped.
+                   j5: the drop cannot pass a rep whose min elbow is beyond depth_elbow_max_deg +
+                   depth_elbow_veto_deg. That elbow is the view-independent world angle when the image one is
+                   foreshortened (metrics j5), so it means the arm stayed straight -- and a phone standing in front of
+                   the lifter shrinks the shoulder's image travel enough for a half rep's drop to read deep (D-45).
   no_lockout       top_elbow_deg < lockout_min_deg.
   too_fast         rep_duration_s < min_rep_s OR cadence_rpm > max_cadence_rpm (cadence only once 5 reps exist).
   not_horizontal   not torso_ok (torso_ok also folds in the incline_max_deg / decline_max_deg support-line tilt, which
@@ -43,17 +47,19 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from challenge.judge.metrics import RepMetrics
 
-JUDGE_VERSION = "j4"
+JUDGE_VERSION = "j5"
 # Judge families whose stored metrics the current gates can re-judge (scripts/rejudge.py). j2 metrics are a stricter
 # reading of the same quantities (frame_conf_frac over all six keypoints, knee_floor_contact incl. the pivot test), and
 # so are j3 metrics relative to j4 (image-only hip deviation, knee and lockout angles, which j4 relaxes with the
 # view-independent world landmarks), so re-judging them never accepts more than j4 would have measured live -- except
 # the j4 bent-leg hip skip, which a lower stored knee angle can trigger (intended: see "j4" in CALIBRATION.md).
-REJUDGE_FAMILIES = ("j2", "j3", "j4")
+# j4 metrics are likewise a more lenient reading of depth than j5 (an image-only min elbow, which a front view
+# foreshortens), so the j5 depth veto can only turn a stored j4 rep invalid, never valid.
+REJUDGE_FAMILIES = ("j2", "j3", "j4", "j5")
 DEFAULT_THRESHOLDS: dict[str, Any] = {
     "min_conf": 0.4, "leg_min_conf": 0.7, "frame_conf_frac": 0.6, "knee_min_deg": 145, "knee_floor_margin": 0.1,
     "hip_knee_min_deg": 120,
-    "hip_line_max_dev_deg": 30, "hip_pike_max_dev_deg": 40, "depth_elbow_max_deg": 125, "depth_drop_max": 0.88,
+    "hip_line_max_dev_deg": 30, "hip_pike_max_dev_deg": 40, "depth_elbow_max_deg": 125, "depth_drop_max": 0.88, "depth_elbow_veto_deg": 10,
     "lockout_min_deg": 130, "incline_max_deg": 25, "decline_max_deg": 65, "min_rep_s": 0.45, "max_cadence_rpm": 100,
     "classifier_veto": [], "classifier_veto_substrings": [],
     "liveness_enabled": False, "liveness_window_s": [45, 150], "liveness_timeout_s": 4,
@@ -112,8 +118,13 @@ def judge_rep(m: RepMetrics, thr: dict) -> tuple[bool, list[str]]:
         elif m.max_hip_line_dev_deg < -t["hip_pike_max_dev_deg"]:
             r.append("hips_pike")
     if elbows or not _missing(m.shoulder_wrist_drop):
+        # j5: a min elbow this far beyond the depth limit is a straight arm (the world angle when the image one is
+        # foreshortened), and the drop is not allowed to overrule it -- a front-on phone shrinks the shoulder travel.
+        straight = (bool(elbows)
+                    and min(elbows) > t["depth_elbow_max_deg"] + float(t["depth_elbow_veto_deg"]))
         deep = ((bool(elbows) and min(elbows) <= t["depth_elbow_max_deg"])
-                or (not _missing(m.shoulder_wrist_drop) and m.shoulder_wrist_drop <= t["depth_drop_max"]))
+                or (not straight and not _missing(m.shoulder_wrist_drop)
+                    and m.shoulder_wrist_drop <= t["depth_drop_max"]))
         if not deep:
             r.append("too_shallow")
     if not _missing(m.top_elbow_deg) and m.top_elbow_deg < t["lockout_min_deg"]:

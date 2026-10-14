@@ -62,12 +62,12 @@ def _metrics(**over):
 
 def test_contract_constants():
     # j4 defaults (docs/challenge/CALIBRATION.md "j4"), equal to the owner's live competition_config after migration
-    # 20261023_challenge_judge_j4.sql
-    assert JUDGE_VERSION == "j4"
+    # 20261023_challenge_judge_j4.sql; j5 adds depth_elbow_veto_deg (20261027_challenge_judge_j5.sql)
+    assert JUDGE_VERSION == "j5"
     assert D["knee_min_deg"] == 145 and D["depth_elbow_max_deg"] == 125 and D["lockout_min_deg"] == 130
     assert D["hip_line_max_dev_deg"] == 30 and D["hip_pike_max_dev_deg"] == 40 and D["depth_drop_max"] == 0.88
     assert D["incline_max_deg"] == 25 and D["decline_max_deg"] == 65 and D["knee_floor_margin"] == 0.1
-    assert D["hip_knee_min_deg"] == 120
+    assert D["hip_knee_min_deg"] == 120 and D["depth_elbow_veto_deg"] == 10
     assert "depth_margin" not in D and D["liveness_enabled"] is False
     assert D["classifier_veto_substrings"] == [] and D["classifier_veto"] == []
 
@@ -202,9 +202,13 @@ def test_depth_gate_uses_better_side_or_shoulder_wrist_drop():
     assert judge_rep(_metrics(min_elbow_deg_l=100.5, **shallow), STRICT) == (False, ["too_shallow"])
     assert judge_rep(_metrics(side="right", min_elbow_deg_l=150.0, min_elbow_deg_r=80.0), STRICT) == (True, [])
     assert judge_rep(_metrics(side="right", min_elbow_deg_l=60.0, min_elbow_deg_r=105.0), STRICT) == (True, [])
-    # drop ratio (bottom / top shoulder-to-wrist height): a front / diagonal view foreshortens the elbow angle
-    assert judge_rep(_metrics(min_elbow_deg_l=140.0, min_elbow_deg_r=None, shoulder_wrist_drop=0.64), STRICT) == (True, [])
-    assert judge_rep(_metrics(min_elbow_deg_l=140.0, min_elbow_deg_r=None, shoulder_wrist_drop=0.65), STRICT) == (
+    # drop ratio (bottom / top shoulder-to-wrist height): a front / diagonal view foreshortens the elbow angle.
+    # j5 (D-45): only within depth_elbow_veto_deg of the elbow limit, since j5 corrects foreshortening on the elbow
+    # itself - past that band the arm stayed straight and a front-on camera's shrunken shoulder travel cannot pass it.
+    assert judge_rep(_metrics(min_elbow_deg_l=110.0, min_elbow_deg_r=None, shoulder_wrist_drop=0.64), STRICT) == (True, [])
+    assert judge_rep(_metrics(min_elbow_deg_l=110.0, min_elbow_deg_r=None, shoulder_wrist_drop=0.65), STRICT) == (
+        False, ["too_shallow"])
+    assert judge_rep(_metrics(min_elbow_deg_l=140.0, min_elbow_deg_r=None, shoulder_wrist_drop=0.64), STRICT) == (
         False, ["too_shallow"])
     assert judge_rep(_metrics(shoulder_wrist_drop=None), STRICT) == (True, [])
     # shoulder_elbow_gap is informational only (j2)
@@ -500,7 +504,7 @@ def test_dispatcher_config_defaults_match_judge_defaults():
     assert merged_thresholds(cfg) == D
 
 
-CALIBRATION_SQL = Path(__file__).resolve().parents[2] / "db" / "migrations" / "20261023_challenge_judge_j4.sql"
+CALIBRATION_SQL = Path(__file__).resolve().parents[2] / "db" / "migrations" / "20261027_challenge_judge_j5.sql"
 GATE_KEYS = [k for k, v in D.items() if isinstance(v, (int, float)) and not isinstance(v, bool)
              and not k.startswith(("liveness_", "cue_"))]
 

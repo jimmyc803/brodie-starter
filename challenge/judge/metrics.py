@@ -61,7 +61,10 @@ height units over frames with both confident (its last value is used while the h
            straight leg), else the image angle.
   dev      image and world (world_hip_dev_deg: 3-D angle, sign from the hip's offset along world y) combined by
            _agree: the smaller magnitude when both have the same sign, 0 when they disagree (a perspective bend).
-  elbow_w  world shoulder-elbow-wrist angle; top_elbow_deg is the larger of the image and world 2nd-highest values.
+  elbow_w  world shoulder-elbow-wrist angle. top_elbow_deg is the larger of the image and world 2nd-highest
+           values; j5: min_elbow_deg_l/_r take the world angle when it is straighter than the image one by more
+           than ELBOW_WORLD_GAP_DEG (the same _straighter rule as the knee: a phone in front of the lifter
+           foreshortens arms pointing at it, so a locked-out arm can read as a deep bend in the image).
 Metric definitions (sel = judged frames, see above; n = len(sel)):
   side                  'left'|'right': side whose six keypoints have the higher mean visibility over the window
                         (ties -> left); 'none' when no frame has landmarks.
@@ -70,7 +73,9 @@ Metric definitions (sel = judged frames, see above; n = len(sel)):
   min_keypoint_conf     min over sel of the min visible-side keypoint conf (frames without landmarks = 0).
   persons_in_frame      2nd-highest per-frame person count: > 1 iff >= 2 frames of the rep report more than one person.
   min_elbow_deg_l / _r  2nd-lowest filtered elbow angle of that side over frames where its shoulder, elbow and wrist
-                        are confident (the depth gate uses the better side).
+                        are confident (the depth gate uses the better side). j5: each frame's angle is the image
+                        one, replaced by the world one when that is straighter by more than ELBOW_WORLD_GAP_DEG,
+                        so the stored depth does not depend on where the camera stands.
   top_elbow_deg         2nd-highest visible-side elbow angle over the whole window (the lockout); the other side's
                         when the visible side's arm is never confident.
   min_knee_deg          2nd-lowest visible-side knee angle (None without a confident hip, knee and ankle).
@@ -121,6 +126,7 @@ TOP_SLACK_DEG = 10.0      # rep-start rule: a "top" frame has filtered elbow >= 
 CONTACT_OFF = 1.0         # kc of a frame whose knee is not bent (above any knee_floor_margin)
 KNEE_CONTACT_MAX_DEG = 160.0  # knee angle below which a knee near the floor line counts as contact (CALIBRATION.md)
 KNEE_WORLD_GAP_DEG = 15.0     # j4: the world knee angle replaces the image one when it is straighter by more than this
+ELBOW_WORLD_GAP_DEG = 15.0    # j5: likewise for the depth elbow (a front view foreshortens a straight arm into a bend)
 EMA_ALPHA = 0.1
 _EPS = 1e-9
 
@@ -451,8 +457,10 @@ class RepMetricsAccumulator:
             top = top_w                              # j4: a foreshortened lockout reads straight in world landmarks
         arm_frames = sum(1 for i in sel if wl[i].arm or wr[i].arm)
         return RepMetrics(
-            min_elbow_deg_l=_kth_low([wl[i].elbow_side for i in sel]),
-            min_elbow_deg_r=_kth_low([wr[i].elbow_side for i in sel]),
+            min_elbow_deg_l=_kth_low([_straighter(wl[i].elbow_side, wl[i].elbow_w, ELBOW_WORLD_GAP_DEG)
+                                      for i in sel if wl[i].elbow_side is not None]),
+            min_elbow_deg_r=_kth_low([_straighter(wr[i].elbow_side, wr[i].elbow_w, ELBOW_WORLD_GAP_DEG)
+                                      for i in sel if wr[i].elbow_side is not None]),
             top_elbow_deg=top, max_hip_line_dev_deg=dev,
             min_knee_deg=_kth_low([f.knee for f in S]),
             knee_floor_contact=contact,
@@ -489,14 +497,14 @@ def _finite(x: float | None) -> float | None:
     return x if x is not None and math.isfinite(x) else None
 
 
-def _straighter(img: float, world: float | None) -> float | None:
-    """Knee angle: the image reading, or the world reading when that is straighter by more than KNEE_WORLD_GAP_DEG
-    (a foreshortened leg; small image-world differences are pose noise and keep the image value)."""
-    img_v = img if math.isfinite(img) else None
+def _straighter(img: float | None, world: float | None, gap: float = KNEE_WORLD_GAP_DEG) -> float | None:
+    """A joint angle: the image reading, or the world reading when that is straighter by more than `gap`
+    (a foreshortened limb; small image-world differences are pose noise and keep the image value)."""
+    img_v = img if img is not None and math.isfinite(img) else None
     w = world if world is not None and math.isfinite(world) else None
     if img_v is None:
         return w
-    return w if w is not None and w - img_v > KNEE_WORLD_GAP_DEG else img_v
+    return w if w is not None and w - img_v > gap else img_v
 
 
 def _agree(img: float, world: float | None) -> float | None:

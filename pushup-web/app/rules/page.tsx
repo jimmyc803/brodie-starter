@@ -201,7 +201,7 @@ export default async function RulesPage() {
         </ul>
         <RepIllustrations />
         <P>
-          The judge is lenient on camera angle: side-on or diagonal both work. Lay the phone sideways.
+          The judge is lenient on camera angle: side-on, diagonal and front-on all work &mdash; you can stand the phone in front of you. Lay the phone sideways.
           Brodie coaches you live, saying the most useful fix first and not repeating the same cue within 10 seconds. It can still miss or misjudge a rep, and reps close to the line can go either way. Use the{" "}
           <Link href="/setup" className="font-semibold text-accent underline">setup guide</Link> to give it the best view. The
           judge&apos;s count is the official count.
