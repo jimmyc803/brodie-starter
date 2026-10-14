@@ -132,7 +132,7 @@ export default async function HowItWorksPage() {
                 <strong>Prop it up on the floor or a low surface, a few feet away.</strong> Far enough that Brodie sees your upper body and your knees.
               </>,
               <>
-                <strong>Side, diagonal or front view all work.</strong> The judge is lenient on camera angle. Side-on is still the easiest to read.
+                <strong>Front-on, side-on or diagonal all work.</strong> The judge is lenient on camera angle: stand the phone in front of you if that is easier. The one spot to avoid is behind your feet.
               </>,
               <>
                 <strong>Phone sideways.</strong> Lay your phone sideways (landscape) on the floor or a prop. Brodie&apos;s video is a sideways full-screen layout, so it reads upright on a sideways phone. Portrait lock is OK. No zooming or panning needed.

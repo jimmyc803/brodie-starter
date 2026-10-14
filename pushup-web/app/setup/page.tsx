@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 };
 
 const CHECKLIST = [
-  ["Phone low, to your side or in front", "On the floor or a low surface, about 6–8 feet away. Closer is fine if your upper body and knees stay in frame. Side, diagonal and front-on all work, propped up or flat. Behind your feet is the one spot to avoid."],
+  ["Phone low, in front of you or to your side", "On the floor or a low surface, about 6–8 feet away. Closer is fine if your upper body and knees stay in frame. Front-on is fine — so are side-on and diagonal, propped up or flat. Behind your feet is the one spot to avoid."],
   ["Phone sideways", "Lay your phone sideways (landscape) on the floor or a prop. Brodie's video is a sideways full-screen layout, so it reads upright on a sideways phone. No zoom or pan."],
   ["Upper body and knees in frame", "Shoulders, elbows and wrists must show. Feet can be cut off. Check the pill says CAMERA ANGLE GOOD."],
   ["Camera on", "Keep it on the whole call. If Brodie can't see you, it says so and hangs up after about 20 seconds."],
@@ -87,7 +87,7 @@ export default async function SetupPage() {
           When the call connects
         </h2>
         {[
-          ["Get in plank", "Arms locked, body straight, side-on to the camera."],
+          ["Get in plank", "Arms locked, body straight, facing the camera or side-on — either works."],
           ["Watch the clock", "Your 3:00 started when you connected. At 3:15 Brodie hangs up."],
           ["Rep it out", "Strict and steady beats fast and sloppy. Every rep is judged."],
         ].map(([t, d]) => (
