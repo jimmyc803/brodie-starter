@@ -314,11 +314,17 @@ class RepCounter2:
         self.tr={n:_Track(fps,smooth,ma,hi,lo,rec,rec_first,rec_abs,plateau_s,plateau_eps,max_hold_s,desc_gate,desc_after,min_period_s,win_s,amp_ema,flip,rest_ema,init_s,act.get(n,0),amp_cap,reg_w,hold_first_s,hold_ratio,rej_w,fire,confirm,turn_gap,turn_depth,sps) for n in self.names}
         self.torso=None; self.torso_w=None; self.last=None; self.last_event=-999
     def _reset_trackers(self):
-        """Fresh trackers (new body state): the rest level is learned again from the frames that follow."""
+        """Fresh trackers (new body state): the rest level is learned again from the frames that follow.
+
+        The vote compares the trackers' own count against self.count, so clearing the trackers also has to rebase that
+        comparison (skip = -count): a fresh tracker's first fire then reads as count + 1. Without it the counter is dead
+        for as many reps as were already counted - a breather on the knees mid-set turned the prone gate off and on, and
+        the count stayed where it was for the rest of the set.
+        """
         for n,tr in self.tr.items():
             tr.raw=[]; tr.buf=[]; tr.state=None; tr.R=None; tr.rest_ext=None; tr.ext=0.0; tr.ext_i=-1; tr.leave_i=-1; tr.near_i=-1
             tr.sign=tr.sign0; tr.flips=0; tr.anchored=False; tr.anch_leave=False; tr.forget()
-        self.sel=None; self.pending=None
+        self.sel=None; self.pending=None; self.skip=-self.count
     def resettle(self, keep=False):
         """Start the settle window again (after a visibility pause or a gate re-arm): every tracker must see a real plateau
         before its next rep counts, for settle_max_s. keep=True only extends the window (the session arming the Coach:
