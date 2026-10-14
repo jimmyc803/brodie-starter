@@ -45,7 +45,7 @@ https://3.13.177.157.sslip.io, EC2 `i-0d098dcf3948886ce`, region us-east-2, AWS 
 - [ ] Review rejected-rep complaints in `/admin`; use void/adjust with a written reason (RUNBOOK)
 - [ ] Backup ran (EC2): `sudo journalctl -u brodie-backup -n 30 --no-pager`
 - [ ] Tue Oct 20 20:00 ET "ending soon" text expected; verify in `/admin` messages (provider is Chert iMessage)
-- [ ] Chert token expiry: confirm `CHERT_TOKEN_EXPIRES_AT` is after Tue Oct 20 (RUNBOOK "Restart, logs and line recovery")
+- [x] Chert token expiry: `CHERT_TOKEN_EXPIRES_AT=2026-11-12T05:52:35Z` (set 2026-10-13 in SSM and in `/etc/brodie/env`), three weeks past the Oct 20 freeze
 
 ## After the freeze (Tue 2026-10-20 23:59:59 ET)
 - [ ] Scoring frozen. Verify (psql): `SELECT ch_config_get();` shows `competition_frozen` true (set it with `ch_config_set` if the job did not: RUNBOOK) and the site shows "FINAL - pending verification"

@@ -263,8 +263,22 @@ every other host problem for the whole window - on 2026-10-13 a stale
 heartbeat row hid both the Chert agent being down and the missing token
 expiry. The "token expiry unknown" reminder is throttled to one text a day
 through `/var/lib/brodie/alert.chert_token_unset` (it is a config gap, not an
-outage): set CHERT_TOKEN_EXPIRES_AT in SSM after a `chert login --device` (see
-"Secrets and bootstrap") and it stops.
+outage): set CHERT_TOKEN_EXPIRES_AT after a `chert login --device` (see
+"Secrets and bootstrap") and it stops. SSM alone does NOT stop it - the monitor
+reads `/etc/brodie/env`, which only bootstrap rewrites, so put the value in
+both places and restart the monitor:
+
+```
+sudo cp /etc/brodie/env /etc/brodie/env.bak.$(date +%Y%m%d)
+printf 'CHERT_TOKEN_EXPIRES_AT=<iso8601>\n' | sudo tee -a /etc/brodie/env >/dev/null
+sudo systemctl restart brodie-heartbeat-check.service
+```
+
+The real expiry is `expires_at` (epoch ms) in
+`/home/brodie/.chert/credentials.json`; `chert doctor` prints the same thing as
+"N days left". Set 2026-10-13: 2026-11-12T05:52:35Z. Note the monitor runs as
+the always-on `brodie-heartbeat-check.service`, not a timer -
+`brodie-heartbeat.timer` reading `inactive` is normal.
 
 While a call is happening the team handles also get two texts per call (D-42):
 "LIVE: <name> is on the line now (<line>)" at pickup and "Line free again:

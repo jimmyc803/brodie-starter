@@ -1,4 +1,4 @@
--- Admin score adjustments move valid reps too (owner request 2026-10-13; D-42 in docs/challenge/DECISIONS.md).
+-- Admin score adjustments move valid reps too (owner request 2026-10-13; D-44 in docs/challenge/DECISIONS.md).
 --
 -- Before this migration, `ch_admin_adjust` only wrote score_adjustments.points, and valid_reps was defined purely
 -- as "reps the judge accepted on non-void calls". So an admin correction moved a competitor's points but left

@@ -95,9 +95,12 @@ Follow the device-login URL on your laptop. Credentials stay in brodie's home di
 (ISO-8601 with timezone, e.g. `2026-10-20T00:00:00-04:00`) in SSM (command in RUNBOOK "Secrets and bootstrap") so the
 token-expiry alert works.
 
-STILL NOT SET as of 2026-10-13: the monitor texts "Chert token expiry unknown; configure CHERT_TOKEN_EXPIRES_AT after
-device login" because of it. That reminder is now throttled to one text a day (D-40), but until the value is set there
-is no warning before the token actually expires and takes the line down.
+SET 2026-10-13 (DONE): `CHERT_TOKEN_EXPIRES_AT=2026-11-12T05:52:35Z`, read off the live credentials
+(`expires_at`, epoch ms, in `/home/brodie/.chert/credentials.json`; `chert doctor` says the same thing as
+"29 days left"). It is in SSM at `/brodie/challenge/CHERT_TOKEN_EXPIRES_AT` AND appended to `/etc/brodie/env`, because
+the host's env file is only rewritten by bootstrap and the monitor reads it from there - setting only SSM would have
+left the daily reminder running. The monitor was restarted and its process has the value. Do both again after the next
+device login: the new expiry is 30 days out from the login, not from this date.
 
 Send James these questions (answers decide the flags; until answered the safe defaults apply: D-07 in `DECISIONS.md`):
 1. Does `chert_call` (the metadata at call start) include the caller's handle/phone/email? -> `CALLER_ID_SOURCE=chert_meta` if yes, else `claim_window`.
