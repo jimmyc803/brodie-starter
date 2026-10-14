@@ -5,6 +5,8 @@
 -- drawing_prize defaults to "$100" to match first_prize's default: both are display copy an operator sets per run
 -- (the live run is $500 each), and the defaults are what db/tests assert, so neither is changed here.
 
+begin;
+
 insert into competition_config (key, value) values
   ('drawing_prize', to_jsonb('$100'::text))
 on conflict (key) do nothing;
@@ -25,3 +27,5 @@ select (select (value #>> '{}')::timestamptz from k where key = 'window_start') 
 
 revoke all on table competition_public from public, anon, authenticated;
 grant select on table competition_public to anon, authenticated, service_role;
+
+commit;
