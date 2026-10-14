@@ -28,7 +28,8 @@ CUES = {
     'check_texts': 'Great work! Check your texts for your score.',
     'power_hour': "It's power hour! Every rep counts double!",
     'hang_up': "That's a wrap! You can hang up now.",
-    'welcome': "You're on! Upper body and knees in frame. Let's go!",
+    # The three minutes is competition_config call_count_s (DEFAULTS 180); tests/challenge/test_cues.py keeps the two in step.
+    'welcome': "You're on! Upper body and knees in frame. You've got three minutes to do as many pushups as you can. Let's go!",
     'camera_off': "I can't see you! Turn your camera on so I can count.",
     'try_again': "Something glitched on my end. Hang up and call back in a minute!",
 }

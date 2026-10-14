@@ -286,7 +286,7 @@ def test_accept_timeline_cues_and_commit(tmp_path):
     t = {k: s for s, k, _ in r.said}
     assert r.keys() == ["welcome", "power_hour", "challenge_lift_hold", "challenge_passed", "thirty_left", "time_up",
                         "check_texts", "hang_up"]
-    assert t["welcome"] == 0 and t["power_hour"] == 4 and t["challenge_lift_hold"] == 60 and t["thirty_left"] == 150
+    assert t["welcome"] == 0 and t["power_hour"] == 7 and t["challenge_lift_hold"] == 60 and t["thirty_left"] == 150
     assert t["time_up"] == 180 and t["check_texts"] == 181.5 and t["hang_up"] == 191
     assert r.windows == [(60.0, 64.0)]
     assert ck0["committed"] is False and ck0["user_id"] == "u1" and ck0["reps"] == []

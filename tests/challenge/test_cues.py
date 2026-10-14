@@ -14,7 +14,8 @@ def test_keys_and_exact_phrases():
     assert CUES['competition_over'] == "The challenge isn't open right now. Watch your texts!"
     assert CUES['time_up'] == 'Time!'
     assert CUES['hang_up'] == "That's a wrap! You can hang up now."
-    assert CUES['welcome'] == "You're on! Upper body and knees in frame. Let's go!"
+    assert CUES['welcome'] == ("You're on! Upper body and knees in frame. "
+                               "You've got three minutes to do as many pushups as you can. Let's go!")
     assert CUES['not_your_turn'] == "Not your turn! Text this number JOIN, then QUEUE. I'll text you when you're up."
     assert CUES['queued'] == "Line's busy, but you're in line now! I'll text you when you're up."
     assert CUES['not_signed_up'] == "You're not signed up! Text this number JOIN and your name."
@@ -54,3 +55,12 @@ def test_audio_bank_has_every_phrase_when_present():
     m = json.load(open(mf))
     missing = [t for t in CUES.values() if t not in m or not os.path.exists(os.path.join(bank, m[t]['file']))]
     assert not missing, missing
+
+
+def test_welcome_states_the_clock_and_matches_call_count_s():
+    """The welcome line promises three minutes, so it has to be three minutes. If the competition's call_count_s ever
+    changes, this fails on purpose: the line (and its rendered clip) needs rewriting with it."""
+    from challenge.config import DEFAULTS
+    assert DEFAULTS['call_count_s'] == 180
+    assert 'three minutes' in CUES['welcome']
+    assert 'as many pushups as you can' in CUES['welcome']

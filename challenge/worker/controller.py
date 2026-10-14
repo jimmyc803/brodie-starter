@@ -80,7 +80,9 @@ FAIL_ENDED_S = 5.0             # fail closed: the best-effort call_ended is give
 FAIL_ENDED_REASONS = frozenset({"dispatcher_unreachable", "accept_without_user", "call_setup_failed"})
 NO_VIDEO_CUE = "camera_off"  # P0-3: an accepted call without a video track
 REJECT_LEAVE_S = 3.5           # leave this long after t0 on a reject (+ <= 1.5 s cue tail in the worker = 5 s)
-WELCOME_GAP_S = 4.0            # power_hour cue after the welcome
+WELCOME_GAP_S = 7.0            # power_hour cue after the welcome. Urgent cues cut whatever is playing (worker say_cue ->
+                               # say_now), so this has to clear the welcome clip: the welcome states the three-minute
+                               # clock and runs about 5.5 s in the v2 bank (it was 2.6 s when this was 4.0).
 CHECK_TEXTS_AFTER_S = 1.5      # check_texts after time_up
 HANG_UP_LEAD_S = 4.0           # hang_up this long before the leave (HANGUP_MODE unverified)
 RESCHEDULE_MIN_S = 2.0         # earliest liveness reschedule after a skip
