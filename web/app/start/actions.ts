@@ -2,6 +2,9 @@
 import { redirect } from 'next/navigation';
 
 import { alertNewCoach } from '@/lib/coach-alert';
+import { welcomeEmail } from '@/lib/coach-emails';
+import { sendEmail } from '@/lib/email';
+import { coachLink, siteOrigin } from '@/lib/site-url';
 import { supabaseServer } from '@/lib/supabase/server';
 
 export type SignupState = { ok: boolean; message: string };
@@ -42,7 +45,7 @@ export async function signupAction(_prev: SignupState, form: FormData): Promise<
       db.from('coaches').select('id', { count: 'exact', head: true }).ilike('email', email),
       db.from('coaches').select('id', { count: 'exact', head: true }).eq('signup_source', 'web').gte('created_at', hourAgo),
     ]);
-    if ((perEmail ?? 0) >= MAX_PER_EMAIL) return { ok: false, message: 'This email already has a coach account. Check your saved link, or contact us to get it again.' };
+    if ((perEmail ?? 0) >= MAX_PER_EMAIL) return { ok: false, message: 'This email already has a coach account. Use "Email me my link" below to get it again.' };
     if ((lastHour ?? 0) >= MAX_PER_HOUR) return { ok: false, message: 'Lots of sign-ups right now. Please try again in a few minutes.' };
     const application = { where, clients, website, certification, note, applied_at: new Date().toISOString() };
     const { data, error } = await db
@@ -55,7 +58,8 @@ export async function signupAction(_prev: SignupState, form: FormData): Promise<
   } catch {
     return { ok: false, message: 'Could not create your account. Please try again.' };
   }
-  await alertNewCoach([
+  const link = coachLink(await siteOrigin(), token);
+  await Promise.all([sendEmail({ to: email, ...welcomeEmail({ name, link }) }), alertNewCoach([
     `New coach application: ${name} (${email})`,
     `Coaches at: ${where} · clients: ${clients}`,
     instagram ? `Instagram: https://instagram.com/${instagram}` : '',
@@ -63,6 +67,6 @@ export async function signupAction(_prev: SignupState, form: FormData): Promise<
     certification ? `Certification: ${certification}` : '',
     note ? `Note: ${note}` : '',
     'Review it in /admin.',
-  ].filter(Boolean));
+  ].filter(Boolean))]);
   redirect(`/c/${encodeURIComponent(token)}?welcome=1`);
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { SignupForm } from "@/components/signup-form";
 import { SiteHeader } from "@/components/site-header";
@@ -33,9 +34,17 @@ export default function StartPage() {
               ))}
             </ul>
           </section>
-          <section className="rounded-[14px] border border-line bg-surface p-6">
-            <SignupForm />
-          </section>
+          <div>
+            <section className="rounded-[14px] border border-line bg-surface p-6">
+              <SignupForm />
+            </section>
+            <p className="mt-4 text-sm text-ink-3">
+              Already applied?{" "}
+              <Link href="/link" className="font-semibold text-ink underline decoration-line-strong underline-offset-4 hover:decoration-ink">
+                Email me my link
+              </Link>
+            </p>
+          </div>
         </div>
       </div>
     </main>
